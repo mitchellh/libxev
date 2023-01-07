@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
-const IntrusiveQueue = @import("queue.zig").IntrusiveQueue;
+const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
 
 pub const Loop = struct {
     ring: linux.IO_Uring,
@@ -169,7 +169,7 @@ test Loop {
     defer loop.deinit();
 
     // We'll try with a simple timerfd
-    const Timerfd = @import("linux/timerfd.zig").Timerfd;
+    const Timerfd = @import("timerfd.zig").Timerfd;
     var t = try Timerfd.init(.monotonic, 0);
     defer t.deinit();
     try t.set(0, &.{ .value = .{ .nanoseconds = 1 } }, null);
