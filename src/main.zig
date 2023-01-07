@@ -1,6 +1,7 @@
 const std = @import("std");
 
 test {
+    _ = @import("heap.zig");
     _ = @import("queue.zig");
 
     // TODO: until we choose platform
