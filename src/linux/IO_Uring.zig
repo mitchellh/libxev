@@ -78,28 +78,36 @@ pub fn timer(
 /// You must call "submit" at some point to submit all of the queued
 /// work.
 pub fn add(self: *IO_Uring, completion: *Completion) void {
+    self.add_(completion, false);
+}
+
+/// Internal add function. The only difference is try_submit. If try_submit
+/// is true, then this function will attempt to submit the queue to the
+/// ring if the submission queue is full rather than filling up our FIFO.
+fn add_(
+    self: *IO_Uring,
+    completion: *Completion,
+    try_submit: bool,
+) void {
     const sqe = self.ring.get_sqe() catch |err| switch (err) {
-        error.SubmissionQueueFull => err: {
-            // If the queue is full, we try to submit the work now. This
-            // will empty our submission queue and we'd rather do that then
-            // just keep queueing stuff outside the shared buffer.
-            // If that fails, then we enqueue the work in our FIFO.
-            if (self.submit()) {
-                // Submission succeeded but we may still fail (unlikely)
-                // to get an SQE...
-                break :err self.ring.get_sqe() catch |retry_err| switch (retry_err) {
-                    error.SubmissionQueueFull => {
-                        self.submissions.push(completion);
-                        return;
-                    },
-                };
-            } else |_| {
-                // Submission failed, just queue it up
-                self.submissions.push(completion);
-                return;
+        error.SubmissionQueueFull => retry: {
+            // If the queue is full and we're in try_submit mode then we
+            // attempt to submit. This is used during submission flushing.
+            if (try_submit) {
+                if (self.submit()) {
+                    // Submission succeeded but we may still fail (unlikely)
+                    // to get an SQE...
+                    if (self.ring.get_sqe()) |sqe| {
+                        break :retry sqe;
+                    } else |retry_err| switch (retry_err) {
+                        error.SubmissionQueueFull => {},
+                    }
+                } else |_| {}
             }
 
-            break :err self.ring.get_sqe() catch unreachable;
+            // Add the completion to our submissions to try to flush later.
+            self.submissions.push(completion);
+            return;
         },
     };
 
@@ -186,8 +194,11 @@ pub fn submit(self: *IO_Uring) !void {
     _ = try self.ring.submit();
 
     // If we have any submissions that failed to submit, we try to
-    // send those now.
-    while (self.submissions.pop()) |c| self.add(c);
+    // send those now. We have to make a copy so that any failures are
+    // resubmitted without an infinite loop.
+    var queued = self.submissions;
+    self.submissions = .{};
+    while (queued.pop()) |c| self.add_(c, true);
 }
 
 /// Handle all of the completions.
