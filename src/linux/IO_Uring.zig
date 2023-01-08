@@ -479,7 +479,7 @@ test "io_uring: timer" {
     try testing.expect(!called2);
 }
 
-test "io_uring: socket accept/read/close" {
+test "io_uring: socket accept/connect/send/recv/close" {
     const mem = std.mem;
     const net = std.net;
     const os = std.os;
