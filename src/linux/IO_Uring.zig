@@ -81,6 +81,14 @@ pub fn add(self: *IO_Uring, completion: *Completion) void {
 
     // Setup the submission depending on the operation
     switch (completion.op) {
+        .accept => |*v| linux.io_uring_prep_accept(
+            sqe,
+            v.socket,
+            &v.addr,
+            &v.addr_size,
+            v.flags,
+        ),
+
         .timer => |*v| linux.io_uring_prep_timeout(
             sqe,
             &v.next,
@@ -178,6 +186,14 @@ pub const Completion = struct {
     /// the Result based on the res code.
     fn invoke(self: *Completion) void {
         const res: Result = switch (self.op) {
+            .accept => .{
+                .accept = if (self.res >= 0)
+                    @intCast(std.os.socket_t, self.res)
+                else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .timer => .{ .timer = {} },
 
             .timerfd_read => .{
@@ -194,6 +210,9 @@ pub const Completion = struct {
 };
 
 pub const OperationType = enum {
+    /// Accept a connection on a socket.
+    accept,
+
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     timer,
@@ -207,6 +226,7 @@ pub const OperationType = enum {
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    accept: AcceptError!std.os.socket_t,
     timer: void,
     timerfd_read: ReadError!usize,
 };
@@ -216,6 +236,13 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    accept: struct {
+        socket: std.os.socket_t,
+        addr: std.os.sockaddr = undefined,
+        addr_size: std.os.socklen_t = @sizeOf(std.os.sockaddr),
+        flags: u32 = std.os.SOCK.CLOEXEC,
+    },
+
     timer: struct {
         next: std.os.linux.kernel_timespec,
         repeat: u64,
@@ -225,6 +252,10 @@ pub const Operation = union(OperationType) {
         fd: std.os.fd_t,
         buffer: [8]u8 = undefined,
     },
+};
+
+pub const AcceptError = error{
+    Unexpected,
 };
 
 pub const ReadError = error{
@@ -297,4 +328,49 @@ test "io_uring: timer" {
     // Tick
     while (!called) try loop.tick();
     try testing.expect(!called2);
+}
+
+test "io_uring: socket accept/read/close" {
+    const mem = std.mem;
+    const net = std.net;
+    const os = std.os;
+    //const testing = std.testing;
+
+    var loop = try IO_Uring.init(16);
+    defer loop.deinit();
+
+    // Create a TCP server socket
+    const address = try net.Address.parseIp4("127.0.0.1", 3131);
+    const kernel_backlog = 1;
+    const ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer os.closeSocket(ln);
+    try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try os.bind(ln, &address.any, address.getOsSockLen());
+    try os.listen(ln, kernel_backlog);
+
+    // Create a TCP client socket
+    const client = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer os.closeSocket(client);
+
+    // Accept
+    var server_conn: os.socket_t = 0;
+    var c: IO_Uring.Completion = .{
+        .op = .{
+            .accept = .{
+                .socket = ln,
+            },
+        },
+
+        .userdata = &server_conn,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                conn.* = r.accept catch unreachable;
+            }
+        }).callback,
+    };
+    loop.add(&c);
+
+    //while (server_conn == 0) try loop.tick();
 }
