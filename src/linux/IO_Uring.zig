@@ -89,6 +89,11 @@ pub fn add(self: *IO_Uring, completion: *Completion) void {
             v.flags,
         ),
 
+        .close => |v| linux.io_uring_prep_close(
+            sqe,
+            v.fd,
+        ),
+
         .connect => |*v| linux.io_uring_prep_connect(
             sqe,
             v.socket,
@@ -201,6 +206,12 @@ pub const Completion = struct {
                 },
             },
 
+            .close => .{
+                .close = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .connect => .{
                 .connect = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -229,6 +240,9 @@ pub const OperationType = enum {
     /// Initiate a connection on a socket.
     connect,
 
+    /// Close a file descriptor.
+    close,
+
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     timer,
@@ -244,6 +258,7 @@ pub const OperationType = enum {
 pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
+    close: CloseError!void,
     timer: void,
     timerfd_read: ReadError!usize,
 };
@@ -265,6 +280,10 @@ pub const Operation = union(OperationType) {
         addr: std.net.Address,
     },
 
+    close: struct {
+        fd: std.os.fd_t,
+    },
+
     timer: struct {
         next: std.os.linux.kernel_timespec,
         repeat: u64,
@@ -277,6 +296,10 @@ pub const Operation = union(OperationType) {
 };
 
 pub const AcceptError = error{
+    Unexpected,
+};
+
+pub const CloseError = error{
     Unexpected,
 };
 
@@ -368,14 +391,14 @@ test "io_uring: socket accept/read/close" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    const ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
     errdefer os.closeSocket(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(ln, &address.any, address.getOsSockLen());
     try os.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    const client_conn = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    var client_conn = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
     errdefer os.closeSocket(client_conn);
 
     // Accept
@@ -424,4 +447,46 @@ test "io_uring: socket accept/read/close" {
     while (server_conn == 0 or !connected) try loop.tick();
     try testing.expect(server_conn > 0);
     try testing.expect(connected);
+
+    // Close
+    var c_client_close: IO_Uring.Completion = .{
+        .op = .{
+            .close = .{
+                .fd = client_conn,
+            },
+        },
+
+        .userdata = &client_conn,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                _ = r.close catch unreachable;
+                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                ptr.* = 0;
+            }
+        }).callback,
+    };
+    loop.add(&c_client_close);
+
+    var c_server_close: IO_Uring.Completion = .{
+        .op = .{
+            .close = .{
+                .fd = ln,
+            },
+        },
+
+        .userdata = &ln,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                _ = r.close catch unreachable;
+                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                ptr.* = 0;
+            }
+        }).callback,
+    };
+    loop.add(&c_server_close);
+
+    // Wait for the sockets to close
+    while (ln != 0 or client_conn != 0) try loop.tick();
 }
