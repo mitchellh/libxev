@@ -101,6 +101,27 @@ pub fn add(self: *IO_Uring, completion: *Completion) void {
             v.addr.getOsSockLen(),
         ),
 
+        .read => |v| linux.io_uring_prep_read(
+            sqe,
+            v.fd,
+            v.buffer,
+            0,
+        ),
+
+        .recv => |v| linux.io_uring_prep_recv(
+            sqe,
+            v.fd,
+            v.buffer,
+            0,
+        ),
+
+        .send => |v| linux.io_uring_prep_send(
+            sqe,
+            v.fd,
+            v.buffer,
+            0,
+        ),
+
         .timer => |*v| linux.io_uring_prep_timeout(
             sqe,
             &v.next,
@@ -112,6 +133,13 @@ pub fn add(self: *IO_Uring, completion: *Completion) void {
             sqe,
             v.fd,
             &v.buffer,
+            0,
+        ),
+
+        .write => |v| linux.io_uring_prep_write(
+            sqe,
+            v.fd,
+            v.buffer,
             0,
         ),
     }
@@ -218,10 +246,42 @@ pub const Completion = struct {
                 },
             },
 
+            .read => .{
+                .read = if (self.res >= 0)
+                    @intCast(usize, self.res)
+                else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
+            .recv => .{
+                .recv = if (self.res >= 0)
+                    @intCast(usize, self.res)
+                else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
+            .send => .{
+                .send = if (self.res >= 0)
+                    @intCast(usize, self.res)
+                else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .timer => .{ .timer = {} },
 
             .timerfd_read => .{
                 .timerfd_read = if (self.res >= 0)
+                    @intCast(usize, self.res)
+                else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
+            .write => .{
+                .write = if (self.res >= 0)
                     @intCast(usize, self.res)
                 else switch (@intToEnum(std.os.E, -self.res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -237,11 +297,23 @@ pub const OperationType = enum {
     /// Accept a connection on a socket.
     accept,
 
+    /// Close a file descriptor.
+    close,
+
     /// Initiate a connection on a socket.
     connect,
 
-    /// Close a file descriptor.
-    close,
+    /// Read
+    read,
+
+    /// Receive a message from a socket.
+    recv,
+
+    /// Send a message on a socket.
+    send,
+
+    /// Write
+    write,
 
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
@@ -259,8 +331,12 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     close: CloseError!void,
+    read: ReadError!usize,
+    recv: ReadError!usize,
+    send: WriteError!usize,
     timer: void,
     timerfd_read: ReadError!usize,
+    write: WriteError!usize,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -284,6 +360,21 @@ pub const Operation = union(OperationType) {
         fd: std.os.fd_t,
     },
 
+    read: struct {
+        fd: std.os.fd_t,
+        buffer: []u8,
+    },
+
+    recv: struct {
+        fd: std.os.fd_t,
+        buffer: []u8,
+    },
+
+    send: struct {
+        fd: std.os.fd_t,
+        buffer: []const u8,
+    },
+
     timer: struct {
         next: std.os.linux.kernel_timespec,
         repeat: u64,
@@ -292,6 +383,11 @@ pub const Operation = union(OperationType) {
     timerfd_read: struct {
         fd: std.os.fd_t,
         buffer: [8]u8 = undefined,
+    },
+
+    write: struct {
+        fd: std.os.fd_t,
+        buffer: []const u8,
     },
 };
 
@@ -308,6 +404,10 @@ pub const ConnectError = error{
 };
 
 pub const ReadError = error{
+    Unexpected,
+};
+
+pub const WriteError = error{
     Unexpected,
 };
 
@@ -447,6 +547,51 @@ test "io_uring: socket accept/read/close" {
     while (server_conn == 0 or !connected) try loop.tick();
     try testing.expect(server_conn > 0);
     try testing.expect(connected);
+
+    // Send
+    var c_send: IO_Uring.Completion = .{
+        .op = .{
+            .send = .{
+                .fd = client_conn,
+                .buffer = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 },
+            },
+        },
+
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                _ = r.send catch unreachable;
+                _ = ud;
+            }
+        }).callback,
+    };
+    loop.add(&c_send);
+
+    // Receive
+    var recv_buf: [128]u8 = undefined;
+    var recv_len: usize = 0;
+    var c_recv: IO_Uring.Completion = .{
+        .op = .{
+            .recv = .{
+                .fd = server_conn,
+                .buffer = &recv_buf,
+            },
+        },
+
+        .userdata = &recv_len,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                ptr.* = r.recv catch unreachable;
+            }
+        }).callback,
+    };
+    loop.add(&c_recv);
+
+    // Wait for the send/receive
+    while (recv_len == 0) try loop.tick();
+    try testing.expectEqualSlices(u8, c_send.op.send.buffer, recv_buf[0..recv_len]);
 
     // Close
     var c_client_close: IO_Uring.Completion = .{
