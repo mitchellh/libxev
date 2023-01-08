@@ -89,6 +89,13 @@ pub fn add(self: *IO_Uring, completion: *Completion) void {
             v.flags,
         ),
 
+        .connect => |*v| linux.io_uring_prep_connect(
+            sqe,
+            v.socket,
+            &v.addr.any,
+            v.addr.getOsSockLen(),
+        ),
+
         .timer => |*v| linux.io_uring_prep_timeout(
             sqe,
             &v.next,
@@ -194,6 +201,12 @@ pub const Completion = struct {
                 },
             },
 
+            .connect => .{
+                .connect = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .timer => .{ .timer = {} },
 
             .timerfd_read => .{
@@ -213,6 +226,9 @@ pub const OperationType = enum {
     /// Accept a connection on a socket.
     accept,
 
+    /// Initiate a connection on a socket.
+    connect,
+
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     timer,
@@ -227,6 +243,7 @@ pub const OperationType = enum {
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
+    connect: ConnectError!void,
     timer: void,
     timerfd_read: ReadError!usize,
 };
@@ -243,6 +260,11 @@ pub const Operation = union(OperationType) {
         flags: u32 = std.os.SOCK.CLOEXEC,
     },
 
+    connect: struct {
+        socket: std.os.socket_t,
+        addr: std.net.Address,
+    },
+
     timer: struct {
         next: std.os.linux.kernel_timespec,
         repeat: u64,
@@ -255,6 +277,10 @@ pub const Operation = union(OperationType) {
 };
 
 pub const AcceptError = error{
+    Unexpected,
+};
+
+pub const ConnectError = error{
     Unexpected,
 };
 
@@ -334,7 +360,7 @@ test "io_uring: socket accept/read/close" {
     const mem = std.mem;
     const net = std.net;
     const os = std.os;
-    //const testing = std.testing;
+    const testing = std.testing;
 
     var loop = try IO_Uring.init(16);
     defer loop.deinit();
@@ -349,12 +375,12 @@ test "io_uring: socket accept/read/close" {
     try os.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    const client = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(client);
+    const client_conn = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer os.closeSocket(client_conn);
 
     // Accept
     var server_conn: os.socket_t = 0;
-    var c: IO_Uring.Completion = .{
+    var c_accept: IO_Uring.Completion = .{
         .op = .{
             .accept = .{
                 .socket = ln,
@@ -370,7 +396,32 @@ test "io_uring: socket accept/read/close" {
             }
         }).callback,
     };
-    loop.add(&c);
+    loop.add(&c_accept);
 
-    //while (server_conn == 0) try loop.tick();
+    // Connect
+    var connected = false;
+    var c_connect: IO_Uring.Completion = .{
+        .op = .{
+            .connect = .{
+                .socket = client_conn,
+                .addr = address,
+            },
+        },
+
+        .userdata = &connected,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                _ = r.connect catch unreachable;
+                const b = @ptrCast(*bool, ud.?);
+                b.* = true;
+            }
+        }).callback,
+    };
+    loop.add(&c_connect);
+
+    // Wait for the connection to be established
+    while (server_conn == 0 or !connected) try loop.tick();
+    try testing.expect(server_conn > 0);
+    try testing.expect(connected);
 }
