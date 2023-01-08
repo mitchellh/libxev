@@ -7,6 +7,9 @@ const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
 
 ring: linux.IO_Uring,
 
+/// Our queue of submissions that failed to enqueue.
+submissions: IntrusiveQueue(Completion) = .{},
+
 /// Our queue of completed completions where the callback hasn't been called.
 completions: IntrusiveQueue(Completion) = .{},
 
@@ -76,7 +79,28 @@ pub fn timer(
 /// work.
 pub fn add(self: *IO_Uring, completion: *Completion) void {
     const sqe = self.ring.get_sqe() catch |err| switch (err) {
-        error.SubmissionQueueFull => @panic("TODO"),
+        error.SubmissionQueueFull => err: {
+            // If the queue is full, we try to submit the work now. This
+            // will empty our submission queue and we'd rather do that then
+            // just keep queueing stuff outside the shared buffer.
+            // If that fails, then we enqueue the work in our FIFO.
+            if (self.submit()) {
+                // Submission succeeded but we may still fail (unlikely)
+                // to get an SQE...
+                break :err self.ring.get_sqe() catch |retry_err| switch (retry_err) {
+                    error.SubmissionQueueFull => {
+                        self.submissions.push(completion);
+                        return;
+                    },
+                };
+            } else |_| {
+                // Submission failed, just queue it up
+                self.submissions.push(completion);
+                return;
+            }
+
+            break :err self.ring.get_sqe() catch unreachable;
+        },
     };
 
     // Setup the submission depending on the operation
@@ -158,8 +182,12 @@ pub fn tick(self: *IO_Uring) !void {
 }
 
 /// Submit all queued operations.
-fn submit(self: *IO_Uring) !void {
+pub fn submit(self: *IO_Uring) !void {
     _ = try self.ring.submit();
+
+    // If we have any submissions that failed to submit, we try to
+    // send those now.
+    while (self.submissions.pop()) |c| self.add(c);
 }
 
 /// Handle all of the completions.
