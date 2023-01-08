@@ -124,6 +124,65 @@ pub fn close(
     loop.add(c);
 }
 
+/// Read from the socket. This performs a single read. The callback must
+/// requeue the read if additional reads want to be performed. Additional
+/// reads simultaneously can be queued by calling this multiple times. Note
+/// that depending on the backend, the reads can happen out of order.
+pub fn read(
+    self: Socket,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    buf: xev.ReadBuffer,
+    userdata: ?*anyopaque,
+    comptime cb: *const fn (ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void,
+) void {
+    switch (buf) {
+        .buffer => |v| {
+            c.* = .{
+                .op = .{
+                    .recv = .{
+                        .fd = self.socket,
+                        .buffer = v,
+                    },
+                },
+                .userdata = userdata,
+                .callback = cb,
+            };
+
+            loop.add(c);
+        },
+    }
+}
+
+/// Write to the socket. This performs a single write. Additional writes
+/// can be queued by calling this multiple times. Note that depending on the
+/// backend, writes can happen out of order.
+pub fn write(
+    self: Socket,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    buf: xev.WriteBuffer,
+    userdata: ?*anyopaque,
+    comptime cb: *const fn (ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void,
+) void {
+    switch (buf) {
+        .buffer => |v| {
+            c.* = .{
+                .op = .{
+                    .send = .{
+                        .fd = self.socket,
+                        .buffer = v,
+                    },
+                },
+                .userdata = userdata,
+                .callback = cb,
+            };
+
+            loop.add(c);
+        },
+    }
+}
+
 test "socket: accept/connect/send/recv/close" {
     const testing = std.testing;
 
@@ -165,6 +224,31 @@ test "socket: accept/connect/send/recv/close" {
     while (server_conn == null or !connected) try loop.tick();
     try testing.expect(server_conn != null);
     try testing.expect(connected);
+
+    // Send
+    var send_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
+    client.write(&loop, &c_connect, .{ .buffer = &send_buf }, null, (struct {
+        fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
+            _ = c;
+            _ = r.send catch unreachable;
+            _ = ud;
+        }
+    }).callback);
+
+    // Receive
+    var recv_buf: [128]u8 = undefined;
+    var recv_len: usize = 0;
+    server_conn.?.read(&loop, &c_accept, .{ .buffer = &recv_buf }, &recv_len, (struct {
+        fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
+            _ = c;
+            const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+            ptr.* = r.recv catch unreachable;
+        }
+    }).callback);
+
+    // Wait for the send/receive
+    while (recv_len == 0) try loop.tick();
+    try testing.expectEqualSlices(u8, &send_buf, recv_buf[0..recv_len]);
 
     // Close
     server_conn.?.close(&loop, &c_accept, &server_conn, (struct {
