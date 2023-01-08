@@ -82,7 +82,7 @@ pub fn add(self: *IO_Uring, completion: *Completion) void {
 
     // Setup the submission depending on the operation
     switch (completion.op) {
-        .timer => |v| linux.io_uring_prep_timeout(
+        .timer => |*v| linux.io_uring_prep_timeout(
             sqe,
             &v.next,
             0,
@@ -267,14 +267,27 @@ test "io_uring: timerfd" {
     while (!called) try loop.tick();
 }
 
-test "io_uring: timer (on heap)" {
+test "io_uring: timer" {
+    const testing = std.testing;
+
     var loop = try IO_Uring.init(16);
     defer loop.deinit();
 
     // Add the timer
     var called = false;
-    var c: IO_Uring.Completion = undefined;
-    loop.timer(&c, 100, 0, &called, (struct {
+    var c1: IO_Uring.Completion = undefined;
+    loop.timer(&c1, 1, 0, &called, (struct {
+        fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+        }
+    }).callback);
+
+    // Add another timer
+    var called2 = false;
+    var c2: IO_Uring.Completion = undefined;
+    loop.timer(&c2, 100_000, 0, &called2, (struct {
         fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
             _ = r;
             const b = @ptrCast(*bool, ud.?);
@@ -284,4 +297,5 @@ test "io_uring: timer (on heap)" {
 
     // Tick
     while (!called) try loop.tick();
+    try testing.expect(!called2);
 }
