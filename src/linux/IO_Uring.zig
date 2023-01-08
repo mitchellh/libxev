@@ -42,12 +42,11 @@ pub fn timer(
 ) void {
     // Get the timestamp of the absolute time that we'll execute this timer.
     const next_ts = next_ts: {
-        if (next_ms == 0) break :next_ts undefined;
-
         var now: std.os.timespec = undefined;
         std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
         break :next_ts .{
             .tv_sec = now.tv_sec,
+            // TODO: overflow handling
             .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
         };
     };
