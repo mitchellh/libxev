@@ -27,16 +27,68 @@ pub fn deinit(self: *IO_Uring) void {
     self.ring.deinit();
 }
 
+/// Add a timer to the loop. The timer will initially execute in "next_ms"
+/// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
+/// zero then the timer is oneshot. If "next_ms" is zero then the timer will
+/// invoke immediately (the callback will be called immediately -- as part
+/// of this function call -- to avoid any additional system calls).
+pub fn timer(
+    self: *IO_Uring,
+    c: *Completion,
+    next_ms: u64,
+    repeat_ms: u64,
+    userdata: ?*anyopaque,
+    comptime cb: *const fn (userdata: ?*anyopaque, completion: *Completion, result: Result) void,
+) void {
+    // Get the timestamp of the absolute time that we'll execute this timer.
+    const next_ts = next_ts: {
+        if (next_ms == 0) break :next_ts undefined;
+
+        var now: std.os.timespec = undefined;
+        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
+        break :next_ts .{
+            .tv_sec = now.tv_sec,
+            .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+        };
+    };
+
+    c.* = .{
+        .op = .{
+            .timer = .{
+                .next = next_ts,
+                .repeat = repeat_ms,
+            },
+        },
+        .userdata = userdata,
+        .callback = cb,
+    };
+
+    // If we want this timer executed now we execute it literally right now.
+    if (next_ms == 0) {
+        c.invoke();
+        return;
+    }
+
+    self.add(c);
+}
+
 /// Add a completion to the loop. This does NOT start the operation!
 /// You must call "submit" at some point to submit all of the queued
 /// work.
-pub fn add(self: *IO_Uring, completion: *Completion) !void {
+pub fn add(self: *IO_Uring, completion: *Completion) void {
     const sqe = self.ring.get_sqe() catch |err| switch (err) {
         error.SubmissionQueueFull => @panic("TODO"),
     };
 
     // Setup the submission depending on the operation
     switch (completion.op) {
+        .timer => |v| linux.io_uring_prep_timeout(
+            sqe,
+            &v.next,
+            0,
+            linux.IORING_TIMEOUT_ABS,
+        ),
+
         .timerfd_read => |*v| linux.io_uring_prep_read(
             sqe,
             v.fd,
@@ -111,7 +163,11 @@ fn invoke_completions(self: *IO_Uring) void {
 /// use the higher-level functions on this structure or the even
 /// higher-level abstractions like the Timer struct.
 pub const Completion = struct {
+    /// Operation to execute. This is only safe to read BEFORE the completion
+    /// is queued. After being queued (with "add"), the operation may change.
     op: Operation,
+
+    /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
     callback: *const fn (userdata: ?*anyopaque, completion: *Completion, result: Result) void,
 
@@ -122,7 +178,9 @@ pub const Completion = struct {
     /// Invokes the callback for this completion after properly constructing
     /// the Result based on the res code.
     fn invoke(self: *Completion) void {
-        const res = switch (self.op) {
+        const res: Result = switch (self.op) {
+            .timer => .{ .timer = {} },
+
             .timerfd_read => .{
                 .timerfd_read = if (self.res >= 0)
                     @intCast(usize, self.res)
@@ -137,6 +195,10 @@ pub const Completion = struct {
 };
 
 pub const OperationType = enum {
+    /// A oneshot or repeating timer. For io_uring, this is implemented
+    /// using the timeout mechanism.
+    timer,
+
     /// Read from a timerfd. This is special-cased over read to have
     /// a static buffer so the caller doesn't have to worry about buffer
     /// memory management.
@@ -146,6 +208,7 @@ pub const OperationType = enum {
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    timer: void,
     timerfd_read: ReadError!usize,
 };
 
@@ -154,6 +217,11 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    timer: struct {
+        next: std.os.linux.kernel_timespec,
+        repeat: u64,
+    },
+
     timerfd_read: struct {
         fd: std.os.fd_t,
         buffer: [8]u8 = undefined,
@@ -164,7 +232,7 @@ pub const ReadError = error{
     Unexpected,
 };
 
-test IO_Uring {
+test "io_uring: timerfd" {
     var loop = try IO_Uring.init(16);
     defer loop.deinit();
 
@@ -193,7 +261,26 @@ test IO_Uring {
             }
         }).callback,
     };
-    try loop.add(&c);
+    loop.add(&c);
+
+    // Tick
+    while (!called) try loop.tick();
+}
+
+test "io_uring: timer (on heap)" {
+    var loop = try IO_Uring.init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c: IO_Uring.Completion = undefined;
+    loop.timer(&c, 100, 0, &called, (struct {
+        fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+        }
+    }).callback);
 
     // Tick
     while (!called) try loop.tick();
