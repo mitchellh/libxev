@@ -165,12 +165,21 @@ fn add_(
             ),
         },
 
-        .send => |v| linux.io_uring_prep_send(
-            sqe,
-            v.fd,
-            v.buffer,
-            0,
-        ),
+        .send => |*v| switch (v.buffer) {
+            .array => |*buf| linux.io_uring_prep_send(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+
+            .slice => |buf| linux.io_uring_prep_send(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+        },
 
         .shutdown => |v| linux.io_uring_prep_shutdown(
             sqe,
@@ -185,12 +194,21 @@ fn add_(
             linux.IORING_TIMEOUT_ABS,
         ),
 
-        .write => |v| linux.io_uring_prep_write(
-            sqe,
-            v.fd,
-            v.buffer,
-            0,
-        ),
+        .write => |*v| switch (v.buffer) {
+            .array => |*buf| linux.io_uring_prep_write(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+
+            .slice => |buf| linux.io_uring_prep_write(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+        },
     }
 
     // Our sqe user data always points back to the completion.
@@ -436,7 +454,7 @@ pub const Operation = union(OperationType) {
 
     send: struct {
         fd: std.os.fd_t,
-        buffer: []const u8,
+        buffer: WriteBuffer,
     },
 
     shutdown: struct {
@@ -451,10 +469,11 @@ pub const Operation = union(OperationType) {
 
     write: struct {
         fd: std.os.fd_t,
-        buffer: []const u8,
+        buffer: WriteBuffer,
     },
 };
 
+/// ReadBuffer are the various options for reading.
 pub const ReadBuffer = union(enum) {
     /// Read into this slice.
     slice: []u8,
@@ -469,6 +488,19 @@ pub const ReadBuffer = union(enum) {
     /// much larger fixed size array here but we want to retain flexiblity
     /// for future fields.
     array: [32]u8,
+
+    // TODO: future will have vectors
+};
+
+/// WriteBuffer are the various options for writing.
+pub const WriteBuffer = union(enum) {
+    /// Write from this buffer.
+    slice: []const u8,
+
+    /// Write from this array. See ReadBuffer.array for why we support this.
+    array: [32]u8,
+
+    // TODO: future will have vectors
 };
 
 pub const AcceptError = error{
@@ -646,7 +678,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
         .op = .{
             .send = .{
                 .fd = client_conn,
-                .buffer = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 },
+                .buffer = .{ .slice = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 } },
             },
         },
 
@@ -684,7 +716,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
     // Wait for the send/receive
     while (recv_len == 0) try loop.tick();
-    try testing.expectEqualSlices(u8, c_send.op.send.buffer, recv_buf[0..recv_len]);
+    try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
 
     // Shutdown
     var shutdown = false;

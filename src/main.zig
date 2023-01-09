@@ -1,16 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const buf = @import("buf.zig");
-
 /// The recommended system option given the build options.
 pub const Loop = IO_Uring;
 pub const Completion = Loop.Completion;
 pub const Result = Loop.Result;
 pub const Async = @import("Async.zig");
 pub const Socket = @import("Socket.zig");
-pub const ReadBuffer = buf.ReadBuffer;
-pub const WriteBuffer = buf.WriteBuffer;
+pub const ReadBuffer = Loop.ReadBuffer;
+pub const WriteBuffer = Loop.WriteBuffer;
 
 /// System-specific interfaces. Note that they are always exported for
 /// all systems but if you reference them and force them to be analyzed

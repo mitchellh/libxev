@@ -90,11 +90,11 @@ const Client = struct {
 
         // Send message
         const socket = xev.Socket.initFd(c.op.connect.socket);
-        socket.write(self.loop, c, .{ .buffer = PING[0..PING.len] }, self, writeCallback);
+        socket.write(self.loop, c, .{ .slice = PING[0..PING.len] }, self, writeCallback);
 
         // Read
         const c_read = self.completion_pool.create() catch unreachable;
-        socket.read(self.loop, c_read, .{ .buffer = &self.read_buf }, self, readCallback);
+        socket.read(self.loop, c_read, .{ .slice = &self.read_buf }, self, readCallback);
     }
 
     fn writeCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
@@ -111,7 +111,7 @@ const Client = struct {
         const socket = xev.Socket.initFd(c.op.recv.fd);
         const buf = c.op.recv.buffer;
         const n = r.recv catch unreachable;
-        const data = buf[0..n];
+        const data = buf.slice[0..n];
 
         // Count the number of pings in our message
         var i: usize = 0;
@@ -129,12 +129,12 @@ const Client = struct {
 
                 // Send another ping
                 const c_ping = self.completion_pool.create() catch unreachable;
-                socket.write(self.loop, c_ping, .{ .buffer = PING[0..PING.len] }, self, writeCallback);
+                socket.write(self.loop, c_ping, .{ .slice = PING[0..PING.len] }, self, writeCallback);
             }
         }
 
         // Read again
-        socket.read(self.loop, c, .{ .buffer = buf }, self, readCallback);
+        socket.read(self.loop, c, .{ .slice = buf.slice }, self, readCallback);
     }
 
     fn shutdownCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
@@ -211,7 +211,7 @@ const Server = struct {
 
         // Start reading -- we can reuse c here because its done.
         const buf = self.buffer_pool.create() catch unreachable;
-        socket.read(self.loop, c, .{ .buffer = buf }, self, readCallback);
+        socket.read(self.loop, c, .{ .slice = buf }, self, readCallback);
     }
 
     fn readCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
@@ -221,28 +221,28 @@ const Server = struct {
         const self = @ptrCast(*Server, @alignCast(@alignOf(Server), ud.?));
         const n = r.recv catch |err| switch (err) {
             error.EOF => {
-                self.destroyBuf(buf);
+                self.destroyBuf(buf.slice);
                 socket.shutdown(self.loop, c, self, shutdownCallback);
                 return;
             },
 
             error.Unexpected => {
-                self.destroyBuf(buf);
+                self.destroyBuf(buf.slice);
                 self.completion_pool.destroy(c);
                 std.log.warn("server read unexpected err={}", .{err});
                 return;
             },
         };
 
-        const data = buf[0..n];
+        const data = buf.slice[0..n];
 
         // Echo it back
         const c_echo = self.completion_pool.create() catch unreachable;
-        socket.write(self.loop, c_echo, .{ .buffer = data }, self, writeCallback);
+        socket.write(self.loop, c_echo, .{ .slice = data }, self, writeCallback);
 
         // Read again
         const buf_read = self.buffer_pool.create() catch unreachable;
-        socket.read(self.loop, c, .{ .buffer = buf_read }, self, readCallback);
+        socket.read(self.loop, c, .{ .slice = buf_read }, self, readCallback);
     }
 
     fn writeCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
@@ -255,7 +255,7 @@ const Server = struct {
         self.buffer_pool.destroy(
             @alignCast(
                 BufferPool.item_alignment,
-                @intToPtr(*[4096]u8, @ptrToInt(buf.ptr)),
+                @intToPtr(*[4096]u8, @ptrToInt(buf.slice.ptr)),
             ),
         );
     }

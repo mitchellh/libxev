@@ -161,12 +161,12 @@ pub fn read(
     comptime cb: *const fn (ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void,
 ) void {
     switch (buf) {
-        .buffer => |v| {
+        inline .slice, .array => {
             c.* = .{
                 .op = .{
                     .recv = .{
                         .fd = self.socket,
-                        .buffer = .{ .slice = v },
+                        .buffer = buf,
                     },
                 },
                 .userdata = userdata,
@@ -190,12 +190,12 @@ pub fn write(
     comptime cb: *const fn (ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void,
 ) void {
     switch (buf) {
-        .buffer => |v| {
+        inline .slice, .array => {
             c.* = .{
                 .op = .{
                     .send = .{
                         .fd = self.socket,
-                        .buffer = v,
+                        .buffer = buf,
                     },
                 },
                 .userdata = userdata,
@@ -251,7 +251,7 @@ test "socket: accept/connect/send/recv/close" {
 
     // Send
     var send_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
-    client.write(&loop, &c_connect, .{ .buffer = &send_buf }, null, (struct {
+    client.write(&loop, &c_connect, .{ .slice = &send_buf }, null, (struct {
         fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
             _ = c;
             _ = r.send catch unreachable;
@@ -262,7 +262,7 @@ test "socket: accept/connect/send/recv/close" {
     // Receive
     var recv_buf: [128]u8 = undefined;
     var recv_len: usize = 0;
-    server_conn.?.read(&loop, &c_accept, .{ .buffer = &recv_buf }, &recv_len, (struct {
+    server_conn.?.read(&loop, &c_accept, .{ .slice = &recv_buf }, &recv_len, (struct {
         fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
             _ = c;
             const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
