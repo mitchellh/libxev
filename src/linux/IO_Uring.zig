@@ -133,19 +133,37 @@ fn add_(
             v.addr.getOsSockLen(),
         ),
 
-        .read => |v| linux.io_uring_prep_read(
-            sqe,
-            v.fd,
-            v.buffer,
-            0,
-        ),
+        .read => |*v| switch (v.buffer) {
+            .array => |*buf| linux.io_uring_prep_read(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
 
-        .recv => |v| linux.io_uring_prep_recv(
-            sqe,
-            v.fd,
-            v.buffer,
-            0,
-        ),
+            .slice => |buf| linux.io_uring_prep_read(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+        },
+
+        .recv => |*v| switch (v.buffer) {
+            .array => |*buf| linux.io_uring_prep_recv(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+
+            .slice => |buf| linux.io_uring_prep_recv(
+                sqe,
+                v.fd,
+                buf,
+                0,
+            ),
+        },
 
         .send => |v| linux.io_uring_prep_send(
             sqe,
@@ -165,13 +183,6 @@ fn add_(
             &v.next,
             0,
             linux.IORING_TIMEOUT_ABS,
-        ),
-
-        .timerfd_read => |*v| linux.io_uring_prep_read(
-            sqe,
-            v.fd,
-            &v.buffer,
-            0,
         ),
 
         .write => |v| linux.io_uring_prep_write(
@@ -315,10 +326,6 @@ pub const Completion = struct {
 
             .timer => .{ .timer = {} },
 
-            .timerfd_read => .{
-                .timerfd_read = self.readResult(.timerfd_read),
-            },
-
             .write => .{
                 .write = if (self.res >= 0)
                     @intCast(usize, self.res)
@@ -340,7 +347,10 @@ pub const Completion = struct {
             // If we receieve a zero byte read, it is an EOF _unless_
             // the requestesd buffer size was zero (weird).
             const buf = @field(self.op, @tagName(op)).buffer;
-            return if (buf.len == 0) 0 else ReadError.EOF;
+            return switch (buf) {
+                .slice => |b| if (b.len == 0) 0 else ReadError.EOF,
+                .array => ReadError.EOF,
+            };
         }
 
         return switch (@intToEnum(std.os.E, -self.res)) {
@@ -377,11 +387,6 @@ pub const OperationType = enum {
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     timer,
-
-    /// Read from a timerfd. This is special-cased over read to have
-    /// a static buffer so the caller doesn't have to worry about buffer
-    /// memory management.
-    timerfd_read,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -395,7 +400,6 @@ pub const Result = union(OperationType) {
     send: WriteError!usize,
     shutdown: ShutdownError!void,
     timer: void,
-    timerfd_read: ReadError!usize,
     write: WriteError!usize,
 };
 
@@ -422,12 +426,12 @@ pub const Operation = union(OperationType) {
 
     read: struct {
         fd: std.os.fd_t,
-        buffer: []u8,
+        buffer: ReadBuffer,
     },
 
     recv: struct {
         fd: std.os.fd_t,
-        buffer: []u8,
+        buffer: ReadBuffer,
     },
 
     send: struct {
@@ -445,15 +449,26 @@ pub const Operation = union(OperationType) {
         repeat: u64,
     },
 
-    timerfd_read: struct {
-        fd: std.os.fd_t,
-        buffer: [8]u8 = undefined,
-    },
-
     write: struct {
         fd: std.os.fd_t,
         buffer: []const u8,
     },
+};
+
+pub const ReadBuffer = union(enum) {
+    /// Read into this slice.
+    slice: []u8,
+
+    /// Read into this array, just set this to undefined and it will
+    /// be populated up to the size of the array. This is an option because
+    /// the other union members force a specific size anyways so this lets us
+    /// use the other size in the union to support small reads without worrying
+    /// about buffer allocation.
+    ///
+    /// Note that the union at the time of this writing could accomodate a
+    /// much larger fixed size array here but we want to retain flexiblity
+    /// for future fields.
+    array: [32]u8,
 };
 
 pub const AcceptError = error{
@@ -481,6 +496,13 @@ pub const WriteError = error{
     Unexpected,
 };
 
+test "Completion size" {
+    const testing = std.testing;
+
+    // Just so we are aware when we change the size
+    try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+}
+
 test "io_uring: timerfd" {
     var loop = try IO_Uring.init(16);
     defer loop.deinit();
@@ -495,8 +517,9 @@ test "io_uring: timerfd" {
     var called = false;
     var c: IO_Uring.Completion = .{
         .op = .{
-            .timerfd_read = .{
+            .read = .{
                 .fd = t.fd,
+                .buffer = .{ .array = undefined },
             },
         },
 
@@ -644,7 +667,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
         .op = .{
             .recv = .{
                 .fd = server_conn,
-                .buffer = &recv_buf,
+                .buffer = .{ .slice = &recv_buf },
             },
         },
 
@@ -691,7 +714,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
         .op = .{
             .recv = .{
                 .fd = server_conn,
-                .buffer = &recv_buf,
+                .buffer = .{ .slice = &recv_buf },
             },
         },
 

@@ -7,6 +7,7 @@ const buf = @import("buf.zig");
 pub const Loop = IO_Uring;
 pub const Completion = Loop.Completion;
 pub const Result = Loop.Result;
+pub const Async = @import("Async.zig");
 pub const Socket = @import("Socket.zig");
 pub const ReadBuffer = buf.ReadBuffer;
 pub const WriteBuffer = buf.WriteBuffer;

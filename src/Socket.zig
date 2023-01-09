@@ -166,7 +166,7 @@ pub fn read(
                 .op = .{
                     .recv = .{
                         .fd = self.socket,
-                        .buffer = v,
+                        .buffer = .{ .slice = v },
                     },
                 },
                 .userdata = userdata,
