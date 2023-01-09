@@ -33,16 +33,15 @@ pub fn main() !void {
     defer client.deinit();
     try client.start();
 
-    start_time = try Instant.now();
+    const start_time = try Instant.now();
     while (!client.stop) try client_loop.tick();
     server_thr.join();
+    const end_time = try Instant.now();
 
-    std.log.info("{d:.2} roundtrips/s", .{(1000 * client.pongs) / TIME});
+    const elapsed = @intToFloat(f64, end_time.since(start_time));
+    std.log.info("{d:.2} roundtrips/s", .{@intToFloat(f64, client.pongs) / (elapsed / 1e9)});
+    std.log.info("{d:.2} seconds total", .{elapsed / 1e9});
 }
-
-// Run benchmark for this many ms
-const TIME = 5000;
-var start_time: Instant = undefined;
 
 /// Memory pools for things that need stable pointers
 const BufferPool = std.heap.MemoryPool([4096]u8);
@@ -123,8 +122,7 @@ const Client = struct {
                 self.pongs += 1;
 
                 // If we're done then exit
-                const now = Instant.now() catch unreachable;
-                if (now.since(start_time) > (TIME * 1e6)) {
+                if (self.pongs > 500_000) {
                     socket.shutdown(self.loop, c, self, shutdownCallback);
                     return;
                 }
