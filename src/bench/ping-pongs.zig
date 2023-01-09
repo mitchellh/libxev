@@ -35,10 +35,7 @@ pub fn main() !void {
 
     start_time = try Instant.now();
     while (!client.stop) try client_loop.tick();
-
-    // TODO: need to implement shutdown
-    // server_thr.join();
-    _ = server_thr;
+    server_thr.join();
 
     std.log.info("{d:.2} roundtrips/s", .{(1000 * client.pongs) / TIME});
 }
@@ -128,7 +125,7 @@ const Client = struct {
                 // If we're done then exit
                 const now = Instant.now() catch unreachable;
                 if (now.since(start_time) > (TIME * 1e6)) {
-                    socket.close(self.loop, c, self, closeCallback);
+                    socket.shutdown(self.loop, c, self, shutdownCallback);
                     return;
                 }
 
@@ -140,6 +137,14 @@ const Client = struct {
 
         // Read again
         socket.read(self.loop, c, .{ .buffer = buf }, self, readCallback);
+    }
+
+    fn shutdownCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
+        _ = r.shutdown catch unreachable;
+
+        const self = @ptrCast(*Client, @alignCast(@alignOf(Client), ud.?));
+        const socket = xev.Socket.initFd(c.op.shutdown.socket);
+        socket.close(self.loop, c, self, closeCallback);
     }
 
     fn closeCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
@@ -157,6 +162,7 @@ const Server = struct {
     buffer_pool: BufferPool,
     completion_pool: CompletionPool,
     socket_pool: SocketPool,
+    stop: bool,
 
     pub fn init(alloc: Allocator, loop: *xev.Loop) !Server {
         return .{
@@ -164,6 +170,7 @@ const Server = struct {
             .buffer_pool = BufferPool.init(alloc),
             .completion_pool = CompletionPool.init(alloc),
             .socket_pool = SocketPool.init(alloc),
+            .stop = false,
         };
     }
 
@@ -185,7 +192,16 @@ const Server = struct {
     }
 
     pub fn threadMain(self: *Server) !void {
-        while (true) try self.loop.tick();
+        while (!self.stop) try self.loop.tick();
+    }
+
+    fn destroyBuf(self: *Server, buf: []const u8) void {
+        self.buffer_pool.destroy(
+            @alignCast(
+                BufferPool.item_alignment,
+                @intToPtr(*[4096]u8, @ptrToInt(buf.ptr)),
+            ),
+        );
     }
 
     fn acceptCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
@@ -201,12 +217,25 @@ const Server = struct {
     }
 
     fn readCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
-        const self = @ptrCast(*Server, @alignCast(@alignOf(Server), ud.?));
-        const n = r.recv catch unreachable;
-        // TODO: error will EOF for socket close
-
         const socket = xev.Socket.initFd(c.op.recv.fd);
         const buf = c.op.recv.buffer;
+
+        const self = @ptrCast(*Server, @alignCast(@alignOf(Server), ud.?));
+        const n = r.recv catch |err| switch (err) {
+            error.EOF => {
+                self.destroyBuf(buf);
+                socket.shutdown(self.loop, c, self, shutdownCallback);
+                return;
+            },
+
+            error.Unexpected => {
+                self.destroyBuf(buf);
+                self.completion_pool.destroy(c);
+                std.log.warn("server read unexpected err={}", .{err});
+                return;
+            },
+        };
+
         const data = buf[0..n];
 
         // Echo it back
@@ -231,5 +260,21 @@ const Server = struct {
                 @intToPtr(*[4096]u8, @ptrToInt(buf.ptr)),
             ),
         );
+    }
+
+    fn shutdownCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
+        _ = r.shutdown catch unreachable;
+
+        const self = @ptrCast(*Server, @alignCast(@alignOf(Server), ud.?));
+        const socket = xev.Socket.initFd(c.op.shutdown.socket);
+        socket.close(self.loop, c, self, closeCallback);
+    }
+
+    fn closeCallback(ud: ?*anyopaque, c: *xev.Loop.Completion, r: xev.Loop.Result) void {
+        _ = r.close catch unreachable;
+
+        const self = @ptrCast(*Server, @alignCast(@alignOf(Server), ud.?));
+        self.stop = true;
+        self.completion_pool.destroy(c);
     }
 };

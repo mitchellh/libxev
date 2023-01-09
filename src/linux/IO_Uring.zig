@@ -292,19 +292,11 @@ pub const Completion = struct {
             },
 
             .read => .{
-                .read = if (self.res >= 0)
-                    @intCast(usize, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
-                    else => |errno| std.os.unexpectedErrno(errno),
-                },
+                .read = self.readResult(.read),
             },
 
             .recv => .{
-                .recv = if (self.res >= 0)
-                    @intCast(usize, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
-                    else => |errno| std.os.unexpectedErrno(errno),
-                },
+                .recv = self.readResult(.recv),
             },
 
             .send => .{
@@ -324,11 +316,7 @@ pub const Completion = struct {
             .timer => .{ .timer = {} },
 
             .timerfd_read => .{
-                .timerfd_read = if (self.res >= 0)
-                    @intCast(usize, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
-                    else => |errno| std.os.unexpectedErrno(errno),
-                },
+                .timerfd_read = self.readResult(.timerfd_read),
             },
 
             .write => .{
@@ -341,6 +329,23 @@ pub const Completion = struct {
         };
 
         self.callback(self.userdata, self, res);
+    }
+
+    fn readResult(self: *Completion, comptime op: OperationType) ReadError!usize {
+        if (self.res > 0) {
+            return @intCast(usize, self.res);
+        }
+
+        if (self.res == 0) {
+            // If we receieve a zero byte read, it is an EOF _unless_
+            // the requestesd buffer size was zero (weird).
+            const buf = @field(self.op, @tagName(op)).buffer;
+            return if (buf.len == 0) 0 else ReadError.EOF;
+        }
+
+        return switch (@intToEnum(std.os.E, -self.res)) {
+            else => |errno| std.os.unexpectedErrno(errno),
+        };
     }
 };
 
@@ -464,6 +469,7 @@ pub const ConnectError = error{
 };
 
 pub const ReadError = error{
+    EOF,
     Unexpected,
 };
 
@@ -657,7 +663,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     while (recv_len == 0) try loop.tick();
     try testing.expectEqualSlices(u8, c_send.op.send.buffer, recv_buf[0..recv_len]);
 
-    // Close
+    // Shutdown
     var shutdown = false;
     var c_client_shutdown: IO_Uring.Completion = .{
         .op = .{
@@ -677,8 +683,34 @@ test "io_uring: socket accept/connect/send/recv/close" {
         }).callback,
     };
     loop.add(&c_client_shutdown);
-
     while (!shutdown) try loop.tick();
+
+    // Read should be EOF
+    var eof: ?bool = null;
+    c_recv = .{
+        .op = .{
+            .recv = .{
+                .fd = server_conn,
+                .buffer = &recv_buf,
+            },
+        },
+
+        .userdata = &eof,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                ptr.* = if (r.recv) |_| false else |err| switch (err) {
+                    error.EOF => true,
+                    else => false,
+                };
+            }
+        }).callback,
+    };
+    loop.add(&c_recv);
+
+    while (eof == null) try loop.tick();
+    try testing.expect(eof.? == true);
 
     // Close
     var c_client_close: IO_Uring.Completion = .{

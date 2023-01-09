@@ -124,6 +124,30 @@ pub fn close(
     loop.add(c);
 }
 
+/// Shutdown the socket. This always only shuts down the writer side. You
+/// can use the lower level interface directly to control this if the
+/// platform supports it.
+pub fn shutdown(
+    self: Socket,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    userdata: ?*anyopaque,
+    comptime cb: *const fn (ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void,
+) void {
+    c.* = .{
+        .op = .{
+            .shutdown = .{
+                .socket = self.socket,
+                .flags = std.os.linux.SHUT.WR,
+            },
+        },
+        .userdata = userdata,
+        .callback = cb,
+    };
+
+    loop.add(c);
+}
+
 /// Read from the socket. This performs a single read. The callback must
 /// requeue the read if additional reads want to be performed. Additional
 /// reads simultaneously can be queued by calling this multiple times. Note
