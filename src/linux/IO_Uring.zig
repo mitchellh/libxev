@@ -154,6 +154,12 @@ fn add_(
             0,
         ),
 
+        .shutdown => |v| linux.io_uring_prep_shutdown(
+            sqe,
+            v.socket,
+            v.flags,
+        ),
+
         .timer => |*v| linux.io_uring_prep_timeout(
             sqe,
             &v.next,
@@ -309,6 +315,12 @@ pub const Completion = struct {
                 },
             },
 
+            .shutdown => .{
+                .shutdown = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .timer => .{ .timer = {} },
 
             .timerfd_read => .{
@@ -351,6 +363,9 @@ pub const OperationType = enum {
     /// Send a message on a socket.
     send,
 
+    /// Shutdown all or part of a full-duplex connection.
+    shutdown,
+
     /// Write
     write,
 
@@ -373,6 +388,7 @@ pub const Result = union(OperationType) {
     read: ReadError!usize,
     recv: ReadError!usize,
     send: WriteError!usize,
+    shutdown: ShutdownError!void,
     timer: void,
     timerfd_read: ReadError!usize,
     write: WriteError!usize,
@@ -414,6 +430,11 @@ pub const Operation = union(OperationType) {
         buffer: []const u8,
     },
 
+    shutdown: struct {
+        socket: std.os.socket_t,
+        flags: u32 = linux.SHUT.RDWR,
+    },
+
     timer: struct {
         next: std.os.linux.kernel_timespec,
         repeat: u64,
@@ -443,6 +464,10 @@ pub const ConnectError = error{
 };
 
 pub const ReadError = error{
+    Unexpected,
+};
+
+pub const ShutdownError = error{
     Unexpected,
 };
 
@@ -631,6 +656,29 @@ test "io_uring: socket accept/connect/send/recv/close" {
     // Wait for the send/receive
     while (recv_len == 0) try loop.tick();
     try testing.expectEqualSlices(u8, c_send.op.send.buffer, recv_buf[0..recv_len]);
+
+    // Close
+    var shutdown = false;
+    var c_client_shutdown: IO_Uring.Completion = .{
+        .op = .{
+            .shutdown = .{
+                .socket = client_conn,
+            },
+        },
+
+        .userdata = &shutdown,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                _ = r.shutdown catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+            }
+        }).callback,
+    };
+    loop.add(&c_client_shutdown);
+
+    while (!shutdown) try loop.tick();
 
     // Close
     var c_client_close: IO_Uring.Completion = .{
