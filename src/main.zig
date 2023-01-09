@@ -20,6 +20,7 @@ test {
     _ = @import("heap.zig");
     _ = @import("queue.zig");
     _ = Loop;
+    _ = Async;
     _ = Socket;
 
     // OS-specific tests
