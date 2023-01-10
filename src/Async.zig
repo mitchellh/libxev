@@ -21,6 +21,8 @@ pub fn init() !Async {
     };
 }
 
+/// Clean up the async. This will forcibly deinitialize any resources
+/// and may result in erroneous wait callbacks to be fired.
 pub fn deinit(self: *Async) void {
     std.os.close(self.fd);
 }
