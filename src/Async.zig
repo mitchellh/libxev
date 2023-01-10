@@ -61,7 +61,7 @@ pub fn wait(
         .callback = (struct {
             fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
                 @call(.always_inline, cb, .{
-                    @ptrCast(?*Userdata, @alignCast(@alignOf(Userdata), ud)),
+                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                     c_inner,
                     if (r.read) |_| {} else |err| err,
                 });
