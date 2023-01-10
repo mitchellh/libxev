@@ -51,14 +51,14 @@ fn done(self: *IO_Uring) bool {
 
 /// Tick through the event loop once, waiting for at least "wait" completions
 /// to be processed by the loop itself.
-pub fn tick(self: *IO_Uring, r: u32) !void {
-    // TODO: debugging some perf issues
-    const wait = if (true) 0 else r;
+pub fn tick(self: *IO_Uring, wait: u32) !void {
+    // TODO: make configurable
+    const busy_wait = 20_000;
 
     // If we have no queued submissions then we do the wait as part
     // of the submit call, because then we can do exactly once syscall
     // to get all our events.
-    if (self.submissions.empty()) {
+    if (busy_wait == 0 and self.submissions.empty()) {
         _ = try self.ring.submit_and_wait(wait);
     } else {
         // We have submissions, meaning we have to do multiple submissions
@@ -66,7 +66,21 @@ pub fn tick(self: *IO_Uring, r: u32) !void {
         _ = try self.submit();
     }
 
-    //_ = try self.ring.enter(0, 1, std.os.linux.IORING_ENTER_GETEVENTS);
+    // During some real world testing, I found that the overhead of
+    // io_uring waits (GETEVENTS) under heavy load is higher than busy
+    // waiting on the userspace CQ ring. So, we spend some time spinning
+    // the CPU checking for CQ readiness before giving up and going to sleep.
+    // This stops being true as soon as there are many tasks or threads
+    // fighting for CPU contention that assist in moving forward the
+    // ring.
+    //
+    // The busy_wait parameter is tune-able. The higher it is the higher
+    // CPU will be but the lower latency. The default 20_000 was empirically
+    // chosen on a test machine since its about the cost of the syscall
+    // when it has to wait under load, and avoiding the context switch makes
+    // up for the time.
+    var i: usize = 0;
+    while (self.ring.cq_ready() == 0 and i < busy_wait) : (i += 1) {}
 
     // Sync our completions with the wait amount we specified. If we did
     // the submit_and_wait above then the wait number should be immediately
