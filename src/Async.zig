@@ -7,6 +7,9 @@ const assert = std.debug.assert;
 const os = std.os;
 const xev = @import("main.zig");
 
+/// The error that can come in the wait callback.
+pub const WaitError = xev.Loop.ReadError;
+
 /// eventfd file descriptor
 fd: os.fd_t,
 
@@ -36,8 +39,13 @@ pub fn wait(
     self: Async,
     loop: *xev.Loop,
     c: *xev.Completion,
-    userdata: ?*anyopaque,
-    comptime cb: *const fn (ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        c: *xev.Completion,
+        r: WaitError!void,
+    ) void,
 ) void {
     c.* = .{
         .op = .{
@@ -46,8 +54,17 @@ pub fn wait(
                 .buffer = .{ .array = undefined },
             },
         },
+
         .userdata = userdata,
-        .callback = cb,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
+                @call(.always_inline, cb, .{
+                    @ptrCast(?*Userdata, @alignCast(@alignOf(Userdata), ud)),
+                    c_inner,
+                    if (r.read) |_| {} else |err| err,
+                });
+            }
+        }).callback,
     };
 
     loop.add(c);
@@ -86,12 +103,11 @@ test "async" {
     // Wait
     var wake: bool = false;
     var c_wait: xev.Completion = undefined;
-    notifier.wait(&loop, &c_wait, &wake, (struct {
-        fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
+    notifier.wait(&loop, &c_wait, bool, &wake, (struct {
+        fn callback(ud: ?*bool, c: *xev.Completion, r: WaitError!void) void {
             _ = c;
-            _ = r.read catch unreachable;
-            const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
-            ptr.* = true;
+            _ = r catch unreachable;
+            ud.?.* = true;
         }
     }).callback);
 
@@ -118,12 +134,11 @@ test "async: notify first" {
     // Wait
     var wake: bool = false;
     var c_wait: xev.Completion = undefined;
-    notifier.wait(&loop, &c_wait, &wake, (struct {
-        fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
+    notifier.wait(&loop, &c_wait, bool, &wake, (struct {
+        fn callback(ud: ?*bool, c: *xev.Completion, r: WaitError!void) void {
             _ = c;
-            _ = r.read catch unreachable;
-            const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
-            ptr.* = true;
+            _ = r catch unreachable;
+            ud.?.* = true;
         }
     }).callback);
 
