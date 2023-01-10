@@ -278,6 +278,12 @@ fn add_(
             linux.IORING_TIMEOUT_ABS,
         ),
 
+        .timer_remove => |v| linux.io_uring_prep_timeout_remove(
+            sqe,
+            @ptrToInt(v.timer),
+            0,
+        ),
+
         .write => |*v| switch (v.buffer) {
             .array => |*buf| linux.io_uring_prep_write(
                 sqe,
@@ -408,7 +414,21 @@ pub const Completion = struct {
                 },
             },
 
-            .timer => .{ .timer = {} },
+            .timer => .{
+                .timer = if (self.res >= 0) .request else switch (@intToEnum(std.os.E, -self.res)) {
+                    .TIME => .expiration,
+                    .CANCELED => .cancel,
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
+            .timer_remove => .{
+                .timer_remove = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                    .NOENT => error.NotFound,
+                    .BUSY => error.ExpirationInProgress,
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
 
             .write => .{
                 .write = if (self.res >= 0)
@@ -471,6 +491,9 @@ pub const OperationType = enum {
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     timer,
+
+    /// Cancel an existing timer.
+    timer_remove,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -483,7 +506,8 @@ pub const Result = union(OperationType) {
     recv: ReadError!usize,
     send: WriteError!usize,
     shutdown: ShutdownError!void,
-    timer: void,
+    timer: TimerError!TimerTrigger,
+    timer_remove: TimerRemoveError!void,
     write: WriteError!usize,
 };
 
@@ -530,6 +554,10 @@ pub const Operation = union(OperationType) {
 
     timer: struct {
         next: std.os.linux.kernel_timespec,
+    },
+
+    timer_remove: struct {
+        timer: *Completion,
     },
 
     write: struct {
@@ -591,6 +619,27 @@ pub const ShutdownError = error{
 
 pub const WriteError = error{
     Unexpected,
+};
+
+pub const TimerError = error{
+    Unexpected,
+};
+
+pub const TimerRemoveError = error{
+    NotFound,
+    ExpirationInProgress,
+    Unexpected,
+};
+
+pub const TimerTrigger = enum {
+    /// Timer completed due to linked request completing in time.
+    request,
+
+    /// Timer expired.
+    expiration,
+
+    /// Timer was canceled.
+    cancel,
 };
 
 test "Completion size" {
@@ -671,6 +720,47 @@ test "io_uring: timer" {
     while (!called) try loop.run(.no_wait);
     try testing.expect(called);
     try testing.expect(!called2);
+}
+
+test "io_uring: timer remove" {
+    const testing = std.testing;
+
+    var loop = try IO_Uring.init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c1: IO_Uring.Completion = undefined;
+    loop.timer(&c1, 100_000, &called, (struct {
+        fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            const b = @ptrCast(*bool, ud.?);
+            const trigger = r.timer catch unreachable;
+            b.* = trigger != .cancel;
+        }
+    }).callback);
+
+    // Remove it
+    var c_remove: IO_Uring.Completion = .{
+        .op = .{
+            .timer_remove = .{
+                .timer = &c1,
+            },
+        },
+
+        .userdata = null,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+                _ = c;
+                _ = ud;
+                _ = r.timer_remove catch unreachable;
+            }
+        }).callback,
+    };
+    loop.add(&c_remove);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(!called);
 }
 
 test "io_uring: socket accept/connect/send/recv/close" {

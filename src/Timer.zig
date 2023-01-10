@@ -52,18 +52,82 @@ pub fn run(
 
     loop.timer(c, next_ms, userdata, (struct {
         fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-            _ = r;
             @call(.always_inline, cb, .{
                 @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                 c_inner,
-                {},
+                if (r.timer) |trigger| @as(RunError!void, switch (trigger) {
+                    .request, .expiration => {},
+                    .cancel => error.Canceled,
+                }) else |err| err,
             });
         }
     }).callback);
 }
 
+/// Cancel a previously started timer. The timer to cancel used the completion
+/// "c_cancel". A new completion "c" must be specified which will be called
+/// with the callback once cancellation is complete.
+///
+/// The original timer will still have its callback fired but with the
+/// error "error.Canceled".
+pub fn cancel(
+    self: Timer,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    c_cancel: *xev.Completion,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        c: *xev.Completion,
+        r: CancelError!void,
+    ) void,
+) void {
+    _ = self;
+
+    c.* = .{
+        .op = .{
+            .timer_remove = .{
+                .timer = c_cancel,
+            },
+        },
+
+        .userdata = userdata,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
+                @call(.always_inline, cb, .{
+                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    c_inner,
+                    if (r.timer_remove) |_| {} else |err| err,
+                });
+            }
+        }).callback,
+    };
+
+    loop.add(c);
+}
+
 /// Error that could happen while running a timer.
-pub const RunError = error{};
+pub const RunError = error{
+    /// The timer was canceled before it could expire
+    Canceled,
+
+    /// Some unexpected error.
+    Unexpected,
+};
+
+pub const CancelError = error{
+    /// The timer to cancel was not found. It possibly already expired
+    /// and has been dequeued.
+    NotFound,
+
+    /// The timer was found but it was already in process of being
+    /// processed for expiration. It was not canceled.
+    ExpirationInProgress,
+
+    /// Unknown error
+    Unexpected,
+};
 
 test "timer" {
     const testing = std.testing;
@@ -88,4 +152,40 @@ test "timer" {
     // Wait
     try loop.run(.until_done);
     try testing.expect(called);
+}
+
+test "timer cancel" {
+    const testing = std.testing;
+
+    var loop = try xev.Loop.init(16);
+    defer loop.deinit();
+
+    var timer = try init();
+    defer timer.deinit();
+
+    // Add the timer
+    var canceled = false;
+    var c1: xev.Completion = undefined;
+    timer.run(&loop, &c1, 100_000, bool, &canceled, (struct {
+        fn callback(ud: ?*bool, c: *xev.Completion, r: RunError!void) void {
+            _ = c;
+            ud.?.* = if (r) false else |err| err == error.Canceled;
+        }
+    }).callback);
+
+    // Cancel
+    var cancel_confirm = false;
+    var c2: xev.Completion = undefined;
+    timer.cancel(&loop, &c2, &c1, bool, &cancel_confirm, (struct {
+        fn callback(ud: ?*bool, c: *xev.Completion, r: CancelError!void) void {
+            _ = c;
+            _ = r catch unreachable;
+            ud.?.* = true;
+        }
+    }).callback);
+
+    // Wait
+    try loop.run(.until_done);
+    try testing.expect(canceled);
+    try testing.expect(cancel_confirm);
 }
