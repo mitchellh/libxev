@@ -17,12 +17,6 @@ pub fn main() !void {
     var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
     defer loop.deinit();
 
-    const GPA = std.heap.GeneralPurposeAllocator(.{});
-    var gpa: GPA = .{};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
-    _ = alloc;
-
     // Initialize all our threads
     var contexts: [THR_COUNT]Thread = undefined;
     var threads: [contexts.len]std.Thread = undefined;
