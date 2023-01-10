@@ -122,7 +122,6 @@ pub fn timer(
     self: *IO_Uring,
     c: *Completion,
     next_ms: u64,
-    repeat_ms: u64,
     userdata: ?*anyopaque,
     comptime cb: *const fn (userdata: ?*anyopaque, completion: *Completion, result: Result) void,
 ) void {
@@ -141,7 +140,6 @@ pub fn timer(
         .op = .{
             .timer = .{
                 .next = next_ts,
-                .repeat = repeat_ms,
             },
         },
         .userdata = userdata,
@@ -532,7 +530,6 @@ pub const Operation = union(OperationType) {
 
     timer: struct {
         next: std.os.linux.kernel_timespec,
-        repeat: u64,
     },
 
     write: struct {
@@ -651,7 +648,7 @@ test "io_uring: timer" {
     // Add the timer
     var called = false;
     var c1: IO_Uring.Completion = undefined;
-    loop.timer(&c1, 1, 0, &called, (struct {
+    loop.timer(&c1, 1, &called, (struct {
         fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
             _ = r;
             const b = @ptrCast(*bool, ud.?);
@@ -662,7 +659,7 @@ test "io_uring: timer" {
     // Add another timer
     var called2 = false;
     var c2: IO_Uring.Completion = undefined;
-    loop.timer(&c2, 100_000, 0, &called2, (struct {
+    loop.timer(&c2, 100_000, &called2, (struct {
         fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
             _ = r;
             const b = @ptrCast(*bool, ud.?);

@@ -7,6 +7,7 @@ pub const Completion = Loop.Completion;
 pub const Result = Loop.Result;
 pub const Async = @import("Async.zig");
 pub const Socket = @import("Socket.zig");
+pub const Timer = @import("Timer.zig");
 pub const ReadBuffer = Loop.ReadBuffer;
 pub const WriteBuffer = Loop.WriteBuffer;
 
@@ -39,6 +40,7 @@ test {
     _ = Loop;
     _ = Async;
     _ = Socket;
+    _ = Timer;
 
     // OS-specific tests
     switch (builtin.os.tag) {
