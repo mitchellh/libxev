@@ -8,17 +8,17 @@ pub const log_level: std.log.Level = .info;
 
 // Tune-ables
 pub const NUM_PINGS = 1000 * 1000;
-pub const THR_COUNT = 1;
-
-// Done counter (TODO: remove)
-pub var done: std.atomic.Atomic(usize) = .{ .value = 0 };
 
 pub fn main() !void {
+    try run(1);
+}
+
+pub fn run(comptime thread_count: comptime_int) !void {
     var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
     defer loop.deinit();
 
     // Initialize all our threads
-    var contexts: [THR_COUNT]Thread = undefined;
+    var contexts: [thread_count]Thread = undefined;
     var threads: [contexts.len]std.Thread = undefined;
     var comps: [contexts.len]xev.Completion = undefined;
     for (contexts) |*ctx, i| {
@@ -34,7 +34,7 @@ pub fn main() !void {
 
     const elapsed = @intToFloat(f64, end_time.since(start_time));
     std.log.info("async{d}: {d:.2} seconds ({d:.2}/sec)", .{
-        THR_COUNT,
+        thread_count,
         elapsed / 1e9,
         NUM_PINGS / (elapsed / 1e9),
     });
@@ -74,8 +74,6 @@ const Thread = struct {
     }
 
     pub fn threadMain(self: *Thread) !void {
-        defer _ = done.fetchAdd(1, .SeqCst);
-
         // Kick us off
         try self.main_async.notify();
 

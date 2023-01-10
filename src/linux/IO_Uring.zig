@@ -53,7 +53,7 @@ fn done(self: *IO_Uring) bool {
 /// to be processed by the loop itself.
 pub fn tick(self: *IO_Uring, wait: u32) !void {
     // TODO: make configurable
-    const busy_wait = 20_000;
+    const busy_wait = 0; //20_000;
 
     // If we have no queued submissions then we do the wait as part
     // of the submit call, because then we can do exactly once syscall
