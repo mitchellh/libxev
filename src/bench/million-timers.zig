@@ -21,7 +21,8 @@ pub fn main() !void {
     var timeout: u64 = 1;
     while (i < NUM_TIMERS) : (i += 1) {
         if (i % 1000 == 0) timeout += 1;
-        loop.timer(&cs[i], timeout, 0, null, timerCallback);
+        const timer = try xev.Timer.init();
+        timer.run(&loop, &cs[i], timeout, void, null, timerCallback);
     }
 
     const before_run = try Instant.now();
@@ -39,8 +40,8 @@ pub const log_level: std.log.Level = .info;
 
 var timer_callback_count: usize = 0;
 
-fn timerCallback(_: ?*anyopaque, c: *xev.Loop.Completion, result: xev.Loop.Result) void {
+fn timerCallback(_: ?*void, c: *xev.Loop.Completion, result: xev.Timer.RunError!void) void {
     _ = c;
-    _ = result;
+    _ = result catch unreachable;
     timer_callback_count += 1;
 }
