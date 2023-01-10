@@ -94,7 +94,6 @@ pub fn notify(self: Async) !void {
 
 test "async" {
     const testing = std.testing;
-    _ = testing;
 
     var loop = try xev.Loop.init(16);
     defer loop.deinit();
@@ -117,12 +116,12 @@ test "async" {
     try notifier.notify();
 
     // Wait for wake
-    while (!wake) try loop.tick();
+    try loop.run(.until_done);
+    try testing.expect(wake);
 }
 
 test "async: notify first" {
     const testing = std.testing;
-    _ = testing;
 
     var loop = try xev.Loop.init(16);
     defer loop.deinit();
@@ -145,5 +144,6 @@ test "async: notify first" {
     }).callback);
 
     // Wait for wake
-    while (!wake) try loop.tick();
+    try loop.run(.until_done);
+    try testing.expect(wake);
 }

@@ -52,6 +52,11 @@ pub fn IntrusiveQueue(comptime T: type) type {
             next.next = null;
             return next;
         }
+
+        /// Returns true if the queue is empty.
+        pub fn empty(self: *const Self) bool {
+            return self.head == null;
+        }
     };
 }
 
@@ -65,6 +70,7 @@ test IntrusiveQueue {
     };
     const Queue = IntrusiveQueue(Elem);
     var q: Queue = .{};
+    try testing.expect(q.empty());
 
     // Elems
     var elems: [10]Elem = .{.{}} ** 10;
@@ -72,8 +78,10 @@ test IntrusiveQueue {
     // One
     try testing.expect(q.pop() == null);
     q.push(&elems[0]);
+    try testing.expect(!q.empty());
     try testing.expect(q.pop().? == &elems[0]);
     try testing.expect(q.pop() == null);
+    try testing.expect(q.empty());
 
     // Two
     try testing.expect(q.pop() == null);

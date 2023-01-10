@@ -4,8 +4,13 @@ const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
+const xev = @import("../main.zig");
 
 ring: linux.IO_Uring,
+
+/// The number of active completions. This DOES NOT include completions that
+/// are queued in the submissions queue.
+active: usize = 0,
 
 /// Our queue of submissions that failed to enqueue.
 submissions: IntrusiveQueue(Completion) = .{},
@@ -28,6 +33,70 @@ pub fn init(entries: u13) !IO_Uring {
 
 pub fn deinit(self: *IO_Uring) void {
     self.ring.deinit();
+}
+
+/// Run the event loop. See RunMode documentation for details on modes.
+pub fn run(self: *IO_Uring, mode: xev.RunMode) !void {
+    switch (mode) {
+        .no_wait => try self.tick(0),
+        .once => try self.tick(1),
+        .until_done => while (!self.done()) try self.tick(1),
+    }
+}
+
+fn done(self: *IO_Uring) bool {
+    return self.active == 0 and
+        self.submissions.empty();
+}
+
+/// Tick through the event loop once, waiting for at least "wait" completions
+/// to be processed by the loop itself.
+pub fn tick(self: *IO_Uring, r: u32) !void {
+    // TODO: debugging some perf issues
+    const wait = if (true) 0 else r;
+
+    // If we have no queued submissions then we do the wait as part
+    // of the submit call, because then we can do exactly once syscall
+    // to get all our events.
+    if (self.submissions.empty()) {
+        _ = try self.ring.submit_and_wait(wait);
+    } else {
+        // We have submissions, meaning we have to do multiple submissions
+        // anyways so we always just do non-waiting ones.
+        _ = try self.submit();
+    }
+
+    //_ = try self.ring.enter(0, 1, std.os.linux.IORING_ENTER_GETEVENTS);
+
+    // Sync our completions with the wait amount we specified. If we did
+    // the submit_and_wait above then the wait number should be immediately
+    // ready.
+    try self.sync_completions(wait);
+
+    // Run all our callbacks
+    self.invoke_completions();
+}
+
+/// Submit all queued operations. This never does an io_uring submit
+/// and wait operation.
+pub fn submit(self: *IO_Uring) !void {
+    _ = try self.ring.submit();
+
+    // If we have any submissions that failed to submit, we try to
+    // send those now. We have to make a copy so that any failures are
+    // resubmitted without an infinite loop.
+    var queued = self.submissions;
+    self.submissions = .{};
+    while (queued.pop()) |c| self.add_(c, true);
+}
+
+/// Handle all of the completions.
+fn complete(self: *IO_Uring) !void {
+    // Sync
+    try self.sync_completions(0);
+
+    // Run our callbacks
+    self.invoke_completions();
 }
 
 /// Add a timer to the loop. The timer will initially execute in "next_ms"
@@ -110,6 +179,9 @@ fn add_(
             return;
         },
     };
+
+    // Increase active to the amount in the ring.
+    self.active += 1;
 
     // Setup the submission depending on the operation
     switch (completion.op) {
@@ -217,36 +289,12 @@ fn add_(
     sqe.user_data = @ptrToInt(completion);
 }
 
-/// Submit all queued operations, run the loop once.
-pub fn tick(self: *IO_Uring) !void {
-    // Submit and then run completions
-    try self.submit();
-    try self.complete();
-}
-
-/// Submit all queued operations.
-pub fn submit(self: *IO_Uring) !void {
-    _ = try self.ring.submit();
-
-    // If we have any submissions that failed to submit, we try to
-    // send those now. We have to make a copy so that any failures are
-    // resubmitted without an infinite loop.
-    var queued = self.submissions;
-    self.submissions = .{};
-    while (queued.pop()) |c| self.add_(c, true);
-}
-
-/// Handle all of the completions.
-fn complete(self: *IO_Uring) !void {
-    // Sync
-    try self.sync_completions();
-
-    // Run our callbacks
-    self.invoke_completions();
-}
-
 /// Sync the completions that are done. This appends to self.completions.
-fn sync_completions(self: *IO_Uring) !void {
+fn sync_completions(self: *IO_Uring, wait: u32) !void {
+    // The number of completions we want to wait for, since we can go
+    // through the loop multiple times.
+    var wait_rem = wait;
+
     // We load cqes in two phases. We first load all the CQEs into our
     // queue, and then we process all CQEs. We do this in two phases so
     // that any callbacks that call into the loop don't cause unbounded
@@ -255,9 +303,12 @@ fn sync_completions(self: *IO_Uring) !void {
     while (true) {
         // Guard against waiting indefinitely (if there are too few requests inflight),
         // especially if this is not the first time round the loop:
-        const count = self.ring.copy_cqes(&cqes, 0) catch |err| switch (err) {
+        const count = self.ring.copy_cqes(&cqes, wait_rem) catch |err| switch (err) {
             else => return err,
         };
+
+        // Subtract down to zero
+        wait_rem -|= count;
 
         for (cqes[0..count]) |cqe| {
             const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
@@ -272,7 +323,10 @@ fn sync_completions(self: *IO_Uring) !void {
 
 /// Call all of our completion callbacks for any queued completions.
 fn invoke_completions(self: *IO_Uring) void {
-    while (self.completions.pop()) |c| c.invoke();
+    while (self.completions.pop()) |c| {
+        self.active -= 1;
+        c.invoke();
+    }
 }
 
 /// A completion represents a single queued request in the ring.
@@ -536,6 +590,8 @@ test "Completion size" {
 }
 
 test "io_uring: timerfd" {
+    const testing = std.testing;
+
     var loop = try IO_Uring.init(16);
     defer loop.deinit();
 
@@ -568,7 +624,8 @@ test "io_uring: timerfd" {
     loop.add(&c);
 
     // Tick
-    while (!called) try loop.tick();
+    try loop.run(.until_done);
+    try testing.expect(called);
 }
 
 test "io_uring: timer" {
@@ -600,7 +657,8 @@ test "io_uring: timer" {
     }).callback);
 
     // Tick
-    while (!called) try loop.tick();
+    while (!called) try loop.run(.no_wait);
+    try testing.expect(called);
     try testing.expect(!called2);
 }
 
@@ -669,7 +727,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     loop.add(&c_connect);
 
     // Wait for the connection to be established
-    while (server_conn == 0 or !connected) try loop.tick();
+    try loop.run(.until_done);
     try testing.expect(server_conn > 0);
     try testing.expect(connected);
 
@@ -715,7 +773,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     loop.add(&c_recv);
 
     // Wait for the send/receive
-    while (recv_len == 0) try loop.tick();
+    try loop.run(.until_done);
     try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
 
     // Shutdown
@@ -738,7 +796,8 @@ test "io_uring: socket accept/connect/send/recv/close" {
         }).callback,
     };
     loop.add(&c_client_shutdown);
-    while (!shutdown) try loop.tick();
+    try loop.run(.until_done);
+    try testing.expect(shutdown);
 
     // Read should be EOF
     var eof: ?bool = null;
@@ -764,7 +823,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     };
     loop.add(&c_recv);
 
-    while (eof == null) try loop.tick();
+    try loop.run(.until_done);
     try testing.expect(eof.? == true);
 
     // Close
@@ -807,5 +866,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     loop.add(&c_server_close);
 
     // Wait for the sockets to close
-    while (ln != 0 or client_conn != 0) try loop.tick();
+    try loop.run(.until_done);
+    try testing.expect(ln == 0);
+    try testing.expect(client_conn == 0);
 }

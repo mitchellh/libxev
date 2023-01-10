@@ -7,8 +7,9 @@ const xev = @import("xev");
 pub const log_level: std.log.Level = .info;
 
 // Tune-ables
-pub const NUM_PINGS = 1000 * 1000;
+pub const NUM_PINGS = 1000 * 100;
 pub const THR_COUNT = 1;
+pub const wait = true;
 
 // Done counter (TODO: remove)
 pub var done: std.atomic.Atomic(usize) = .{ .value = 0 };
@@ -28,7 +29,11 @@ pub fn main() !void {
     }
 
     const start_time = try Instant.now();
-    while (done.loadUnchecked() < contexts.len) try loop.tick();
+    if (wait) {
+        try loop.run(.until_done);
+    } else {
+        while (done.loadUnchecked() < contexts.len) try loop.tick(0);
+    }
     for (threads) |thr| thr.join();
     const end_time = try Instant.now();
 
@@ -84,10 +89,14 @@ const Thread = struct {
         self.worker_async.wait(&self.loop, &c, Thread, self, asyncCallback);
 
         // Run
-        while (self.worker_sent < NUM_PINGS or
-            self.main_sent < NUM_PINGS)
-        {
-            try self.loop.tick();
+        if (wait) {
+            try self.loop.run(.until_done);
+        } else {
+            while (self.worker_sent < NUM_PINGS or
+                self.main_sent < NUM_PINGS)
+            {
+                try self.loop.tick(0);
+            }
         }
     }
 

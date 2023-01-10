@@ -25,7 +25,7 @@ pub fn main() !void {
     }
 
     const before_run = try Instant.now();
-    while (timer_callback_count < NUM_TIMERS) try loop.tick();
+    try loop.run(.until_done);
     const after_run = try Instant.now();
     const after_all = try Instant.now();
 

@@ -34,7 +34,7 @@ pub fn main() !void {
     try client.start();
 
     const start_time = try Instant.now();
-    while (!client.stop) try client_loop.tick();
+    try client_loop.run(.until_done);
     server_thr.join();
     const end_time = try Instant.now();
 
@@ -190,7 +190,7 @@ const Server = struct {
     }
 
     pub fn threadMain(self: *Server) !void {
-        while (!self.stop) try self.loop.tick();
+        try self.loop.run(.until_done);
     }
 
     fn destroyBuf(self: *Server, buf: []const u8) void {

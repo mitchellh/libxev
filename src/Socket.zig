@@ -245,7 +245,7 @@ test "socket: accept/connect/send/recv/close" {
     }).callback);
 
     // Wait for the connection to be established
-    while (server_conn == null or !connected) try loop.tick();
+    try loop.run(.until_done);
     try testing.expect(server_conn != null);
     try testing.expect(connected);
 
@@ -271,7 +271,7 @@ test "socket: accept/connect/send/recv/close" {
     }).callback);
 
     // Wait for the send/receive
-    while (recv_len == 0) try loop.tick();
+    try loop.run(.until_done);
     try testing.expectEqualSlices(u8, &send_buf, recv_buf[0..recv_len]);
 
     // Close
@@ -292,5 +292,7 @@ test "socket: accept/connect/send/recv/close" {
         }
     }).callback);
 
-    while (server_conn != null or connected) try loop.tick();
+    try loop.run(.until_done);
+    try testing.expect(server_conn == null);
+    try testing.expect(!connected);
 }
