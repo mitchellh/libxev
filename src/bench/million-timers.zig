@@ -40,8 +40,13 @@ pub const log_level: std.log.Level = .info;
 
 var timer_callback_count: usize = 0;
 
-fn timerCallback(_: ?*void, c: *xev.Loop.Completion, result: xev.Timer.RunError!void) void {
-    _ = c;
+fn timerCallback(
+    _: ?*void,
+    _: *xev.Loop,
+    _: *xev.Loop.Completion,
+    result: xev.Timer.RunError!void,
+) xev.CallbackAction {
     _ = result catch unreachable;
     timer_callback_count += 1;
+    return .disarm;
 }

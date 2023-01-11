@@ -14,7 +14,7 @@ pub fn main() !void {
 }
 
 pub fn run(comptime thread_count: comptime_int) !void {
-    loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
+    var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
     defer loop.deinit();
 
     // Create our async
@@ -45,24 +45,24 @@ pub fn run(comptime thread_count: comptime_int) !void {
 }
 
 var callbacks: usize = 0;
-var loop: xev.Loop = undefined;
 var notifier: xev.Async = undefined;
 var state: enum { running, stop, stopped } = .running;
 
-fn asyncCallback(ud: ?*void, c: *xev.Completion, r: xev.Async.WaitError!void) void {
-    _ = ud;
+fn asyncCallback(
+    _: ?*void,
+    _: *xev.Loop,
+    _: *xev.Completion,
+    r: xev.Async.WaitError!void,
+) xev.CallbackAction {
     _ = r catch unreachable;
 
     callbacks += 1;
-    if (callbacks < NUM_PINGS) {
-        // Re-register the listener
-        notifier.wait(&loop, c, void, null, asyncCallback);
-        return;
-    }
+    if (callbacks < NUM_PINGS) return .rearm;
 
     // We're done
     state = .stop;
     while (state != .stopped) std.time.sleep(0);
+    return .disarm;
 }
 
 fn threadMain() !void {

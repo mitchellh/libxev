@@ -7,6 +7,7 @@ const xev = @import("xev");
 pub const log_level: std.log.Level = .info;
 
 pub fn main() !void {
+    if (true) return;
     var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
     defer loop.deinit();
 

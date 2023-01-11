@@ -7,7 +7,7 @@ const xev = @import("xev");
 pub const log_level: std.log.Level = .info;
 
 // Tune-ables
-pub const NUM_PINGS = 1000 * 1000;
+pub const NUM_PINGS = 1000 * 100;
 
 pub fn main() !void {
     try run(1);
@@ -22,7 +22,7 @@ pub fn run(comptime thread_count: comptime_int) !void {
     var threads: [contexts.len]std.Thread = undefined;
     var comps: [contexts.len]xev.Completion = undefined;
     for (contexts) |*ctx, i| {
-        ctx.* = try Thread.init(&loop);
+        ctx.* = try Thread.init();
         ctx.main_async.wait(&loop, &comps[i], Thread, ctx, mainAsyncCallback);
         threads[i] = try std.Thread.spawn(.{}, Thread.threadMain, .{ctx});
     }
@@ -40,22 +40,24 @@ pub fn run(comptime thread_count: comptime_int) !void {
     });
 }
 
-fn mainAsyncCallback(ud: ?*Thread, c: *xev.Completion, r: xev.Async.WaitError!void) void {
+fn mainAsyncCallback(
+    ud: ?*Thread,
+    _: *xev.Loop,
+    _: *xev.Completion,
+    r: xev.Async.WaitError!void,
+) xev.CallbackAction {
     _ = r catch unreachable;
 
     const self = ud.?;
     self.worker_async.notify() catch unreachable;
     self.main_sent += 1;
     self.main_seen += 1;
-    if (self.main_sent >= NUM_PINGS) return;
 
-    // Re-register the listener
-    self.main_async.wait(self.main_loop, c, Thread, self, mainAsyncCallback);
+    return if (self.main_sent >= NUM_PINGS) .disarm else .rearm;
 }
 
 /// The thread state
 const Thread = struct {
-    main_loop: *xev.Loop,
     loop: xev.Loop,
     worker_async: xev.Async,
     main_async: xev.Async,
@@ -64,9 +66,8 @@ const Thread = struct {
     main_sent: usize = 0,
     main_seen: usize = 0,
 
-    pub fn init(main_loop: *xev.Loop) !Thread {
+    pub fn init() !Thread {
         return .{
-            .main_loop = main_loop,
             .loop = try xev.Loop.init(std.math.pow(u13, 2, 12)),
             .worker_async = try xev.Async.init(),
             .main_async = try xev.Async.init(),
@@ -86,15 +87,17 @@ const Thread = struct {
         if (self.worker_sent < NUM_PINGS) @panic("FAIL");
     }
 
-    fn asyncCallback(ud: ?*Thread, c: *xev.Completion, r: xev.Async.WaitError!void) void {
+    fn asyncCallback(
+        ud: ?*Thread,
+        _: *xev.Loop,
+        _: *xev.Completion,
+        r: xev.Async.WaitError!void,
+    ) xev.CallbackAction {
         _ = r catch unreachable;
         const self = ud.?;
         self.main_async.notify() catch unreachable;
         self.worker_sent += 1;
         self.worker_seen += 1;
-        if (self.worker_sent >= NUM_PINGS) return;
-
-        // Re-register the listener
-        self.worker_async.wait(&self.loop, c, Thread, self, asyncCallback);
+        return if (self.worker_sent >= NUM_PINGS) .disarm else .rearm;
     }
 };
