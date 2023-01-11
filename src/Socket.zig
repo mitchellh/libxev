@@ -249,6 +249,19 @@ test "socket: accept/connect/send/recv/close" {
     try testing.expect(server_conn != null);
     try testing.expect(connected);
 
+    // Close the server listener
+    var server_closed = false;
+    server.close(&loop, &c_accept, &server_closed, (struct {
+        fn callback(ud: ?*anyopaque, c: *xev.Completion, r: xev.Result) void {
+            _ = c;
+            _ = r.close catch unreachable;
+            const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+            ptr.* = true;
+        }
+    }).callback);
+    try loop.run(.until_done);
+    try testing.expect(server_closed);
+
     // Send
     var send_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
     client.write(&loop, &c_connect, .{ .slice = &send_buf }, null, (struct {

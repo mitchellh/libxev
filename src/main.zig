@@ -1,15 +1,20 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// The recommended system option given the build options.
+/// The low-level IO interfaces using the recommended compile-time
+/// interface for the target system.
 pub const Loop = IO_Uring;
 pub const Completion = Loop.Completion;
 pub const Result = Loop.Result;
-pub const Async = @import("Async.zig");
-pub const Socket = @import("Socket.zig");
-pub const Timer = @import("Timer.zig");
 pub const ReadBuffer = Loop.ReadBuffer;
 pub const WriteBuffer = Loop.WriteBuffer;
+
+/// The high-level helper interfaces that make it easier to perform
+/// common tasks. These may not work with all possible Loop implementations.
+pub const Async = @import("Async.zig");
+pub const Socket = @import("Socket.zig");
+pub const TCP = @import("TCP.zig");
+pub const Timer = @import("Timer.zig");
 
 /// System-specific interfaces. Note that they are always exported for
 /// all systems but if you reference them and force them to be analyzed
@@ -40,6 +45,7 @@ test {
     _ = Loop;
     _ = Async;
     _ = Socket;
+    _ = TCP;
     _ = Timer;
 
     // OS-specific tests
