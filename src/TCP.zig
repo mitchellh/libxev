@@ -97,6 +97,7 @@ pub fn connect(
         ud: ?*Userdata,
         l: *xev.Loop,
         c: *xev.Completion,
+        s: TCP,
         r: ConnectError!void,
     ) xev.CallbackAction,
 ) void {
@@ -120,6 +121,7 @@ pub fn connect(
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                     l_inner,
                     c_inner,
+                    initFd(c_inner.op.connect.socket),
                     if (r.connect) |_| {} else |err| err,
                 });
             }
@@ -140,6 +142,7 @@ pub fn close(
         ud: ?*Userdata,
         l: *xev.Loop,
         c: *xev.Completion,
+        s: TCP,
         r: CloseError!void,
     ) xev.CallbackAction,
 ) void {
@@ -162,6 +165,7 @@ pub fn close(
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                     l_inner,
                     c_inner,
+                    initFd(c_inner.op.close.fd),
                     if (r.close) |_| {} else |err| err,
                 });
             }
@@ -184,6 +188,7 @@ pub fn shutdown(
         ud: ?*Userdata,
         l: *xev.Loop,
         c: *xev.Completion,
+        s: TCP,
         r: ShutdownError!void,
     ) xev.CallbackAction,
 ) void {
@@ -206,6 +211,7 @@ pub fn shutdown(
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                     l_inner,
                     c_inner,
+                    initFd(c_inner.op.shutdown.socket),
                     if (r.shutdown) |_| {} else |err| err,
                 });
             }
@@ -230,6 +236,8 @@ pub fn read(
         ud: ?*Userdata,
         l: *xev.Loop,
         c: *xev.Completion,
+        s: TCP,
+        b: xev.ReadBuffer,
         r: ReadError!usize,
     ) xev.CallbackAction,
 ) void {
@@ -254,6 +262,8 @@ pub fn read(
                             @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                             l_inner,
                             c_inner,
+                            initFd(c_inner.op.recv.fd),
+                            c_inner.op.recv.buffer,
                             if (r.recv) |v| v else |err| err,
                         });
                     }
@@ -279,6 +289,8 @@ pub fn write(
         ud: ?*Userdata,
         l: *xev.Loop,
         c: *xev.Completion,
+        s: TCP,
+        b: xev.WriteBuffer,
         r: WriteError!usize,
     ) xev.CallbackAction,
 ) void {
@@ -303,6 +315,8 @@ pub fn write(
                             @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                             l_inner,
                             c_inner,
+                            initFd(c_inner.op.send.fd),
+                            c_inner.op.send.buffer,
                             if (r.send) |v| v else |err| err,
                         });
                     }
@@ -358,6 +372,7 @@ test "TCP: accept/connect/send/recv/close" {
             ud: ?*bool,
             _: *xev.Loop,
             _: *xev.Completion,
+            _: xev.TCP,
             r: ConnectError!void,
         ) xev.CallbackAction {
             _ = r catch unreachable;
@@ -378,6 +393,7 @@ test "TCP: accept/connect/send/recv/close" {
             ud: ?*bool,
             _: *xev.Loop,
             _: *xev.Completion,
+            _: xev.TCP,
             r: CloseError!void,
         ) xev.CallbackAction {
             _ = r catch unreachable;
@@ -395,6 +411,8 @@ test "TCP: accept/connect/send/recv/close" {
             _: ?*void,
             _: *xev.Loop,
             c: *xev.Completion,
+            _: TCP,
+            _: xev.WriteBuffer,
             r: WriteError!usize,
         ) xev.CallbackAction {
             _ = c;
@@ -411,6 +429,8 @@ test "TCP: accept/connect/send/recv/close" {
             ud: ?*usize,
             _: *xev.Loop,
             _: *xev.Completion,
+            _: TCP,
+            _: xev.ReadBuffer,
             r: ReadError!usize,
         ) xev.CallbackAction {
             ud.?.* = r catch unreachable;
@@ -428,6 +448,7 @@ test "TCP: accept/connect/send/recv/close" {
             ud: ?*?TCP,
             _: *xev.Loop,
             _: *xev.Completion,
+            _: xev.TCP,
             r: CloseError!void,
         ) xev.CallbackAction {
             _ = r catch unreachable;
@@ -440,6 +461,7 @@ test "TCP: accept/connect/send/recv/close" {
             ud: ?*bool,
             _: *xev.Loop,
             _: *xev.Completion,
+            _: xev.TCP,
             r: CloseError!void,
         ) xev.CallbackAction {
             _ = r catch unreachable;
