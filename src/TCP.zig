@@ -170,9 +170,156 @@ pub fn close(
 
     loop.add(c);
 }
+
+/// Shutdown the socket. This always only shuts down the writer side. You
+/// can use the lower level interface directly to control this if the
+/// platform supports it.
+pub fn shutdown(
+    self: TCP,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        l: *xev.Loop,
+        c: *xev.Completion,
+        r: ShutdownError!void,
+    ) xev.CallbackAction,
+) void {
+    c.* = .{
+        .op = .{
+            .shutdown = .{
+                .socket = self.socket,
+                .flags = std.os.linux.SHUT.WR,
+            },
+        },
+        .userdata = userdata,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
+                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
+                    c_inner,
+                    if (r.shutdown) |_| {} else |err| err,
+                });
+            }
+        }).callback,
+    };
+
+    loop.add(c);
+}
+
+/// Read from the socket. This performs a single read. The callback must
+/// requeue the read if additional reads want to be performed. Additional
+/// reads simultaneously can be queued by calling this multiple times. Note
+/// that depending on the backend, the reads can happen out of order.
+pub fn read(
+    self: TCP,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    buf: xev.ReadBuffer,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        l: *xev.Loop,
+        c: *xev.Completion,
+        r: ReadError!usize,
+    ) xev.CallbackAction,
+) void {
+    switch (buf) {
+        inline .slice, .array => {
+            c.* = .{
+                .op = .{
+                    .recv = .{
+                        .fd = self.socket,
+                        .buffer = buf,
+                    },
+                },
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            l_inner,
+                            c_inner,
+                            if (r.recv) |v| v else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+
+            loop.add(c);
+        },
+    }
+}
+
+/// Write to the socket. This performs a single write. Additional writes
+/// can be queued by calling this multiple times. Note that depending on the
+/// backend, writes can happen out of order.
+pub fn write(
+    self: TCP,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    buf: xev.WriteBuffer,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        l: *xev.Loop,
+        c: *xev.Completion,
+        r: WriteError!usize,
+    ) xev.CallbackAction,
+) void {
+    switch (buf) {
+        inline .slice, .array => {
+            c.* = .{
+                .op = .{
+                    .send = .{
+                        .fd = self.socket,
+                        .buffer = buf,
+                    },
+                },
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            l_inner,
+                            c_inner,
+                            if (r.send) |v| v else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+
+            loop.add(c);
+        },
+    }
+}
+
 pub const AcceptError = xev.Loop.AcceptError;
 pub const CloseError = xev.Loop.CloseError;
 pub const ConnectError = xev.Loop.ConnectError;
+pub const ShutdownError = xev.Loop.ShutdownError;
+pub const ReadError = xev.Loop.ReadError;
+pub const WriteError = xev.Loop.WriteError;
 
 test "TCP: accept/connect/send/recv/close" {
     const testing = std.testing;
@@ -240,6 +387,40 @@ test "TCP: accept/connect/send/recv/close" {
     }).callback);
     try loop.run(.until_done);
     try testing.expect(server_closed);
+
+    // Send
+    var send_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
+    client.write(&loop, &c_connect, .{ .slice = &send_buf }, void, null, (struct {
+        fn callback(
+            _: ?*void,
+            _: *xev.Loop,
+            c: *xev.Completion,
+            r: WriteError!usize,
+        ) xev.CallbackAction {
+            _ = c;
+            _ = r catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Receive
+    var recv_buf: [128]u8 = undefined;
+    var recv_len: usize = 0;
+    server_conn.?.read(&loop, &c_accept, .{ .slice = &recv_buf }, usize, &recv_len, (struct {
+        fn callback(
+            ud: ?*usize,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: ReadError!usize,
+        ) xev.CallbackAction {
+            ud.?.* = r catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Wait for the send/receive
+    try loop.run(.until_done);
+    try testing.expectEqualSlices(u8, &send_buf, recv_buf[0..recv_len]);
 
     // Close
     server_conn.?.close(&loop, &c_accept, ?TCP, &server_conn, (struct {
