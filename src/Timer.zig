@@ -44,16 +44,23 @@ pub fn run(
     userdata: ?*Userdata,
     comptime cb: *const fn (
         ud: ?*Userdata,
+        l: *xev.Loop,
         c: *xev.Completion,
         r: RunError!void,
-    ) void,
+    ) xev.CallbackAction,
 ) void {
     _ = self;
 
     loop.timer(c, next_ms, userdata, (struct {
-        fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-            @call(.always_inline, cb, .{
+        fn callback(
+            ud: ?*anyopaque,
+            l_inner: *xev.Loop,
+            c_inner: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            return @call(.always_inline, cb, .{
                 @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                l_inner,
                 c_inner,
                 if (r.timer) |trigger| @as(RunError!void, switch (trigger) {
                     .request, .expiration => {},
@@ -79,9 +86,10 @@ pub fn cancel(
     userdata: ?*Userdata,
     comptime cb: *const fn (
         ud: ?*Userdata,
+        l: *xev.Loop,
         c: *xev.Completion,
         r: CancelError!void,
-    ) void,
+    ) xev.CallbackAction,
 ) void {
     _ = self;
 
@@ -94,9 +102,15 @@ pub fn cancel(
 
         .userdata = userdata,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-                @call(.always_inline, cb, .{
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
                     c_inner,
                     if (r.timer_remove) |_| {} else |err| err,
                 });
@@ -142,10 +156,15 @@ test "timer" {
     var called = false;
     var c1: xev.Completion = undefined;
     timer.run(&loop, &c1, 1, bool, &called, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: RunError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: RunError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = true;
+            return .disarm;
         }
     }).callback);
 
@@ -167,9 +186,14 @@ test "timer cancel" {
     var canceled = false;
     var c1: xev.Completion = undefined;
     timer.run(&loop, &c1, 100_000, bool, &canceled, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: RunError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: RunError!void,
+        ) xev.CallbackAction {
             ud.?.* = if (r) false else |err| err == error.Canceled;
+            return .disarm;
         }
     }).callback);
 
@@ -177,10 +201,15 @@ test "timer cancel" {
     var cancel_confirm = false;
     var c2: xev.Completion = undefined;
     timer.cancel(&loop, &c2, &c1, bool, &cancel_confirm, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: CancelError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: CancelError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = true;
+            return .disarm;
         }
     }).callback);
 

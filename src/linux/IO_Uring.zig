@@ -123,7 +123,7 @@ pub fn timer(
     c: *Completion,
     next_ms: u64,
     userdata: ?*anyopaque,
-    comptime cb: *const fn (userdata: ?*anyopaque, completion: *Completion, result: Result) void,
+    comptime cb: xev.Callback,
 ) void {
     // Get the timestamp of the absolute time that we'll execute this timer.
     const next_ts = next_ts: {
@@ -145,12 +145,6 @@ pub fn timer(
         .userdata = userdata,
         .callback = cb,
     };
-
-    // If we want this timer executed now we execute it literally right now.
-    if (next_ms == 0) {
-        c.invoke();
-        return;
-    }
 
     self.add(c);
 }
@@ -343,7 +337,10 @@ fn sync_completions(self: *IO_Uring, wait: u32) !void {
 fn invoke_completions(self: *IO_Uring) void {
     while (self.completions.pop()) |c| {
         self.active -= 1;
-        c.invoke();
+        switch (c.invoke(self)) {
+            .disarm => {},
+            .rearm => self.add(c),
+        }
     }
 }
 
@@ -362,7 +359,7 @@ pub const Completion = struct {
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: *const fn (userdata: ?*anyopaque, completion: *Completion, result: Result) void,
+    callback: xev.Callback,
 
     /// Internally set
     next: ?*Completion = null,
@@ -370,7 +367,7 @@ pub const Completion = struct {
 
     /// Invokes the callback for this completion after properly constructing
     /// the Result based on the res code.
-    fn invoke(self: *Completion) void {
+    fn invoke(self: *Completion, loop: *IO_Uring) xev.CallbackAction {
         const res: Result = switch (self.op) {
             .accept => .{
                 .accept = if (self.res >= 0)
@@ -439,7 +436,7 @@ pub const Completion = struct {
             },
         };
 
-        self.callback(self.userdata, self, res);
+        return self.callback(self.userdata, loop, self, res);
     }
 
     fn readResult(self: *Completion, comptime op: OperationType) ReadError!usize {
@@ -673,11 +670,18 @@ test "io_uring: timerfd" {
 
         .userdata = &called,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *IO_Uring,
+                c: *IO_Uring.Completion,
+                r: IO_Uring.Result,
+            ) xev.CallbackAction {
                 _ = c;
                 _ = r;
+                _ = l;
                 const b = @ptrCast(*bool, ud.?);
                 b.* = true;
+                return .disarm;
             }
         }).callback,
     };
@@ -698,10 +702,12 @@ test "io_uring: timer" {
     var called = false;
     var c1: IO_Uring.Completion = undefined;
     loop.timer(&c1, 1, &called, (struct {
-        fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
+        fn callback(ud: ?*anyopaque, l: *IO_Uring, _: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            _ = l;
             _ = r;
             const b = @ptrCast(*bool, ud.?);
             b.* = true;
+            return .disarm;
         }
     }).callback);
 
@@ -709,10 +715,12 @@ test "io_uring: timer" {
     var called2 = false;
     var c2: IO_Uring.Completion = undefined;
     loop.timer(&c2, 100_000, &called2, (struct {
-        fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
+        fn callback(ud: ?*anyopaque, l: *IO_Uring, _: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            _ = l;
             _ = r;
             const b = @ptrCast(*bool, ud.?);
             b.* = true;
+            return .disarm;
         }
     }).callback);
 
@@ -732,10 +740,12 @@ test "io_uring: timer remove" {
     var called = false;
     var c1: IO_Uring.Completion = undefined;
     loop.timer(&c1, 100_000, &called, (struct {
-        fn callback(ud: ?*anyopaque, _: *IO_Uring.Completion, r: IO_Uring.Result) void {
+        fn callback(ud: ?*anyopaque, l: *IO_Uring, _: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            _ = l;
             const b = @ptrCast(*bool, ud.?);
             const trigger = r.timer catch unreachable;
             b.* = trigger != .cancel;
+            return .disarm;
         }
     }).callback);
 
@@ -749,10 +759,12 @@ test "io_uring: timer remove" {
 
         .userdata = null,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 _ = ud;
                 _ = r.timer_remove catch unreachable;
+                return .disarm;
             }
         }).callback,
     };
@@ -796,10 +808,12 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &server_conn,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
                 conn.* = r.accept catch unreachable;
+                return .disarm;
             }
         }).callback,
     };
@@ -817,11 +831,13 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &connected,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 _ = r.connect catch unreachable;
                 const b = @ptrCast(*bool, ud.?);
                 b.* = true;
+                return .disarm;
             }
         }).callback,
     };
@@ -842,10 +858,12 @@ test "io_uring: socket accept/connect/send/recv/close" {
         },
 
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 _ = r.send catch unreachable;
                 _ = ud;
+                return .disarm;
             }
         }).callback,
     };
@@ -864,10 +882,12 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &recv_len,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
                 ptr.* = r.recv catch unreachable;
+                return .disarm;
             }
         }).callback,
     };
@@ -888,11 +908,13 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &shutdown,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 _ = r.shutdown catch unreachable;
                 const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
                 ptr.* = true;
+                return .disarm;
             }
         }).callback,
     };
@@ -912,13 +934,15 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &eof,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
                 ptr.* = if (r.recv) |_| false else |err| switch (err) {
                     error.EOF => true,
                     else => false,
                 };
+                return .disarm;
             }
         }).callback,
     };
@@ -937,11 +961,13 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &client_conn,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
                 const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
                 ptr.* = 0;
+                return .disarm;
             }
         }).callback,
     };
@@ -956,11 +982,13 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &ln,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c: *IO_Uring.Completion, r: IO_Uring.Result) void {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
                 const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
                 ptr.* = 0;
+                return .disarm;
             }
         }).callback,
     };

@@ -45,9 +45,10 @@ pub fn wait(
     userdata: ?*Userdata,
     comptime cb: *const fn (
         ud: ?*Userdata,
+        l: *xev.Loop,
         c: *xev.Completion,
         r: WaitError!void,
-    ) void,
+    ) xev.CallbackAction,
 ) void {
     c.* = .{
         .op = .{
@@ -59,9 +60,15 @@ pub fn wait(
 
         .userdata = userdata,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-                @call(.always_inline, cb, .{
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
                     c_inner,
                     if (r.read) |_| {} else |err| err,
                 });
@@ -105,10 +112,15 @@ test "async" {
     var wake: bool = false;
     var c_wait: xev.Completion = undefined;
     notifier.wait(&loop, &c_wait, bool, &wake, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: WaitError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: WaitError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = true;
+            return .disarm;
         }
     }).callback);
 
@@ -136,10 +148,15 @@ test "async: notify first" {
     var wake: bool = false;
     var c_wait: xev.Completion = undefined;
     notifier.wait(&loop, &c_wait, bool, &wake, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: WaitError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: WaitError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = true;
+            return .disarm;
         }
     }).callback);
 

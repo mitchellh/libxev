@@ -52,9 +52,10 @@ pub fn accept(
     userdata: ?*Userdata,
     comptime cb: *const fn (
         ud: ?*Userdata,
+        l: *xev.Loop,
         c: *xev.Completion,
         r: AcceptError!TCP,
-    ) void,
+    ) xev.CallbackAction,
 ) void {
     c.* = .{
         .op = .{
@@ -65,9 +66,15 @@ pub fn accept(
 
         .userdata = userdata,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-                @call(.always_inline, cb, .{
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
                     c_inner,
                     if (r.accept) |fd| initFd(fd) else |err| err,
                 });
@@ -88,9 +95,10 @@ pub fn connect(
     userdata: ?*Userdata,
     comptime cb: *const fn (
         ud: ?*Userdata,
+        l: *xev.Loop,
         c: *xev.Completion,
         r: ConnectError!void,
-    ) void,
+    ) xev.CallbackAction,
 ) void {
     c.* = .{
         .op = .{
@@ -102,9 +110,15 @@ pub fn connect(
 
         .userdata = userdata,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-                @call(.always_inline, cb, .{
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
                     c_inner,
                     if (r.connect) |_| {} else |err| err,
                 });
@@ -124,9 +138,10 @@ pub fn close(
     userdata: ?*Userdata,
     comptime cb: *const fn (
         ud: ?*Userdata,
+        l: *xev.Loop,
         c: *xev.Completion,
         r: CloseError!void,
-    ) void,
+    ) xev.CallbackAction,
 ) void {
     c.* = .{
         .op = .{
@@ -137,9 +152,15 @@ pub fn close(
 
         .userdata = userdata,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, c_inner: *xev.Completion, r: xev.Result) void {
-                @call(.always_inline, cb, .{
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
                     @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
                     c_inner,
                     if (r.close) |_| {} else |err| err,
                 });
@@ -172,19 +193,29 @@ test "TCP: accept/connect/send/recv/close" {
     try server.listen(1);
     var server_conn: ?TCP = null;
     server.accept(&loop, &c_accept, ?TCP, &server_conn, (struct {
-        fn callback(ud: ?*?TCP, c: *xev.Completion, r: AcceptError!TCP) void {
-            _ = c;
+        fn callback(
+            ud: ?*?TCP,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: AcceptError!TCP,
+        ) xev.CallbackAction {
             ud.?.* = r catch unreachable;
+            return .disarm;
         }
     }).callback);
 
     // Connect
     var connected: bool = false;
     client.connect(&loop, &c_connect, address, bool, &connected, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: ConnectError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: ConnectError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = true;
+            return .disarm;
         }
     }).callback);
 
@@ -196,10 +227,15 @@ test "TCP: accept/connect/send/recv/close" {
     // Close the server
     var server_closed = false;
     server.close(&loop, &c_accept, bool, &server_closed, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: CloseError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: CloseError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = true;
+            return .disarm;
         }
     }).callback);
     try loop.run(.until_done);
@@ -207,17 +243,27 @@ test "TCP: accept/connect/send/recv/close" {
 
     // Close
     server_conn.?.close(&loop, &c_accept, ?TCP, &server_conn, (struct {
-        fn callback(ud: ?*?TCP, c: *xev.Completion, r: CloseError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*?TCP,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: CloseError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = null;
+            return .disarm;
         }
     }).callback);
     client.close(&loop, &c_connect, bool, &connected, (struct {
-        fn callback(ud: ?*bool, c: *xev.Completion, r: CloseError!void) void {
-            _ = c;
+        fn callback(
+            ud: ?*bool,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            r: CloseError!void,
+        ) xev.CallbackAction {
             _ = r catch unreachable;
             ud.?.* = false;
+            return .disarm;
         }
     }).callback);
 

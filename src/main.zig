@@ -9,10 +9,13 @@ pub const Result = Loop.Result;
 pub const ReadBuffer = Loop.ReadBuffer;
 pub const WriteBuffer = Loop.WriteBuffer;
 
+/// Common loop structures. The actual loop implementation is in backend-specific
+/// files such as linux/io_uring.zig.
+pub usingnamespace @import("loop.zig");
+
 /// The high-level helper interfaces that make it easier to perform
 /// common tasks. These may not work with all possible Loop implementations.
 pub const Async = @import("Async.zig");
-pub const Socket = @import("Socket.zig");
 pub const TCP = @import("TCP.zig");
 pub const Timer = @import("Timer.zig");
 
@@ -21,30 +24,12 @@ pub const Timer = @import("Timer.zig");
 /// the proper system APIs must exist.
 pub const IO_Uring = @import("linux/IO_Uring.zig");
 
-/// The loop run mode -- all backends are required to support this in some way.
-/// Backends may provide backend-specific APIs that behave slightly differently
-/// or in a more configurable way.
-pub const RunMode = enum {
-    /// Run the event loop once. If there are no blocking operations ready,
-    /// return immediately.
-    no_wait,
-
-    /// Run the event loop once, waiting for at least one blocking operation
-    /// to complete.
-    once,
-
-    /// Run the event loop until it is "done". "Doneness" is defined as
-    /// there being no more completions that are active.
-    until_done,
-};
-
 test {
     // Tested on all platforms
     _ = @import("heap.zig");
     _ = @import("queue.zig");
     _ = Loop;
     _ = Async;
-    _ = Socket;
     _ = TCP;
     _ = Timer;
 
