@@ -248,6 +248,51 @@ pub fn write(
     loop.add(c);
 }
 
+/// Close the socket.
+pub fn close(
+    self: UDP,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        l: *xev.Loop,
+        c: *xev.Completion,
+        s: UDP,
+        r: CloseError!void,
+    ) xev.CallbackAction,
+) void {
+    c.* = .{
+        .op = .{
+            .close = .{
+                .fd = self.socket,
+            },
+        },
+
+        .userdata = userdata,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
+                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                    l_inner,
+                    c_inner,
+                    initFd(c_inner.op.close.fd),
+                    if (r.close) |_| {} else |err| err,
+                });
+            }
+        }).callback,
+    };
+
+    loop.add(c);
+}
+
+pub const CloseError = xev.Loop.CloseError;
 pub const ReadError = xev.Loop.ReadError;
 pub const WriteError = xev.Loop.WriteError;
 
@@ -305,4 +350,32 @@ test "UDP: read/write" {
     try loop.run(.until_done);
     try testing.expect(recv_len > 0);
     try testing.expectEqualSlices(u8, &send_buf, recv_buf[0..recv_len]);
+
+    // Close
+    server.close(&loop, &c_read, void, null, (struct {
+        fn callback(
+            _: ?*void,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            _: xev.UDP,
+            r: CloseError!void,
+        ) xev.CallbackAction {
+            _ = r catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+    client.close(&loop, &c_write, void, null, (struct {
+        fn callback(
+            _: ?*void,
+            _: *xev.Loop,
+            _: *xev.Completion,
+            _: xev.UDP,
+            r: CloseError!void,
+        ) xev.CallbackAction {
+            _ = r catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    try loop.run(.until_done);
 }

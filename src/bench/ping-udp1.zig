@@ -93,9 +93,9 @@ const Pinger = struct {
     pub fn readCallback(
         self_: ?*Pinger,
         loop: *xev.Loop,
-        _: *xev.Completion,
+        c: *xev.Completion,
         _: *xev.UDP.State,
-        _: xev.UDP,
+        socket: xev.UDP,
         buf: xev.ReadBuffer,
         r: xev.UDP.ReadError!usize,
     ) xev.CallbackAction {
@@ -112,7 +112,7 @@ const Pinger = struct {
 
                 // If we're done then exit
                 if (self.pongs > 500_000) {
-                    //socket.shutdown(l, c, Client, self, shutdownCallback);
+                    socket.close(loop, c, Pinger, self, closeCallback);
                     return .disarm;
                 }
 
@@ -132,6 +132,17 @@ const Pinger = struct {
         _: xev.UDP,
         _: xev.WriteBuffer,
         r: xev.UDP.WriteError!usize,
+    ) xev.CallbackAction {
+        _ = r catch unreachable;
+        return .disarm;
+    }
+
+    pub fn closeCallback(
+        _: ?*Pinger,
+        _: *xev.Loop,
+        _: *xev.Completion,
+        _: xev.UDP,
+        r: xev.UDP.CloseError!void,
     ) xev.CallbackAction {
         _ = r catch unreachable;
         return .disarm;
