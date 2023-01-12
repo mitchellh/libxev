@@ -65,6 +65,8 @@ pub fn bind(self: UDP, addr: std.net.Address) !void {
 /// requeue the read if additional reads want to be performed. Additional
 /// reads simultaneously can be queued by calling this multiple times. Note
 /// that depending on the backend, the reads can happen out of order.
+///
+/// TODO(mitchellh): a way to receive the remote addr
 pub fn read(
     self: UDP,
     loop: *xev.Loop,
