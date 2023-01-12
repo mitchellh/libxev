@@ -18,6 +18,7 @@ pub usingnamespace @import("loop.zig");
 pub const Async = @import("Async.zig");
 pub const TCP = @import("TCP.zig");
 pub const Timer = @import("Timer.zig");
+pub const UDP = @import("UDP.zig");
 
 /// System-specific interfaces. Note that they are always exported for
 /// all systems but if you reference them and force them to be analyzed
@@ -32,6 +33,7 @@ test {
     _ = Async;
     _ = TCP;
     _ = Timer;
+    _ = UDP;
 
     // OS-specific tests
     switch (builtin.os.tag) {

@@ -243,6 +243,15 @@ fn add_(
             ),
         },
 
+        .recvmsg => |*v| {
+            linux.io_uring_prep_recvmsg(
+                sqe,
+                v.fd,
+                v.msghdr,
+                0,
+            );
+        },
+
         .send => |*v| switch (v.buffer) {
             .array => |*buf| linux.io_uring_prep_send(
                 sqe,
@@ -257,6 +266,19 @@ fn add_(
                 buf,
                 0,
             ),
+        },
+
+        .sendmsg => |*v| {
+            if (v.buffer) |_| {
+                @panic("TODO: sendmsg with buffer");
+            }
+
+            linux.io_uring_prep_sendmsg(
+                sqe,
+                v.fd,
+                v.msghdr,
+                0,
+            );
         },
 
         .shutdown => |v| linux.io_uring_prep_shutdown(
@@ -397,8 +419,20 @@ pub const Completion = struct {
                 .recv = self.readResult(.recv),
             },
 
+            .recvmsg => .{
+                .recvmsg = self.readResult(.recvmsg),
+            },
+
             .send => .{
                 .send = if (self.res >= 0)
+                    @intCast(usize, self.res)
+                else switch (@intToEnum(std.os.E, -self.res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
+            .sendmsg => .{
+                .sendmsg = if (self.res >= 0)
                     @intCast(usize, self.res)
                 else switch (@intToEnum(std.os.E, -self.res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -445,10 +479,12 @@ pub const Completion = struct {
         }
 
         if (self.res == 0) {
+            const active = @field(self.op, @tagName(op));
+            if (!@hasField(@TypeOf(active), "buffer")) return ReadError.EOF;
+
             // If we receieve a zero byte read, it is an EOF _unless_
             // the requestesd buffer size was zero (weird).
-            const buf = @field(self.op, @tagName(op)).buffer;
-            return switch (buf) {
+            return switch (active.buffer) {
                 .slice => |b| if (b.len == 0) 0 else ReadError.EOF,
                 .array => ReadError.EOF,
             };
@@ -479,6 +515,12 @@ pub const OperationType = enum {
     /// Send a message on a socket.
     send,
 
+    /// Send a message on a socket using sendmsg (i.e. UDP).
+    sendmsg,
+
+    /// Recieve a message on a socket using recvmsg (i.e. UDP).
+    recvmsg,
+
     /// Shutdown all or part of a full-duplex connection.
     shutdown,
 
@@ -502,6 +544,8 @@ pub const Result = union(OperationType) {
     read: ReadError!usize,
     recv: ReadError!usize,
     send: WriteError!usize,
+    sendmsg: WriteError!usize,
+    recvmsg: ReadError!usize,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
     timer_remove: TimerRemoveError!void,
@@ -539,9 +583,26 @@ pub const Operation = union(OperationType) {
         buffer: ReadBuffer,
     },
 
+    recvmsg: struct {
+        fd: std.os.fd_t,
+        msghdr: *std.os.msghdr,
+    },
+
     send: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
+    },
+
+    sendmsg: struct {
+        fd: std.os.fd_t,
+        msghdr: *std.os.msghdr_const,
+
+        /// Optionally, a write buffer can be specified and the given
+        /// msghdr will be populated with information about this buffer.
+        buffer: ?WriteBuffer = null,
+
+        /// Do not use this, it is only used internally.
+        iov: [1]std.os.iovec_const = undefined,
     },
 
     shutdown: struct {
@@ -998,4 +1059,103 @@ test "io_uring: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     try testing.expect(ln == 0);
     try testing.expect(client_conn == 0);
+}
+
+test "io_uring: sendmsg/recvmsg" {
+    const mem = std.mem;
+    const net = std.net;
+    const os = std.os;
+    const testing = std.testing;
+
+    var loop = try IO_Uring.init(16);
+    defer loop.deinit();
+
+    // Create a TCP server socket
+    const address = try net.Address.parseIp4("127.0.0.1", 3131);
+    const server = try std.os.socket(address.any.family, std.os.SOCK.DGRAM, 0);
+    defer std.os.close(server);
+    try std.os.setsockopt(server, std.os.SOL.SOCKET, std.os.SO.REUSEPORT, &mem.toBytes(@as(c_int, 1)));
+    try std.os.setsockopt(server, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try std.os.bind(server, &address.any, address.getOsSockLen());
+
+    const client = try std.os.socket(address.any.family, std.os.SOCK.DGRAM, 0);
+    defer std.os.close(client);
+
+    // Send
+    const buffer_send = [_]u8{42} ** 128;
+    const iovecs_send = [_]os.iovec_const{
+        os.iovec_const{ .iov_base = &buffer_send, .iov_len = buffer_send.len },
+    };
+    var msg_send = os.msghdr_const{
+        .name = &address.any,
+        .namelen = address.getOsSockLen(),
+        .iov = &iovecs_send,
+        .iovlen = 1,
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+    };
+    var c_sendmsg: IO_Uring.Completion = .{
+        .op = .{
+            .sendmsg = .{
+                .fd = client,
+                .msghdr = &msg_send,
+            },
+        },
+
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = ud;
+                _ = l;
+                _ = c;
+                _ = r.sendmsg catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_sendmsg);
+
+    // Recv
+
+    var buffer_recv = [_]u8{0} ** 128;
+    var iovecs_recv = [_]os.iovec{
+        os.iovec{ .iov_base = &buffer_recv, .iov_len = buffer_recv.len },
+    };
+    var addr = [_]u8{0} ** 4;
+    var address_recv = net.Address.initIp4(addr, 0);
+    var msg_recv: os.msghdr = os.msghdr{
+        .name = &address_recv.any,
+        .namelen = address_recv.getOsSockLen(),
+        .iov = &iovecs_recv,
+        .iovlen = 1,
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+    };
+    var recv_size: usize = 0;
+    var c_recvmsg: IO_Uring.Completion = .{
+        .op = .{
+            .recvmsg = .{
+                .fd = server,
+                .msghdr = &msg_recv,
+            },
+        },
+
+        .userdata = &recv_size,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                ptr.* = r.recvmsg catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_recvmsg);
+
+    // Wait for the sockets to close
+    try loop.run(.until_done);
+    try testing.expect(recv_size == buffer_recv.len);
+    try testing.expectEqualSlices(u8, buffer_send[0..buffer_recv.len], buffer_recv[0..]);
 }
