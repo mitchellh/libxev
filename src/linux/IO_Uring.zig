@@ -256,7 +256,7 @@ fn add_(
             .array => |*buf| linux.io_uring_prep_send(
                 sqe,
                 v.fd,
-                buf,
+                buf.array[0..buf.len],
                 0,
             ),
 
@@ -304,7 +304,7 @@ fn add_(
             .array => |*buf| linux.io_uring_prep_write(
                 sqe,
                 v.fd,
-                buf,
+                buf.array[0..buf.len],
                 0,
             ),
 
@@ -635,6 +635,9 @@ pub const ReadBuffer = union(enum) {
     /// use the other size in the union to support small reads without worrying
     /// about buffer allocation.
     ///
+    /// To know the size read you have to use the return value of the
+    /// read operations (i.e. recv).
+    ///
     /// Note that the union at the time of this writing could accomodate a
     /// much larger fixed size array here but we want to retain flexiblity
     /// for future fields.
@@ -649,7 +652,10 @@ pub const WriteBuffer = union(enum) {
     slice: []const u8,
 
     /// Write from this array. See ReadBuffer.array for why we support this.
-    array: [32]u8,
+    array: struct {
+        array: [32]u8,
+        len: usize,
+    },
 
     // TODO: future will have vectors
 };
