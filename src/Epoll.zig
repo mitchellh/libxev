@@ -4,12 +4,19 @@ const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const IntrusiveQueue = @import("queue.zig").IntrusiveQueue;
-const xev = @import("main.zig");
+const xev = @import("main.zig").Epoll;
 
 fd: std.os.fd_t,
 
+/// The number of active completions. This DOES NOT include completions that
+/// are queued in the submissions queue.
+active: usize = 0,
+
 /// Our queue of submissions that we want to enqueue on the next tick.
 submissions: IntrusiveQueue(Completion) = .{},
+
+/// The queue for completions to delete from the epoll fd.
+deletions: IntrusiveQueue(Completion) = .{},
 
 pub fn init(entries: u13) !Epoll {
     _ = entries;
@@ -23,6 +30,20 @@ pub fn deinit(self: *Epoll) void {
     std.os.close(self.fd);
 }
 
+/// Run the event loop. See RunMode documentation for details on modes.
+pub fn run(self: *Epoll, mode: xev.RunMode) !void {
+    switch (mode) {
+        .no_wait => try self.tick(0),
+        .once => try self.tick(1),
+        .until_done => while (!self.done()) try self.tick(1),
+    }
+}
+
+fn done(self: *Epoll) bool {
+    return self.active == 0 and
+        self.submissions.empty();
+}
+
 /// Add a completion to the loop.
 pub fn add(self: *Epoll, completion: *Completion) void {
     // We just add the completion to the queue. Failures can happen
@@ -30,39 +51,117 @@ pub fn add(self: *Epoll, completion: *Completion) void {
     self.submissions.push(completion);
 }
 
+/// Delete a completion from the loop.
+pub fn delete(self: *Epoll, completion: *Completion) void {
+    self.deletions.push(completion);
+}
+
 /// Tick through the event loop once, waiting for at least "wait" completions
 /// to be processed by the loop itself.
 pub fn tick(self: *Epoll, wait: u32) !void {
-    _ = wait;
+    const timeout: i32 = if (wait == 0) 0 else -1;
 
-    // Submit all the submissions.
+    // Submit all the submissions. We copy the submission queue so that
+    // any resubmits don't cause an infinite loop.
     var queued = self.submissions;
     self.submissions = .{};
     while (queued.pop()) |c| self.start(c);
+
+    // Wait and process events
+    var events: [1024]linux.epoll_event = undefined;
+    while (true) {
+        const n = std.os.epoll_wait(self.fd, &events, timeout);
+        if (n < 0) {
+            switch (std.os.errno(n)) {
+                .INTR => continue,
+                else => |err| return std.os.unexpectedErrno(err),
+            }
+        }
+
+        // Process all our events and invoke their completion handlers
+        for (events[0..n]) |ev| {
+            const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
+            const res = c.perform();
+            const action = c.callback(c.userdata, self, c, res);
+            switch (action) {
+                .disarm => self.delete(c),
+
+                // For epoll, epoll remains armed by default so we just
+                // do nothing here...
+                .rearm => {},
+            }
+        }
+
+        // Note: we have to somehow handle multiple events on a single fd
+        while (self.deletions.pop()) |c| self.stop(c);
+
+        break;
+    }
 }
 
 fn start(self: *Epoll, completion: *Completion) void {
-    const res: std.os.EpollCtlError!void = switch (completion.op) {
+    const res_: ?Result = switch (completion.op) {
         .read => |*v| read: {
-            const ev: linux.epoll_event = .{
-                .events = linux.EPOLL.POLLIN | linux.EPOLL.RDHUP,
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
-            break :read std.os.epoll_ctl(
+            break :read if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
                 v.fd,
                 &ev,
-            );
+            )) null else |err| .{ .read = err };
         },
     };
 
     // If we failed to add the completion then we call the callback
     // immediately and mark the error.
-    _ = res catch |err| {
-        completion.callback(completion.userdata, self, completion, err);
+    if (res_) |res| {
+        switch (completion.callback(
+            completion.userdata,
+            self,
+            completion,
+            res,
+        )) {
+            .disarm => {},
+
+            // If we rearm then we requeue this. Due to the way that tick works,
+            // this won't try to re-add immediately it won't happen until the
+            // next tick.
+            .rearm => self.add(completion),
+        }
+
+        return;
+    }
+
+    // Mark the completion as active if we reached this point
+    completion.active = true;
+
+    // Increase our active count
+    self.active += 1;
+}
+
+fn stop(self: *Epoll, completion: *Completion) void {
+    const fd: std.os.fd_t = switch (completion.op) {
+        .read => |v| v.fd,
     };
+
+    // Delete. This should never fail.
+    std.os.epoll_ctl(
+        self.fd,
+        linux.EPOLL.CTL_DEL,
+        fd,
+        null,
+    ) catch unreachable;
+
+    // Mark the completion as done
+    completion.active = false;
+
+    // Decrement the active count so we know how many are running for
+    // .until_done run semantics.
+    self.active -= 1;
 }
 
 pub const Completion = struct {
@@ -83,6 +182,19 @@ pub const Completion = struct {
 
     /// Intrusive queue field
     next: ?*Completion = null,
+
+    /// Perform the operation associated with this completion. This will
+    /// perform the full blocking operation for the completion.
+    fn perform(self: *Completion) Result {
+        return switch (self.op) {
+            .read => |*op| .{
+                .read = if (op.buffer.read(op.fd)) |v|
+                    v
+                else |_|
+                    error.Unknown,
+            },
+        };
+    }
 };
 
 pub const OperationType = enum {
@@ -127,6 +239,13 @@ pub const ReadBuffer = union(enum) {
     array: [32]u8,
 
     // TODO: future will have vectors
+
+    fn read(self: *ReadBuffer, fd: std.os.fd_t) !usize {
+        _ = fd;
+        return switch (self) {
+            else => 0,
+        };
+    }
 };
 
 /// WriteBuffer are the various options for writing.
@@ -148,7 +267,48 @@ pub const ReadError = std.os.EpollCtlError || error{
     Unexpected,
 };
 
-test Epoll {
+test "epoll: timerfd" {
+    const testing = std.testing;
+
     var loop = try init(0);
     defer loop.deinit();
+
+    // We'll try with a simple timerfd
+    const Timerfd = @import("linux/timerfd.zig").Timerfd;
+    var t = try Timerfd.init(.monotonic, 0);
+    defer t.deinit();
+    try t.set(0, &.{ .value = .{ .nanoseconds = 1 } }, null);
+
+    // Add the timer
+    var called = false;
+    var c: Completion = .{
+        .op = .{
+            .read = .{
+                .fd = t.fd,
+                .buffer = .{ .array = undefined },
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = r.read catch unreachable;
+                _ = c;
+                _ = l;
+                const b = @ptrCast(*bool, ud.?);
+                b.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
 }
