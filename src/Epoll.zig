@@ -56,7 +56,7 @@ pub fn add(self: *Epoll, completion: *Completion) void {
         .deleting,
         => {},
 
-        .active => @panic("active completion being re-added"),
+        .in_progress, .active => unreachable,
     }
     completion.flags.state = .adding;
 
@@ -118,14 +118,33 @@ pub fn tick(self: *Epoll, wait: u32) !void {
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
                 const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
+
+                // We get the fd and mark this as in progress we can properly
+                // clean this up late.r
+                const fd = c.fd();
+                c.flags.state = .dead;
+
                 const res = c.perform();
                 const action = c.callback(c.userdata, self, c, res);
                 switch (action) {
-                    .disarm => self.delete(c),
+                    .disarm => {
+                        // We can't use self.stop because we can't trust
+                        // that c is still a valid pointer.
+                        if (fd) |v| {
+                            std.os.epoll_ctl(
+                                self.fd,
+                                linux.EPOLL.CTL_DEL,
+                                v,
+                                null,
+                            ) catch unreachable;
+                        }
 
-                    // For epoll, epoll remains armed by default so we just
-                    // do nothing here...
-                    .rearm => {},
+                        self.active -= 1;
+                    },
+
+                    // For epoll, epoll remains armed by default. We have to
+                    // reset the state, that is all.
+                    .rearm => c.flags.state = .active,
                 }
             }
 
@@ -226,6 +245,7 @@ pub const Completion = struct {
         adding = 1,
         deleting = 2,
         active = 3,
+        in_progress = 4,
     };
 
     /// Perform the operation associated with this completion. This will
@@ -238,6 +258,13 @@ pub const Completion = struct {
                 else |_|
                     error.Unknown,
             },
+        };
+    }
+
+    /// Returns the fd associated with the completion (if any).
+    fn fd(self: *Completion) ?std.os.fd_t {
+        return switch (self.op) {
+            .read => |v| v.fd,
         };
     }
 };
