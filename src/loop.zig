@@ -22,15 +22,6 @@ pub const RunMode = enum {
     until_done,
 };
 
-/// The callback of the main Loop operations. Higher level interfaces may
-/// use a different callback mechanism.
-pub const Callback = *const fn (
-    userdata: ?*anyopaque,
-    loop: *xev.Loop,
-    completion: *xev.Completion,
-    result: xev.Result,
-) CallbackAction;
-
 /// The result type for callbacks. This should be used by all loop
 /// implementations and higher level abstractions in order to control
 /// what to do after the loop completes.
