@@ -267,6 +267,13 @@ pub const ReadError = std.os.EpollCtlError || error{
     Unexpected,
 };
 
+test "Completion size" {
+    const testing = std.testing;
+
+    // Just so we are aware when we change the size
+    try testing.expectEqual(@as(usize, 80), @sizeOf(Completion));
+}
+
 test "epoll: timerfd" {
     const testing = std.testing;
 
