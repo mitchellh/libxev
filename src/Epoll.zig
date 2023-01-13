@@ -788,6 +788,9 @@ pub const TimerError = error{
 };
 
 pub const TimerTrigger = enum {
+    /// Unused with epoll
+    request,
+
     /// Timer expired.
     expiration,
 
