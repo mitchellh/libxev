@@ -272,7 +272,7 @@ const Server = struct {
                 return .disarm;
             },
 
-            error.Unexpected => {
+            else => {
                 self.destroyBuf(buf.slice);
                 self.completion_pool.destroy(c);
                 std.log.warn("server read unexpected err={}", .{err});

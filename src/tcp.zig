@@ -201,7 +201,7 @@ pub fn TCP(comptime xev: type) type {
                 .op = .{
                     .shutdown = .{
                         .socket = self.socket,
-                        .flags = std.os.linux.SHUT.WR,
+                        .how = .send,
                     },
                 },
                 .userdata = userdata,

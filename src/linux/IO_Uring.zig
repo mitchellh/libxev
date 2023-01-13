@@ -4,7 +4,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
-const xev = @import("../main.zig");
+const xev = @import("../main.zig").IO_Uring;
 
 ring: linux.IO_Uring,
 
@@ -284,7 +284,11 @@ fn add_(
         .shutdown => |v| linux.io_uring_prep_shutdown(
             sqe,
             v.socket,
-            v.flags,
+            switch (v.how) {
+                .both => linux.SHUT.RDWR,
+                .send => linux.SHUT.WR,
+                .recv => linux.SHUT.RD,
+            },
         ),
 
         .timer => |*v| linux.io_uring_prep_timeout(
@@ -607,7 +611,7 @@ pub const Operation = union(OperationType) {
 
     shutdown: struct {
         socket: std.os.socket_t,
-        flags: u32 = linux.SHUT.RDWR,
+        how: std.os.ShutdownHow = .both,
     },
 
     timer: struct {
