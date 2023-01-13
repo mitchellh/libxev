@@ -7,8 +7,6 @@ pub usingnamespace IO_Uring;
 
 /// The high-level helper interfaces that make it easier to perform
 /// common tasks. These may not work with all possible Loop implementations.
-pub const Async = @import("Async.zig");
-pub const TCP = @import("TCP.zig");
 pub const Timer = @import("Timer.zig");
 pub const UDP = @import("UDP.zig");
 
@@ -30,6 +28,7 @@ pub const Epoll = Xev(@import("Epoll.zig"));
 /// need to call the Xev function itself.
 pub fn Xev(comptime T: type) type {
     return struct {
+        const Self = @This();
         const loop = @import("loop.zig");
 
         /// The core loop APIs.
@@ -40,6 +39,11 @@ pub fn Xev(comptime T: type) type {
         pub const WriteBuffer = Loop.WriteBuffer;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
+
+        /// The high-level helper interfaces that make it easier to perform
+        /// common tasks. These may not work with all possible Loop implementations.
+        pub const Async = @import("async.zig").Async(Self);
+        pub const TCP = @import("tcp.zig").TCP(Self);
 
         /// The callback of the main Loop operations. Higher level interfaces may
         /// use a different callback mechanism.
@@ -60,8 +64,6 @@ test {
     // Tested on all platforms
     _ = @import("heap.zig");
     _ = @import("queue.zig");
-    _ = Async;
-    _ = TCP;
     _ = Timer;
     _ = UDP;
 
