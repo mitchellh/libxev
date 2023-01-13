@@ -4,7 +4,10 @@ const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const IntrusiveQueue = @import("queue.zig").IntrusiveQueue;
+const heap = @import("heap.zig");
 const xev = @import("main.zig").Epoll;
+
+const TimerHeap = heap.IntrusiveHeap(Operation.Timer, void, Operation.Timer.less);
 
 fd: std.os.fd_t,
 
@@ -17,6 +20,9 @@ submissions: IntrusiveQueue(Completion) = .{},
 
 /// The queue for completions to delete from the epoll fd.
 deletions: IntrusiveQueue(Completion) = .{},
+
+/// Heap of timers.
+timers: TimerHeap = .{ .context = {} },
 
 pub fn init(entries: u13) !Epoll {
     _ = entries;
@@ -80,11 +86,45 @@ pub fn delete(self: *Epoll, completion: *Completion) void {
     self.deletions.push(completion);
 }
 
+/// Add a timer to the loop. The timer will initially execute in "next_ms"
+/// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
+/// zero then the timer is oneshot. If "next_ms" is zero then the timer will
+/// invoke immediately (the callback will be called immediately -- as part
+/// of this function call -- to avoid any additional system calls).
+pub fn timer(
+    self: *Epoll,
+    c: *Completion,
+    next_ms: u64,
+    userdata: ?*anyopaque,
+    comptime cb: xev.Callback,
+) void {
+    // Get the timestamp of the absolute time that we'll execute this timer.
+    const next_ts = next_ts: {
+        var now: std.os.timespec = undefined;
+        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
+        break :next_ts .{
+            .tv_sec = now.tv_sec,
+            // TODO: overflow handling
+            .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+        };
+    };
+
+    c.* = .{
+        .op = .{
+            .timer = .{
+                .next = next_ts,
+            },
+        },
+        .userdata = userdata,
+        .callback = cb,
+    };
+
+    self.add(c);
+}
+
 /// Tick through the event loop once, waiting for at least "wait" completions
 /// to be processed by the loop itself.
 pub fn tick(self: *Epoll, wait: u32) !void {
-    const timeout: i32 = if (wait == 0) 0 else -1;
-
     // Submit all the submissions. We copy the submission queue so that
     // any resubmits don't cause an infinite loop.
     var queued = self.submissions;
@@ -105,8 +145,49 @@ pub fn tick(self: *Epoll, wait: u32) !void {
 
     // Wait and process events. We only do this if we have any active.
     if (self.active > 0) {
+        var now: std.os.timespec = undefined;
+        try std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now);
+        const now_timer: Operation.Timer = .{ .next = now };
+
         var events: [1024]linux.epoll_event = undefined;
-        while (true) {
+        var wait_rem = @intCast(usize, wait);
+        while (wait == 0 or wait_rem > 0) {
+            // Run our expired timers
+            while (self.timers.peek()) |t| {
+                if (!Operation.Timer.less({}, t, &now_timer)) break;
+
+                // Remove the timer
+                assert(self.timers.deleteMin().? == t);
+
+                // Mark completion as done
+                const c = t.c;
+                c.flags.state = .dead;
+                self.active -= 1;
+
+                // Lower our remaining count
+                wait_rem -|= 1;
+
+                // Invoke
+                const action = c.callback(c.userdata, self, c, .{
+                    .timer = .expiration,
+                });
+                switch (action) {
+                    .disarm => {},
+                    .rearm => self.start(c),
+                }
+            }
+
+            // Determine our next timeout based on the timers
+            const timeout: i32 = if (wait_rem == 0) 0 else timeout: {
+                // If we have a timer, we want to set the timeout to our next
+                // timer value. If we have no timer, we wait forever.
+                const t = self.timers.peek() orelse break :timeout -1;
+
+                // Determine the time in milliseconds.
+                // NOTE(mitchellh): we ignore the nanosecond field here
+                break :timeout @intCast(i32, (now.tv_sec -| t.next.tv_sec) * std.time.ms_per_s);
+            };
+
             const n = std.os.epoll_wait(self.fd, &events, timeout);
             if (n < 0) {
                 switch (std.os.errno(n)) {
@@ -148,7 +229,8 @@ pub fn tick(self: *Epoll, wait: u32) !void {
                 }
             }
 
-            break;
+            if (wait == 0) break;
+            wait_rem -|= n;
         }
     }
 }
@@ -277,6 +359,18 @@ fn start(self: *Epoll, completion: *Completion) void {
         .shutdown => |v| res: {
             break :res .{ .shutdown = std.os.shutdown(v.socket, v.how) };
         },
+
+        .timer => |*v| res: {
+            // Point back to completion since we need this. In the future
+            // we want to use @fieldParentPtr but https://github.com/ziglang/zig/issues/6611
+            v.c = completion;
+
+            // Insert the timer into our heap.
+            self.timers.insert(v);
+
+            // We always run timers
+            break :res null;
+        },
     };
 
     // If we failed to add the completion then we call the callback
@@ -368,9 +462,11 @@ pub const Completion = struct {
     /// perform the full blocking operation for the completion.
     fn perform(self: *Completion) Result {
         return switch (self.op) {
-            // This should never happen because we always do these synchronously.
+            // This should never happen because we always do these synchronously
+            // or in another location.
             .close,
             .shutdown,
+            .timer,
             => unreachable,
 
             .accept => |*op| .{
@@ -451,6 +547,7 @@ pub const Completion = struct {
             .recvmsg => |v| v.fd,
             .close => |v| v.fd,
             .shutdown => |v| v.socket,
+            .timer => null,
         };
     }
 };
@@ -465,6 +562,7 @@ pub const OperationType = enum {
     recvmsg,
     close,
     shutdown,
+    timer,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -479,6 +577,7 @@ pub const Result = union(OperationType) {
     recvmsg: ReadError!usize,
     close: CloseError!void,
     shutdown: ShutdownError!void,
+    timer: TimerError!TimerTrigger,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -538,6 +637,29 @@ pub const Operation = union(OperationType) {
     close: struct {
         fd: std.os.fd_t,
     },
+
+    timer: Timer,
+
+    const Timer = struct {
+        /// The absolute time to fire this timer next.
+        next: std.os.linux.kernel_timespec,
+
+        /// Internal heap fields.
+        heap: heap.IntrusiveHeapField(Timer) = .{},
+
+        /// We point back to completion for now. When issue[1] is fixed,
+        /// we can juse use that from our heap fields.
+        /// [1]: https://github.com/ziglang/zig/issues/6611
+        c: *Completion = undefined,
+
+        fn less(_: void, a: *const Timer, b: *const Timer) bool {
+            const ts_a = a.next;
+            const ts_b = b.next;
+            if (ts_a.tv_sec < ts_b.tv_sec) return true;
+            if (ts_a.tv_sec > ts_b.tv_sec) return false;
+            return ts_a.tv_nsec < ts_b.tv_nsec;
+        }
+    };
 };
 
 /// ReadBuffer are the various options for reading.
@@ -609,11 +731,71 @@ pub const WriteError = std.os.EpollCtlError ||
     std.os.SendMsgError ||
     error{Unknown};
 
+pub const TimerError = error{
+    Unexpected,
+};
+
+pub const TimerTrigger = enum {
+    /// Timer expired.
+    expiration,
+
+    /// Timer was canceled.
+    cancel,
+};
+
 test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
     try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+}
+
+test "epoll: timer" {
+    const testing = std.testing;
+
+    var loop = try init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 1, &called, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Add another timer
+    var called2 = false;
+    var c2: xev.Completion = undefined;
+    loop.timer(&c2, 100_000, &called2, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick
+    while (!called) try loop.run(.no_wait);
+    try testing.expect(called);
+    try testing.expect(!called2);
 }
 
 test "epoll: timerfd" {
