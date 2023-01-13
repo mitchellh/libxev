@@ -236,6 +236,15 @@ fn start(self: *Epoll, completion: *Completion) void {
                 &ev,
             )) null else |err| .{ .recv = err };
         },
+
+        .close => |v| res: {
+            std.os.close(v.fd);
+            break :res .{ .close = {} };
+        },
+
+        .shutdown => |v| res: {
+            break :res .{ .shutdown = std.os.shutdown(v.socket, v.how) };
+        },
     };
 
     // If we failed to add the completion then we call the callback
@@ -327,6 +336,11 @@ pub const Completion = struct {
     /// perform the full blocking operation for the completion.
     fn perform(self: *Completion) Result {
         return switch (self.op) {
+            // This should never happen because we always do these synchronously.
+            .close,
+            .shutdown,
+            => unreachable,
+
             .accept => |*op| .{
                 .accept = if (std.os.accept(
                     op.socket,
@@ -357,11 +371,18 @@ pub const Completion = struct {
                 },
             },
 
-            .recv => |*op| .{
-                .recv = switch (op.buffer) {
+            .recv => |*op| res: {
+                const n_ = switch (op.buffer) {
                     .slice => |v| std.os.recv(op.fd, v, 0),
                     .array => |*v| std.os.recv(op.fd, v, 0),
-                },
+                };
+
+                break :res .{
+                    .recv = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
             },
         };
     }
@@ -374,6 +395,8 @@ pub const Completion = struct {
             .read => |v| v.fd,
             .recv => |v| v.fd,
             .send => |v| v.fd,
+            .close => |v| v.fd,
+            .shutdown => |v| v.socket,
         };
     }
 };
@@ -384,6 +407,8 @@ pub const OperationType = enum {
     read,
     send,
     recv,
+    close,
+    shutdown,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -394,6 +419,8 @@ pub const Result = union(OperationType) {
     read: ReadError!usize,
     send: WriteError!usize,
     recv: ReadError!usize,
+    close: CloseError!void,
+    shutdown: ShutdownError!void,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -426,6 +453,15 @@ pub const Operation = union(OperationType) {
     recv: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
+    },
+
+    shutdown: struct {
+        socket: std.os.socket_t,
+        how: std.os.ShutdownHow = .both,
+    },
+
+    close: struct {
+        fd: std.os.fd_t,
     },
 };
 
@@ -473,6 +509,14 @@ pub const WriteBuffer = union(enum) {
 };
 
 pub const AcceptError = std.os.EpollCtlError || error{
+    Unknown,
+};
+
+pub const CloseError = std.os.EpollCtlError || error{
+    Unknown,
+};
+
+pub const ShutdownError = std.os.EpollCtlError || std.os.ShutdownError || error{
     Unknown,
 };
 
@@ -687,4 +731,126 @@ test "epoll: socket accept/connect/send/recv/close" {
     // Wait for the send/receive
     try loop.run(.until_done);
     try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
+
+    // Shutdown
+    var shutdown = false;
+    var c_client_shutdown: xev.Completion = .{
+        .op = .{
+            .shutdown = .{
+                .socket = client_conn,
+            },
+        },
+
+        .userdata = &shutdown,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.shutdown catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_client_shutdown);
+    try loop.run(.until_done);
+    try testing.expect(shutdown);
+
+    // Read should be EOF
+    var eof: ?bool = null;
+    c_recv = .{
+        .op = .{
+            .recv = .{
+                .fd = server_conn,
+                .buffer = .{ .slice = &recv_buf },
+            },
+        },
+
+        .userdata = &eof,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                ptr.* = if (r.recv) |_| false else |err| switch (err) {
+                    error.EOF => true,
+                    else => false,
+                };
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_recv);
+
+    try loop.run(.until_done);
+    try testing.expect(eof.? == true);
+
+    // Close
+    var c_client_close: xev.Completion = .{
+        .op = .{
+            .close = .{
+                .fd = client_conn,
+            },
+        },
+
+        .userdata = &client_conn,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.close catch unreachable;
+                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                ptr.* = 0;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_client_close);
+
+    var c_server_close: xev.Completion = .{
+        .op = .{
+            .close = .{
+                .fd = ln,
+            },
+        },
+
+        .userdata = &ln,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.close catch unreachable;
+                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                ptr.* = 0;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_server_close);
+
+    // Wait for the sockets to close
+    try loop.run(.until_done);
+    try testing.expect(ln == 0);
+    try testing.expect(client_conn == 0);
 }
