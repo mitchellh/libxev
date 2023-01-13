@@ -166,7 +166,7 @@ fn start(self: *Epoll, completion: *Completion) void {
                 linux.EPOLL.CTL_ADD,
                 v.socket,
                 &ev,
-            )) null else |err| .{ .read = err };
+            )) null else |err| .{ .accept = err };
         },
 
         .connect => |*v| res: {
@@ -192,7 +192,7 @@ fn start(self: *Epoll, completion: *Completion) void {
                 linux.EPOLL.CTL_ADD,
                 v.socket,
                 &ev,
-            )) null else |err| .{ .read = err };
+            )) null else |err| .{ .connect = err };
         },
 
         .read => |*v| res: {
@@ -207,6 +207,34 @@ fn start(self: *Epoll, completion: *Completion) void {
                 v.fd,
                 &ev,
             )) null else |err| .{ .read = err };
+        },
+
+        .send => |*v| res: {
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.OUT,
+                .data = .{ .ptr = @ptrToInt(completion) },
+            };
+
+            break :res if (std.os.epoll_ctl(
+                self.fd,
+                linux.EPOLL.CTL_ADD,
+                v.fd,
+                &ev,
+            )) null else |err| .{ .send = err };
+        },
+
+        .recv => |*v| res: {
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
+                .data = .{ .ptr = @ptrToInt(completion) },
+            };
+
+            break :res if (std.os.epoll_ctl(
+                self.fd,
+                linux.EPOLL.CTL_ADD,
+                v.fd,
+                &ev,
+            )) null else |err| .{ .recv = err };
         },
     };
 
@@ -321,6 +349,20 @@ pub const Completion = struct {
                 else |_|
                     error.Unknown,
             },
+
+            .send => |*op| .{
+                .send = switch (op.buffer) {
+                    .slice => |v| std.os.send(op.fd, v, 0),
+                    .array => |*v| std.os.send(op.fd, v.array[0..v.len], 0),
+                },
+            },
+
+            .recv => |*op| .{
+                .recv = switch (op.buffer) {
+                    .slice => |v| std.os.recv(op.fd, v, 0),
+                    .array => |*v| std.os.recv(op.fd, v, 0),
+                },
+            },
         };
     }
 
@@ -330,6 +372,8 @@ pub const Completion = struct {
             .accept => |v| v.socket,
             .connect => |v| v.socket,
             .read => |v| v.fd,
+            .recv => |v| v.fd,
+            .send => |v| v.fd,
         };
     }
 };
@@ -338,6 +382,8 @@ pub const OperationType = enum {
     accept,
     connect,
     read,
+    send,
+    recv,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -346,6 +392,8 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     read: ReadError!usize,
+    send: WriteError!usize,
+    recv: ReadError!usize,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -366,6 +414,16 @@ pub const Operation = union(OperationType) {
     },
 
     read: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+    },
+
+    send: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+    },
+
+    recv: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
     },
@@ -422,8 +480,12 @@ pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
     Unknown,
 };
 
-pub const ReadError = std.os.EpollCtlError || error{
+pub const ReadError = std.os.EpollCtlError || std.os.RecvFromError || error{
     EOF,
+    Unknown,
+};
+
+pub const WriteError = std.os.EpollCtlError || std.os.SendError || error{
     Unknown,
 };
 
@@ -566,4 +628,63 @@ test "epoll: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     try testing.expect(server_conn > 0);
     try testing.expect(connected);
+
+    // Send
+    var c_send: xev.Completion = .{
+        .op = .{
+            .send = .{
+                .fd = client_conn,
+                .buffer = .{ .slice = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 } },
+            },
+        },
+
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.send catch unreachable;
+                _ = ud;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_send);
+
+    // Receive
+    var recv_buf: [128]u8 = undefined;
+    var recv_len: usize = 0;
+    var c_recv: xev.Completion = .{
+        .op = .{
+            .recv = .{
+                .fd = server_conn,
+                .buffer = .{ .slice = &recv_buf },
+            },
+        },
+
+        .userdata = &recv_len,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                ptr.* = r.recv catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_recv);
+
+    // Wait for the send/receive
+    try loop.run(.until_done);
+    try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
 }
