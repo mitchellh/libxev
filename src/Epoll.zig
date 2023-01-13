@@ -155,13 +155,53 @@ pub fn tick(self: *Epoll, wait: u32) !void {
 
 fn start(self: *Epoll, completion: *Completion) void {
     const res_: ?Result = switch (completion.op) {
-        .read => |*v| read: {
+        .accept => |*v| res: {
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.IN,
+                .data = .{ .ptr = @ptrToInt(completion) },
+            };
+
+            break :res if (std.os.epoll_ctl(
+                self.fd,
+                linux.EPOLL.CTL_ADD,
+                v.socket,
+                &ev,
+            )) null else |err| .{ .read = err };
+        },
+
+        .connect => |*v| res: {
+            if (std.os.connect(v.socket, &v.addr.any, v.addr.getOsSockLen())) {
+                break :res .{ .connect = {} };
+            } else |err| switch (err) {
+                // If we would block then we register with epoll
+                error.WouldBlock => {},
+
+                // Any other error we just return immediately
+                else => break :res .{ .connect = err },
+            }
+
+            // If connect returns WouldBlock then we register for OUT events
+            // and are notified of connection completion that way.
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.OUT,
+                .data = .{ .ptr = @ptrToInt(completion) },
+            };
+
+            break :res if (std.os.epoll_ctl(
+                self.fd,
+                linux.EPOLL.CTL_ADD,
+                v.socket,
+                &ev,
+            )) null else |err| .{ .read = err };
+        },
+
+        .read => |*v| res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
-            break :read if (std.os.epoll_ctl(
+            break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
                 v.fd,
@@ -198,17 +238,15 @@ fn start(self: *Epoll, completion: *Completion) void {
 }
 
 fn stop(self: *Epoll, completion: *Completion) void {
-    const fd: std.os.fd_t = switch (completion.op) {
-        .read => |v| v.fd,
-    };
-
     // Delete. This should never fail.
-    std.os.epoll_ctl(
-        self.fd,
-        linux.EPOLL.CTL_DEL,
-        fd,
-        null,
-    ) catch unreachable;
+    if (completion.fd()) |fd| {
+        std.os.epoll_ctl(
+            self.fd,
+            linux.EPOLL.CTL_DEL,
+            fd,
+            null,
+        ) catch unreachable;
+    }
 
     // Mark the completion as done
     completion.flags.state = .dead;
@@ -241,10 +279,19 @@ pub const Completion = struct {
     next: ?*Completion = null,
 
     const State = enum(u3) {
+        /// completion is not part of any loop
         dead = 0,
+
+        /// completion is in the submission queue
         adding = 1,
+
+        /// completion is in the deletion queue
         deleting = 2,
+
+        /// completion is registered with epoll
         active = 3,
+
+        /// completion is being performed and callback invoked
         in_progress = 4,
     };
 
@@ -252,6 +299,22 @@ pub const Completion = struct {
     /// perform the full blocking operation for the completion.
     fn perform(self: *Completion) Result {
         return switch (self.op) {
+            .accept => |*op| .{
+                .accept = if (std.os.accept(
+                    op.socket,
+                    &op.addr,
+                    &op.addr_size,
+                    op.flags,
+                )) |v|
+                    v
+                else |_|
+                    error.Unknown,
+            },
+
+            .connect => |*op| .{
+                .connect = if (std.os.getsockoptError(op.socket)) {} else |err| err,
+            },
+
             .read => |*op| .{
                 .read = if (op.buffer.read(op.fd)) |v|
                     v
@@ -264,19 +327,24 @@ pub const Completion = struct {
     /// Returns the fd associated with the completion (if any).
     fn fd(self: *Completion) ?std.os.fd_t {
         return switch (self.op) {
+            .accept => |v| v.socket,
+            .connect => |v| v.socket,
             .read => |v| v.fd,
         };
     }
 };
 
 pub const OperationType = enum {
-    /// Read
+    accept,
+    connect,
     read,
 };
 
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    accept: AcceptError!std.os.socket_t,
+    connect: ConnectError!void,
     read: ReadError!usize,
 };
 
@@ -285,6 +353,18 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    accept: struct {
+        socket: std.os.socket_t,
+        addr: std.os.sockaddr = undefined,
+        addr_size: std.os.socklen_t = @sizeOf(std.os.sockaddr),
+        flags: u32 = std.os.SOCK.CLOEXEC,
+    },
+
+    connect: struct {
+        socket: std.os.socket_t,
+        addr: std.net.Address,
+    },
+
     read: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
@@ -334,16 +414,24 @@ pub const WriteBuffer = union(enum) {
     // TODO: future will have vectors
 };
 
+pub const AcceptError = std.os.EpollCtlError || error{
+    Unknown,
+};
+
+pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
+    Unknown,
+};
+
 pub const ReadError = std.os.EpollCtlError || error{
     EOF,
-    Unexpected,
+    Unknown,
 };
 
 test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 80), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
 }
 
 test "epoll: timerfd" {
@@ -390,4 +478,92 @@ test "epoll: timerfd" {
     // Tick
     try loop.run(.until_done);
     try testing.expect(called);
+}
+
+test "epoll: socket accept/connect/send/recv/close" {
+    const mem = std.mem;
+    const net = std.net;
+    const os = std.os;
+    const testing = std.testing;
+
+    var loop = try init(16);
+    defer loop.deinit();
+
+    // Create a TCP server socket
+    const address = try net.Address.parseIp4("127.0.0.1", 3131);
+    const kernel_backlog = 1;
+    var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer os.closeSocket(ln);
+    try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try os.bind(ln, &address.any, address.getOsSockLen());
+    try os.listen(ln, kernel_backlog);
+
+    // Create a TCP client socket
+    var client_conn = try os.socket(
+        address.any.family,
+        os.SOCK.NONBLOCK | os.SOCK.STREAM | os.SOCK.CLOEXEC,
+        0,
+    );
+    errdefer os.closeSocket(client_conn);
+
+    // Accept
+    var server_conn: os.socket_t = 0;
+    var c_accept: Completion = .{
+        .op = .{
+            .accept = .{
+                .socket = ln,
+            },
+        },
+
+        .userdata = &server_conn,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                conn.* = r.accept catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_accept);
+
+    // Connect
+    var connected = false;
+    var c_connect: xev.Completion = .{
+        .op = .{
+            .connect = .{
+                .socket = client_conn,
+                .addr = address,
+            },
+        },
+
+        .userdata = &connected,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.connect catch unreachable;
+                const b = @ptrCast(*bool, ud.?);
+                b.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_connect);
+
+    // Wait for the connection to be established
+    try loop.run(.until_done);
+    try testing.expect(server_conn > 0);
+    try testing.expect(connected);
 }
