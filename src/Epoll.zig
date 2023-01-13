@@ -237,6 +237,38 @@ fn start(self: *Epoll, completion: *Completion) void {
             )) null else |err| .{ .recv = err };
         },
 
+        .sendmsg => |*v| res: {
+            if (v.buffer) |_| {
+                @panic("TODO: sendmsg with buffer");
+            }
+
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.OUT,
+                .data = .{ .ptr = @ptrToInt(completion) },
+            };
+
+            break :res if (std.os.epoll_ctl(
+                self.fd,
+                linux.EPOLL.CTL_ADD,
+                v.fd,
+                &ev,
+            )) null else |err| .{ .sendmsg = err };
+        },
+
+        .recvmsg => |*v| res: {
+            var ev: linux.epoll_event = .{
+                .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
+                .data = .{ .ptr = @ptrToInt(completion) },
+            };
+
+            break :res if (std.os.epoll_ctl(
+                self.fd,
+                linux.EPOLL.CTL_ADD,
+                v.fd,
+                &ev,
+            )) null else |err| .{ .recvmsg = err };
+        },
+
         .close => |v| res: {
             std.os.close(v.fd);
             break :res .{ .close = {} };
@@ -371,6 +403,26 @@ pub const Completion = struct {
                 },
             },
 
+            .sendmsg => |*op| .{
+                .sendmsg = if (std.os.sendmsg(op.fd, op.msghdr, 0)) |v|
+                    v
+                else |err|
+                    err,
+            },
+
+            .recvmsg => |*op| res: {
+                const res = std.os.linux.recvmsg(op.fd, op.msghdr, 0);
+                break :res .{
+                    .recvmsg = if (res == 0)
+                        error.EOF
+                    else if (res > 0)
+                        res
+                    else switch (std.os.errno(res)) {
+                        else => |err| std.os.unexpectedErrno(err),
+                    },
+                };
+            },
+
             .recv => |*op| res: {
                 const n_ = switch (op.buffer) {
                     .slice => |v| std.os.recv(op.fd, v, 0),
@@ -395,6 +447,8 @@ pub const Completion = struct {
             .read => |v| v.fd,
             .recv => |v| v.fd,
             .send => |v| v.fd,
+            .sendmsg => |v| v.fd,
+            .recvmsg => |v| v.fd,
             .close => |v| v.fd,
             .shutdown => |v| v.socket,
         };
@@ -407,6 +461,8 @@ pub const OperationType = enum {
     read,
     send,
     recv,
+    sendmsg,
+    recvmsg,
     close,
     shutdown,
 };
@@ -419,6 +475,8 @@ pub const Result = union(OperationType) {
     read: ReadError!usize,
     send: WriteError!usize,
     recv: ReadError!usize,
+    sendmsg: WriteError!usize,
+    recvmsg: ReadError!usize,
     close: CloseError!void,
     shutdown: ShutdownError!void,
 };
@@ -453,6 +511,23 @@ pub const Operation = union(OperationType) {
     recv: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
+    },
+
+    sendmsg: struct {
+        fd: std.os.fd_t,
+        msghdr: *std.os.msghdr_const,
+
+        /// Optionally, a write buffer can be specified and the given
+        /// msghdr will be populated with information about this buffer.
+        buffer: ?WriteBuffer = null,
+
+        /// Do not use this, it is only used internally.
+        iov: [1]std.os.iovec_const = undefined,
+    },
+
+    recvmsg: struct {
+        fd: std.os.fd_t,
+        msghdr: *std.os.msghdr,
     },
 
     shutdown: struct {
@@ -529,9 +604,10 @@ pub const ReadError = std.os.EpollCtlError || std.os.RecvFromError || error{
     Unknown,
 };
 
-pub const WriteError = std.os.EpollCtlError || std.os.SendError || error{
-    Unknown,
-};
+pub const WriteError = std.os.EpollCtlError ||
+    std.os.SendError ||
+    std.os.SendMsgError ||
+    error{Unknown};
 
 test "Completion size" {
     const testing = std.testing;

@@ -8,7 +8,6 @@ pub usingnamespace IO_Uring;
 /// The high-level helper interfaces that make it easier to perform
 /// common tasks. These may not work with all possible Loop implementations.
 pub const Timer = @import("Timer.zig");
-pub const UDP = @import("UDP.zig");
 
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed
@@ -44,6 +43,7 @@ pub fn Xev(comptime T: type) type {
         /// common tasks. These may not work with all possible Loop implementations.
         pub const Async = @import("async.zig").Async(Self);
         pub const TCP = @import("tcp.zig").TCP(Self);
+        pub const UDP = @import("udp.zig").UDP(Self);
 
         /// The callback of the main Loop operations. Higher level interfaces may
         /// use a different callback mechanism.
@@ -65,7 +65,6 @@ test {
     _ = @import("heap.zig");
     _ = @import("queue.zig");
     _ = Timer;
-    _ = UDP;
 
     // OS-specific tests
     switch (builtin.os.tag) {
