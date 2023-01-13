@@ -46,6 +46,20 @@ fn done(self: *Epoll) bool {
 
 /// Add a completion to the loop.
 pub fn add(self: *Epoll, completion: *Completion) void {
+    switch (completion.flags.state) {
+        // Already adding, forget about it.
+        .adding => return,
+
+        // If it is dead we're good. If we're deleting we'll ignore it
+        // while we're processing.
+        .dead,
+        .deleting,
+        => {},
+
+        .active => @panic("active completion being re-added"),
+    }
+    completion.flags.state = .adding;
+
     // We just add the completion to the queue. Failures can happen
     // at tick time...
     self.submissions.push(completion);
@@ -53,6 +67,16 @@ pub fn add(self: *Epoll, completion: *Completion) void {
 
 /// Delete a completion from the loop.
 pub fn delete(self: *Epoll, completion: *Completion) void {
+    switch (completion.flags.state) {
+        // Already deleted
+        .deleting => return,
+
+        // If we're active then we will stop it and remove from epoll.
+        // If we're adding then we'll ignore it when adding.
+        .dead, .active, .adding => {},
+    }
+    completion.flags.state = .deleting;
+
     self.deletions.push(completion);
 }
 
@@ -65,37 +89,48 @@ pub fn tick(self: *Epoll, wait: u32) !void {
     // any resubmits don't cause an infinite loop.
     var queued = self.submissions;
     self.submissions = .{};
-    while (queued.pop()) |c| self.start(c);
+    while (queued.pop()) |c| {
+        // We ignore any completions that aren't in the adding state.
+        // This usually means that we switched them to be deleted or
+        // something.
+        if (c.flags.state != .adding) continue;
+        self.start(c);
+    }
 
-    // Wait and process events
-    var events: [1024]linux.epoll_event = undefined;
-    while (true) {
-        const n = std.os.epoll_wait(self.fd, &events, timeout);
-        if (n < 0) {
-            switch (std.os.errno(n)) {
-                .INTR => continue,
-                else => |err| return std.os.unexpectedErrno(err),
+    // Handle all deletions so we don't wait for them.
+    while (self.deletions.pop()) |c| {
+        if (c.flags.state != .deleting) continue;
+        self.stop(c);
+    }
+
+    // Wait and process events. We only do this if we have any active.
+    if (self.active > 0) {
+        var events: [1024]linux.epoll_event = undefined;
+        while (true) {
+            const n = std.os.epoll_wait(self.fd, &events, timeout);
+            if (n < 0) {
+                switch (std.os.errno(n)) {
+                    .INTR => continue,
+                    else => |err| return std.os.unexpectedErrno(err),
+                }
             }
-        }
 
-        // Process all our events and invoke their completion handlers
-        for (events[0..n]) |ev| {
-            const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
-            const res = c.perform();
-            const action = c.callback(c.userdata, self, c, res);
-            switch (action) {
-                .disarm => self.delete(c),
+            // Process all our events and invoke their completion handlers
+            for (events[0..n]) |ev| {
+                const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
+                const res = c.perform();
+                const action = c.callback(c.userdata, self, c, res);
+                switch (action) {
+                    .disarm => self.delete(c),
 
-                // For epoll, epoll remains armed by default so we just
-                // do nothing here...
-                .rearm => {},
+                    // For epoll, epoll remains armed by default so we just
+                    // do nothing here...
+                    .rearm => {},
+                }
             }
+
+            break;
         }
-
-        // Note: we have to somehow handle multiple events on a single fd
-        while (self.deletions.pop()) |c| self.stop(c);
-
-        break;
     }
 }
 
@@ -137,7 +172,7 @@ fn start(self: *Epoll, completion: *Completion) void {
     }
 
     // Mark the completion as active if we reached this point
-    completion.active = true;
+    completion.flags.state = .active;
 
     // Increase our active count
     self.active += 1;
@@ -157,7 +192,7 @@ fn stop(self: *Epoll, completion: *Completion) void {
     ) catch unreachable;
 
     // Mark the completion as done
-    completion.active = false;
+    completion.flags.state = .dead;
 
     // Decrement the active count so we know how many are running for
     // .until_done run semantics.
@@ -176,12 +211,22 @@ pub const Completion = struct {
     //---------------------------------------------------------------
     // Internal fields
 
-    /// Set to true when this completion is added to the epoll fd or
-    /// some other internal state of the loop that needs to be cleaned up.
-    active: bool = false,
+    flags: packed struct {
+        /// Watch state of this completion. We use this to determine whether
+        /// we're active, adding, deleting, etc. This lets us add and delete
+        /// multiple times before a loop tick and handle the state properly.
+        state: State = .dead,
+    } = .{},
 
     /// Intrusive queue field
     next: ?*Completion = null,
+
+    const State = enum(u3) {
+        dead = 0,
+        adding = 1,
+        deleting = 2,
+        active = 3,
+    };
 
     /// Perform the operation associated with this completion. This will
     /// perform the full blocking operation for the completion.
