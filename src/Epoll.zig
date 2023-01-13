@@ -21,6 +21,9 @@ submissions: IntrusiveQueue(Completion) = .{},
 /// The queue for completions to delete from the epoll fd.
 deletions: IntrusiveQueue(Completion) = .{},
 
+/// The queue for completions representing cancellation requests.
+cancellations: IntrusiveQueue(Completion) = .{},
+
 /// Heap of timers.
 timers: TimerHeap = .{ .context = {} },
 
@@ -145,13 +148,13 @@ pub fn tick(self: *Epoll, wait: u32) !void {
 
     // Wait and process events. We only do this if we have any active.
     if (self.active > 0) {
-        var now: std.os.timespec = undefined;
-        try std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now);
-        const now_timer: Operation.Timer = .{ .next = now };
-
         var events: [1024]linux.epoll_event = undefined;
         var wait_rem = @intCast(usize, wait);
-        while (wait == 0 or wait_rem > 0) {
+        while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
+            var now: std.os.timespec = undefined;
+            try std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now);
+            const now_timer: Operation.Timer = .{ .next = now };
+
             // Run our expired timers
             while (self.timers.peek()) |t| {
                 if (!Operation.Timer.less({}, t, &now_timer)) break;
@@ -237,6 +240,19 @@ pub fn tick(self: *Epoll, wait: u32) !void {
 
 fn start(self: *Epoll, completion: *Completion) void {
     const res_: ?Result = switch (completion.op) {
+        .cancel => |v| res: {
+            // We stop immediately. We only stop if we are in the
+            // "adding" state because cancellation or any other action
+            // means we're complete already.
+            if (completion.flags.state == .adding) {
+                if (v.c.op == .cancel) @panic("cannot cancel a cancellation");
+                self.stop(v.c);
+            }
+
+            // We always run timers
+            break :res .{ .cancel = {} };
+        },
+
         .accept => |*v| res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN,
@@ -409,14 +425,38 @@ fn stop(self: *Epoll, completion: *Completion) void {
             fd,
             null,
         ) catch unreachable;
-    }
+    } else switch (completion.op) {
+        .timer => |*v| {
+            const c = v.c;
 
-    // Mark the completion as done
-    completion.flags.state = .dead;
+            if (c.flags.state == .active) {
+                // Timers needs to be removed from the timer heap.
+                self.timers.remove(v);
+            }
+
+            // If the timer was never fired, we need to fire it with
+            // the cancellation notice.
+            if (c.flags.state != .dead) {
+                const action = c.callback(c.userdata, self, c, .{ .timer = .cancel });
+                switch (action) {
+                    .disarm => {},
+                    .rearm => {
+                        self.start(c);
+                        return;
+                    },
+                }
+            }
+        },
+
+        else => unreachable,
+    }
 
     // Decrement the active count so we know how many are running for
     // .until_done run semantics.
-    self.active -= 1;
+    if (completion.flags.state == .active) self.active -= 1;
+
+    // Mark the completion as done
+    completion.flags.state = .dead;
 }
 
 pub const Completion = struct {
@@ -464,6 +504,7 @@ pub const Completion = struct {
         return switch (self.op) {
             // This should never happen because we always do these synchronously
             // or in another location.
+            .cancel,
             .close,
             .shutdown,
             .timer,
@@ -547,7 +588,10 @@ pub const Completion = struct {
             .recvmsg => |v| v.fd,
             .close => |v| v.fd,
             .shutdown => |v| v.socket,
-            .timer => null,
+
+            .cancel,
+            .timer,
+            => null,
         };
     }
 };
@@ -563,6 +607,7 @@ pub const OperationType = enum {
     close,
     shutdown,
     timer,
+    cancel,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -578,6 +623,7 @@ pub const Result = union(OperationType) {
     close: CloseError!void,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
+    cancel: CancelError!void,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -585,6 +631,10 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    cancel: struct {
+        c: *Completion,
+    },
+
     accept: struct {
         socket: std.os.socket_t,
         addr: std.os.sockaddr = undefined,
@@ -704,6 +754,8 @@ pub const WriteBuffer = union(enum) {
 
     // TODO: future will have vectors
 };
+
+pub const CancelError = error{};
 
 pub const AcceptError = std.os.EpollCtlError || error{
     Unknown,
@@ -1111,4 +1163,126 @@ test "epoll: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     try testing.expect(ln == 0);
     try testing.expect(client_conn == 0);
+}
+
+test "epoll: timer cancellation" {
+    const testing = std.testing;
+
+    var loop = try init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            ptr.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick and verify we're not called.
+    try loop.run(.no_wait);
+    try testing.expect(trigger == null);
+
+    // Cancel the timer
+    var called = false;
+    var c_cancel: xev.Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c1,
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
+    try testing.expect(trigger.? == .cancel);
+}
+
+test "epoll: canceling a completed operation" {
+    const testing = std.testing;
+
+    var loop = try init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 1, &trigger, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            ptr.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick and verify we're not called.
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+
+    // Cancel the timer
+    var called = false;
+    var c_cancel: xev.Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c1,
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
+    try testing.expect(trigger.? == .expiration);
 }
