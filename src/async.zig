@@ -71,7 +71,7 @@ pub fn Async(comptime xev: type) type {
                             @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                             l_inner,
                             c_inner,
-                            if (r.read) |_| {} else |err| err,
+                            if (r.read) |v| assert(v > 0) else |err| err,
                         });
                     }
                 }).callback,
