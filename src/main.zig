@@ -13,7 +13,6 @@ const builtin = @import("builtin");
 pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
 pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
 pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
-
 /// The backend types.
 pub const Backend = enum {
     io_uring,

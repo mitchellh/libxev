@@ -123,6 +123,23 @@ pub const Loop = struct {
 
     fn start(self: *Loop, completion: *Completion) void {
         const res_: ?Result = switch (completion.op) {
+            .cancel => |v| res: {
+                // We stop immediately. We only stop if we are in the
+                // "adding" state because cancellation or any other action
+                // means we're complete already.
+                //
+                // For example, if we're in the deleting state, it means
+                // someone is cancelling the cancel. So we do nothing. If
+                // we're in the dead state it means we ran already.
+                if (completion.flags.state == .adding) {
+                    if (v.c.op == .cancel) break :res .{ .cancel = CancelError.InvalidOp };
+                    self.stop(v.c);
+                }
+
+                // We always run timers
+                break :res .{ .cancel = {} };
+            },
+
             .timer => |*v| res: {
                 // Point back to completion since we need this. In the future
                 // we want to use @fieldParentPtr but https://github.com/ziglang/zig/issues/6611
@@ -161,6 +178,44 @@ pub const Loop = struct {
 
         // Increase our active count
         self.active += 1;
+    }
+
+    fn stop(self: *Loop, completion: *Completion) void {
+        const rearm: bool = switch (completion.op) {
+            .timer => |*v| timer: {
+                const c = v.c;
+
+                // Timers needs to be removed from the timer heap only if
+                // it has been inserted.
+                if (v.heap.inserted()) {
+                    self.timers.remove(v);
+                }
+
+                // If the timer was never fired, we need to fire it with
+                // the cancellation notice.
+                if (c.flags.state != .dead) {
+                    const action = c.callback(c.userdata, self, c, .{ .timer = .cancel });
+                    switch (action) {
+                        .disarm => {},
+                        .rearm => break :timer true,
+                    }
+                }
+
+                break :timer false;
+            },
+
+            else => unreachable,
+        };
+
+        // Decrement the active count so we know how many are running for
+        // .until_done run semantics.
+        if (completion.flags.state == .active) self.active -= 1;
+
+        // Mark the completion as done
+        completion.flags.state = .dead;
+
+        // If we're rearming, add it again immediately
+        if (rearm) self.start(completion);
     }
 
     /// Add a timer to the loop. The timer will initially execute in "next_ms"
@@ -253,12 +308,14 @@ pub const Completion = struct {
 };
 
 pub const OperationType = enum {
+    cancel,
     timer,
 };
 
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    cancel: CancelError!void,
     timer: TimerError!TimerTrigger,
 };
 
@@ -267,6 +324,10 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    cancel: struct {
+        c: *Completion,
+    },
+
     timer: Timer,
 };
 
@@ -285,6 +346,11 @@ const Timer = struct {
     fn less(_: void, a: *const Timer, b: *const Timer) bool {
         return a.next < b.next;
     }
+};
+
+pub const CancelError = error{
+    /// Invalid operation to cancel. You cannot cancel a cancel operation.
+    InvalidOp,
 };
 
 pub const TimerError = error{
@@ -348,4 +414,126 @@ test "wasi: timer" {
     while (!called) try loop.run(.no_wait);
     try testing.expect(called);
     try testing.expect(!called2);
+}
+
+test "wasi: timer cancellation" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            ptr.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick and verify we're not called.
+    try loop.run(.no_wait);
+    try testing.expect(trigger == null);
+
+    // Cancel the timer
+    var called = false;
+    var c_cancel: xev.Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c1,
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
+    try testing.expect(trigger.? == .cancel);
+}
+
+test "wasi: canceling a completed operation" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(16);
+    defer loop.deinit();
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 1, &trigger, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            ptr.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick and verify we're not called.
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+
+    // Cancel the timer
+    var called = false;
+    var c_cancel: xev.Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c1,
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
+    try testing.expect(trigger.? == .expiration);
 }
