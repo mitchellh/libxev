@@ -86,7 +86,7 @@ const Client = struct {
     fn connectCallback(
         self_: ?*Client,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         socket: xev.TCP,
         r: xev.TCP.ConnectError!void,
     ) xev.CallbackAction {
@@ -106,7 +106,7 @@ const Client = struct {
     fn writeCallback(
         self_: ?*Client,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         s: xev.TCP,
         b: xev.WriteBuffer,
         r: xev.TCP.WriteError!usize,
@@ -124,7 +124,7 @@ const Client = struct {
     fn readCallback(
         self_: ?*Client,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         socket: xev.TCP,
         buf: xev.ReadBuffer,
         r: xev.TCP.ReadError!usize,
@@ -161,7 +161,7 @@ const Client = struct {
     fn shutdownCallback(
         self_: ?*Client,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         socket: xev.TCP,
         r: xev.TCP.ShutdownError!void,
     ) xev.CallbackAction {
@@ -175,7 +175,7 @@ const Client = struct {
     fn closeCallback(
         self_: ?*Client,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         socket: xev.TCP,
         r: xev.TCP.CloseError!void,
     ) xev.CallbackAction {
@@ -241,7 +241,7 @@ const Server = struct {
     fn acceptCallback(
         self_: ?*Server,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         r: xev.TCP.AcceptError!xev.TCP,
     ) xev.CallbackAction {
         const self = self_.?;
@@ -259,7 +259,7 @@ const Server = struct {
     fn readCallback(
         self_: ?*Server,
         loop: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         socket: xev.TCP,
         buf: xev.ReadBuffer,
         r: xev.TCP.ReadError!usize,
@@ -295,7 +295,7 @@ const Server = struct {
     fn writeCallback(
         self_: ?*Server,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         s: xev.TCP,
         buf: xev.WriteBuffer,
         r: xev.TCP.WriteError!usize,
@@ -319,7 +319,7 @@ const Server = struct {
     fn shutdownCallback(
         self_: ?*Server,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         s: xev.TCP,
         r: xev.TCP.ShutdownError!void,
     ) xev.CallbackAction {
@@ -333,7 +333,7 @@ const Server = struct {
     fn closeCallback(
         self_: ?*Server,
         l: *xev.Loop,
-        c: *xev.Loop.Completion,
+        c: *xev.Completion,
         socket: xev.TCP,
         r: xev.TCP.CloseError!void,
     ) xev.CallbackAction {

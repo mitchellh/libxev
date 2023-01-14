@@ -13,7 +13,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    var cs = try alloc.alloc(xev.Loop.Completion, NUM_TIMERS);
+    var cs = try alloc.alloc(xev.Completion, NUM_TIMERS);
     defer alloc.free(cs);
 
     const before_all = try Instant.now();
@@ -43,7 +43,7 @@ var timer_callback_count: usize = 0;
 fn timerCallback(
     _: ?*void,
     _: *xev.Loop,
-    _: *xev.Loop.Completion,
+    _: *xev.Completion,
     result: xev.Timer.RunError!void,
 ) xev.CallbackAction {
     _ = result catch unreachable;
