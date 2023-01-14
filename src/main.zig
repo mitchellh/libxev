@@ -10,8 +10,8 @@ pub usingnamespace Epoll;
 /// all systems but if you reference them and force them to be analyzed
 /// the proper system APIs must exist. Due to Zig's lazy analysis, if you
 /// don't use any interface it will NOT be compiled (yay!).
-pub const IO_Uring = Xev(@import("linux/IO_Uring.zig"));
-pub const Epoll = Xev(@import("Epoll.zig"));
+pub const IO_Uring = Xev(@import("backend/IO_Uring.zig"));
+pub const Epoll = Xev(@import("backend/Epoll.zig"));
 
 /// The backend types.
 pub const Backend = enum {
@@ -62,10 +62,10 @@ pub fn Xev(comptime T: type) type {
 
         /// The high-level helper interfaces that make it easier to perform
         /// common tasks. These may not work with all possible Loop implementations.
-        pub const Async = @import("async.zig").Async(Self);
-        pub const TCP = @import("tcp.zig").TCP(Self);
-        pub const UDP = @import("udp.zig").UDP(Self);
-        pub const Timer = @import("timer.zig").Timer(Self);
+        pub const Async = @import("watcher/async.zig").Async(Self);
+        pub const TCP = @import("watcher/tcp.zig").TCP(Self);
+        pub const UDP = @import("watcher/udp.zig").UDP(Self);
+        pub const Timer = @import("watcher/timer.zig").Timer(Self);
 
         /// The callback of the main Loop operations. Higher level interfaces may
         /// use a different callback mechanism.

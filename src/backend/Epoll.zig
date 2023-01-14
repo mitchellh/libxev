@@ -3,9 +3,9 @@ pub const Epoll = @This();
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
-const IntrusiveQueue = @import("queue.zig").IntrusiveQueue;
-const heap = @import("heap.zig");
-const xev = @import("main.zig").Epoll;
+const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
+const heap = @import("../heap.zig");
+const xev = @import("../main.zig").Epoll;
 
 const TimerHeap = heap.IntrusiveHeap(Operation.Timer, void, Operation.Timer.less);
 
@@ -904,7 +904,7 @@ test "epoll: timerfd" {
     defer loop.deinit();
 
     // We'll try with a simple timerfd
-    const Timerfd = @import("linux/timerfd.zig").Timerfd;
+    const Timerfd = @import("../linux/timerfd.zig").Timerfd;
     var t = try Timerfd.init(.monotonic, 0);
     defer t.deinit();
     try t.set(0, &.{ .value = .{ .nanoseconds = 1 } }, null);

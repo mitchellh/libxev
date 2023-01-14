@@ -724,7 +724,7 @@ test "io_uring: timerfd" {
     defer loop.deinit();
 
     // We'll try with a simple timerfd
-    const Timerfd = @import("timerfd.zig").Timerfd;
+    const Timerfd = @import("../linux/timerfd.zig").Timerfd;
     var t = try Timerfd.init(.monotonic, 0);
     defer t.deinit();
     try t.set(0, &.{ .value = .{ .nanoseconds = 1 } }, null);

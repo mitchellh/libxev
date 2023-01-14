@@ -4,7 +4,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
-const main = @import("main.zig");
 
 pub fn Timer(comptime xev: type) type {
     return struct {
@@ -95,8 +94,8 @@ pub fn Timer(comptime xev: type) type {
         ) void {
             _ = self;
 
-            c.* = switch (xev.Loop) {
-                main.IO_Uring.Loop => .{
+            c.* = switch (xev.backend) {
+                .io_uring => .{
                     .op = .{
                         .timer_remove = .{
                             .timer = c_cancel,
@@ -121,7 +120,7 @@ pub fn Timer(comptime xev: type) type {
                     }).callback,
                 },
 
-                main.Epoll.Loop => .{
+                .epoll => .{
                     .op = .{
                         .cancel = .{
                             .c = c_cancel,
@@ -146,7 +145,7 @@ pub fn Timer(comptime xev: type) type {
                     }).callback,
                 },
 
-                else => {
+                .other => {
                     @compileLog(xev.Loop);
                     @compileError("unsupported backend");
                 },
