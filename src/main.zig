@@ -3,15 +3,16 @@ const builtin = @import("builtin");
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system.
-pub usingnamespace Backend.default().Api();
+//pub usingnamespace Backend.default().Api();
 //pub usingnamespace Epoll;
 
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed
 /// the proper system APIs must exist. Due to Zig's lazy analysis, if you
 /// don't use any interface it will NOT be compiled (yay!).
-pub const IO_Uring = Xev(@import("backend/io_uring.zig"));
-pub const Epoll = Xev(@import("backend/epoll.zig"));
+pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
+pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
+pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
 
 /// The backend types.
 pub const Backend = enum {
@@ -37,6 +38,7 @@ pub const Backend = enum {
         return switch (self) {
             .io_uring => IO_Uring,
             .epoll => Epoll,
+            .wasi_poll => WasiPoll,
             else => @compileError("no well known API for backend"),
         };
     }
@@ -51,34 +53,39 @@ pub const Backend = enum {
 ///
 /// Unless you're using a custom or specific backend type, you do NOT ever
 /// need to call the Xev function itself.
-pub fn Xev(comptime T: type) type {
+pub fn Xev(comptime be: Backend, comptime T: type) type {
     return struct {
         const Self = @This();
         const loop = @import("loop.zig");
+
+        /// The backend that this is. This is supplied at comptime so
+        /// it is up to the caller to say the right thing. This lets custom
+        /// implementations also "quack" like an implementation.
+        pub const backend = be;
 
         /// The core loop APIs.
         pub const Loop = T.Loop;
         pub const Completion = T.Completion;
         pub const Result = T.Result;
-        pub const ReadBuffer = T.ReadBuffer;
-        pub const WriteBuffer = T.WriteBuffer;
+        // pub const ReadBuffer = T.ReadBuffer;
+        // pub const WriteBuffer = T.WriteBuffer;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
 
         // Error types
-        pub const AcceptError = T.AcceptError;
-        pub const CloseError = T.CloseError;
-        pub const ConnectError = T.ConnectError;
-        pub const ShutdownError = T.ShutdownError;
-        pub const WriteError = T.WriteError;
-        pub const ReadError = T.ReadError;
-
-        /// The high-level helper interfaces that make it easier to perform
-        /// common tasks. These may not work with all possible Loop implementations.
-        pub const Async = @import("watcher/async.zig").Async(Self);
-        pub const TCP = @import("watcher/tcp.zig").TCP(Self);
-        pub const UDP = @import("watcher/udp.zig").UDP(Self);
-        pub const Timer = @import("watcher/timer.zig").Timer(Self);
+        // pub const AcceptError = T.AcceptError;
+        // pub const CloseError = T.CloseError;
+        // pub const ConnectError = T.ConnectError;
+        // pub const ShutdownError = T.ShutdownError;
+        // pub const WriteError = T.WriteError;
+        // pub const ReadError = T.ReadError;
+        //
+        // /// The high-level helper interfaces that make it easier to perform
+        // /// common tasks. These may not work with all possible Loop implementations.
+        // pub const Async = @import("watcher/async.zig").Async(Self);
+        // pub const TCP = @import("watcher/tcp.zig").TCP(Self);
+        // pub const UDP = @import("watcher/udp.zig").UDP(Self);
+        // pub const Timer = @import("watcher/timer.zig").Timer(Self);
 
         /// The callback of the main Loop operations. Higher level interfaces may
         /// use a different callback mechanism.
@@ -88,13 +95,6 @@ pub fn Xev(comptime T: type) type {
             completion: *Completion,
             result: Result,
         ) CallbackAction;
-
-        /// The backend that this is.
-        pub const backend: Backend = switch (T.Loop) {
-            IO_Uring.Loop => .io_uring,
-            Epoll.Loop => .epoll,
-            else => .other,
-        };
 
         test {
             @import("std").testing.refAllDecls(@This());
@@ -113,6 +113,11 @@ test {
             _ = Epoll;
             _ = IO_Uring;
             _ = @import("linux/timerfd.zig");
+        },
+
+        .wasi => {
+            //_ = WasiPoll;
+            _ = @import("backend/wasi_poll.zig");
         },
 
         else => {},

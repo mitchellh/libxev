@@ -17,13 +17,19 @@ pub fn build(b: *std.build.Builder) !void {
         "Install the benchmark binaries to zig-out/bench",
     ) orelse true;
 
-    const tests = b.addTestExe("xev-test", "src/main.zig");
-    tests.setBuildMode(mode);
-    tests.setTarget(target);
-    tests.install();
+    // We always build our test exe as part of `zig build` so that
+    // we can easily run it manually without digging through the cache.
+    const test_exe = b.addTestExe("xev-test", "src/main.zig");
+    test_exe.setBuildMode(mode);
+    test_exe.setTarget(target);
+    test_exe.install();
+
+    // zig build test test binary and runner.
+    const tests_run = b.addTestSource(pkg.source);
+    tests_run.setBuildMode(mode);
+    tests_run.setTarget(target);
 
     const test_step = b.step("test", "Run tests");
-    const tests_run = tests.run();
     test_step.dependOn(&tests_run.step);
 
     _ = try benchTargets(b, target, mode, bench_install);
