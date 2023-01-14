@@ -41,11 +41,7 @@ pub fn IntrusiveHeap(
             // values aren't being added to multiple heaps. We only assert
             // with safety because in non-safe modes we never nullify
             // the pointers.
-            if (std.debug.runtime_safety) assert(
-                v.heap.child == null and
-                    v.heap.prev == null and
-                    v.heap.next == null,
-            );
+            if (std.debug.runtime_safety) assert(!v.heap.inserted());
 
             self.root = if (self.root) |root| self.meld(v, root) else v;
         }
@@ -65,7 +61,7 @@ pub fn IntrusiveHeap(
 
             // Clear pointers with runtime safety so we can verify on
             // insert that values aren't incorrectly being set multiple times.
-            if (std.debug.runtime_safety) root.heap = .{};
+            root.heap = .{};
 
             return root;
         }
@@ -95,6 +91,7 @@ pub fn IntrusiveHeap(
 
             // If we have children, then we need to merge them back in.
             const child = v.heap.child orelse return;
+            v.heap.child = null;
             const x = self.combine_siblings(child);
             self.root = self.meld(x, self.root.?);
         }
@@ -180,6 +177,13 @@ pub fn IntrusiveHeapField(comptime T: type) type {
         child: ?*T = null,
         prev: ?*T = null,
         next: ?*T = null,
+
+        /// Returns true if this element is inserted into SOME heap.
+        pub fn inserted(self: @This()) bool {
+            return self.child != null or
+                self.prev != null or
+                self.next != null;
+        }
     };
 }
 
@@ -210,6 +214,11 @@ test "heap" {
     h.remove(&d);
 
     const testing = std.testing;
+    try testing.expect(a.heap.inserted());
+    try testing.expect(b.heap.inserted());
+    try testing.expect(c.heap.inserted());
+    try testing.expect(!d.heap.inserted());
+
     try testing.expect(h.deleteMin().?.value == 7);
     try testing.expect(h.deleteMin().?.value == 12);
     try testing.expect(h.deleteMin().?.value == 24);
