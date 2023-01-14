@@ -3,13 +3,24 @@ const assert = std.debug.assert;
 
 /// An intrusive heap implementation backed by a pairing heap[1] implementation.
 ///
-/// The element T is expected to have a field "heap" of type InstrusiveHeapField.
-/// See the tests for a full example of how to set this.
+/// Why? Intrusive data structures require the element type to hold the metadata
+/// required for the structure, rather than an additional container structure.
+/// There are numerous pros/cons that are documented well by Boost[2]. For Zig,
+/// I think the primary benefits are making data structures allocation free
+/// (rather, shifting allocation up to the consumer which can choose how they
+/// want the memory to be available). There are various costs to this such as
+/// the costs of pointer chasing, larger memory overhead, requiring the element
+/// type to be aware of its container, etc. But for certain use cases an intrusive
+/// data structure can yield much better performance.
 ///
-/// You can easily make this a min or max heap by inverting the result of
-/// "less" below.
+/// Usage notes:
+/// - The element T is expected to have a field "heap" of type InstrusiveHeapField.
+///   See the tests for a full example of how to set this.
+/// - You can easily make this a min or max heap by inverting the result of
+///   "less" below.
 ///
 /// [1]: https://en.wikipedia.org/wiki/Pairing_heap
+/// [2]: https://www.boost.org/doc/libs/1_64_0/doc/html/intrusive/intrusive_vs_nontrusive.html
 pub fn IntrusiveHeap(
     comptime T: type,
     comptime Context: type,
