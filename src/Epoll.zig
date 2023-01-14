@@ -529,11 +529,18 @@ pub const Completion = struct {
                 .connect = if (std.os.getsockoptError(op.socket)) {} else |err| err,
             },
 
-            .read => |*op| .{
-                .read = if (op.buffer.read(op.fd)) |v|
-                    v
-                else |_|
-                    error.Unknown,
+            .read => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| std.os.read(op.fd, v),
+                    .array => |*v| std.os.read(op.fd, v),
+                };
+
+                break :res .{
+                    .read = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
             },
 
             .send => |*op| .{
@@ -735,13 +742,6 @@ pub const ReadBuffer = union(enum) {
     array: [32]u8,
 
     // TODO: future will have vectors
-
-    fn read(self: *ReadBuffer, fd: std.os.fd_t) !usize {
-        _ = fd;
-        return switch (self) {
-            else => 0,
-        };
-    }
 };
 
 /// WriteBuffer are the various options for writing.
@@ -776,7 +776,10 @@ pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
     Unknown,
 };
 
-pub const ReadError = std.os.EpollCtlError || std.os.RecvFromError || error{
+pub const ReadError = std.os.EpollCtlError ||
+    std.os.ReadError ||
+    std.os.RecvFromError ||
+    error{
     EOF,
     Unknown,
 };
