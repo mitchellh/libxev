@@ -155,6 +155,7 @@ pub fn IntrusiveHeap(
             // Merge pairs left
             while (true) {
                 var b = root.heap.prev orelse return root;
+                if (std.debug.runtime_safety) b.heap.next = null;
                 root = self.meld(b, root);
             }
         }
@@ -259,4 +260,82 @@ test "heap remove with children" {
     try testing.expect(h.deleteMin().?.value == 12);
     try testing.expect(h.deleteMin().?.value == 36);
     try testing.expect(h.deleteMin() == null);
+}
+
+test "heap equal values" {
+    const testing = std.testing;
+
+    const Elem = struct {
+        const Self = @This();
+        value: usize = 0,
+        heap: IntrusiveHeapField(Self) = .{},
+    };
+
+    const Heap = IntrusiveHeap(Elem, void, (struct {
+        fn less(ctx: void, a: *Elem, b: *Elem) bool {
+            _ = ctx;
+            return a.value < b.value;
+        }
+    }).less);
+
+    var a: Elem = .{ .value = 1 };
+    var b: Elem = .{ .value = 2 };
+    var c: Elem = .{ .value = 3 };
+    var d: Elem = .{ .value = 4 };
+
+    var h: Heap = .{ .context = {} };
+    h.insert(&a);
+    h.insert(&b);
+    h.insert(&c);
+    h.insert(&d);
+
+    try testing.expect(h.deleteMin().?.value == 1);
+    try testing.expect(h.deleteMin().?.value == 2);
+    try testing.expect(h.deleteMin().?.value == 3);
+    try testing.expect(h.deleteMin().?.value == 4);
+    try testing.expect(h.deleteMin() == null);
+}
+
+test "heap: million values" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    const Elem = struct {
+        const Self = @This();
+        value: usize = 0,
+        heap: IntrusiveHeapField(Self) = .{},
+    };
+
+    const Heap = IntrusiveHeap(Elem, void, (struct {
+        fn less(ctx: void, a: *Elem, b: *Elem) bool {
+            _ = ctx;
+            return a.value < b.value;
+        }
+    }).less);
+
+    const NUM_TIMERS: usize = 10 * 1000 * 1000;
+    var elems = try alloc.alloc(Elem, NUM_TIMERS);
+    defer alloc.free(elems);
+
+    var i: usize = 0;
+    var value: usize = 0;
+    while (i < NUM_TIMERS) : (i += 1) {
+        if (i % 100 == 0) value += 1;
+        elems[i] = .{ .value = value };
+    }
+
+    var h: Heap = .{ .context = {} };
+    for (elems) |*elem| {
+        h.insert(elem);
+    }
+
+    var count: usize = 0;
+    var last: usize = 0;
+    while (h.deleteMin()) |elem| {
+        count += 1;
+        try testing.expect(elem.value >= last);
+        last = elem.value;
+    }
+    try testing.expect(h.deleteMin() == null);
+    try testing.expect(count == NUM_TIMERS);
 }
