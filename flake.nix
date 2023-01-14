@@ -1,5 +1,5 @@
 {
-  description = "An empty project that uses Zig.";
+  description = "libxev is a high performance, cross-platform event loop.";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/release-22.05";
@@ -36,6 +36,7 @@
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
             zigpkgs.master
+            wasmtime
           ];
         };
 
