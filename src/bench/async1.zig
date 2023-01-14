@@ -7,7 +7,7 @@ const xev = @import("xev");
 pub const log_level: std.log.Level = .info;
 
 // Tune-ables
-pub const NUM_PINGS = 1000 * 100;
+pub const NUM_PINGS = 1000 * 1000;
 
 pub fn main() !void {
     try run(1);
