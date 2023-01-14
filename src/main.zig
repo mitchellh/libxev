@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system.
-pub usingnamespace IO_Uring;
+pub usingnamespace Epoll;
 
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed

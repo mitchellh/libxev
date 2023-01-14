@@ -108,7 +108,7 @@ pub fn timer(
         break :next_ts .{
             .tv_sec = now.tv_sec,
             // TODO: overflow handling
-            .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+            .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * std.time.ns_per_ms),
         };
     };
 
@@ -187,8 +187,11 @@ pub fn tick(self: *Epoll, wait: u32) !void {
                 const t = self.timers.peek() orelse break :timeout -1;
 
                 // Determine the time in milliseconds.
-                // NOTE(mitchellh): we ignore the nanosecond field here
-                break :timeout @intCast(i32, (now.tv_sec -| t.next.tv_sec) * std.time.ms_per_s);
+                const ms_now = @intCast(u64, now.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, now.tv_nsec) / std.time.ns_per_ms;
+                const ms_next = @intCast(u64, t.next.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, t.next.tv_nsec) / std.time.ns_per_ms;
+                break :timeout @intCast(i32, ms_next -| ms_now);
             };
 
             const n = std.os.epoll_wait(self.fd, &events, timeout);
@@ -705,9 +708,9 @@ pub const Operation = union(OperationType) {
         fn less(_: void, a: *const Timer, b: *const Timer) bool {
             const ts_a = a.next;
             const ts_b = b.next;
-            if (ts_a.tv_sec < ts_b.tv_sec) return true;
-            if (ts_a.tv_sec > ts_b.tv_sec) return false;
-            return ts_a.tv_nsec < ts_b.tv_nsec;
+            const ns_a = @intCast(u64, ts_a.tv_sec) * std.time.ns_per_s + @intCast(u64, ts_a.tv_nsec);
+            const ns_b = @intCast(u64, ts_b.tv_sec) * std.time.ns_per_s + @intCast(u64, ts_b.tv_nsec);
+            return ns_a < ns_b;
         }
     };
 };

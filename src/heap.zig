@@ -157,7 +157,7 @@ pub fn IntrusiveHeap(
                 var a: *T = left;
                 while (true) {
                     var b = a.heap.next orelse break :root a;
-                    if (std.debug.runtime_safety) a.heap.next = null;
+                    a.heap.next = null;
                     b = self.meld(a, b);
                     a = b.heap.next orelse break :root b;
                 }
@@ -166,7 +166,7 @@ pub fn IntrusiveHeap(
             // Merge pairs left
             while (true) {
                 var b = root.heap.prev orelse return root;
-                if (std.debug.runtime_safety) b.heap.next = null;
+                b.heap.next = null;
                 root = self.meld(b, root);
             }
         }
