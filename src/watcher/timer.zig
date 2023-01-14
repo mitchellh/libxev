@@ -145,8 +145,8 @@ pub fn Timer(comptime xev: type) type {
                     }).callback,
                 },
 
-                .other => {
-                    @compileLog(xev.Loop);
+                .other, .wasi_poll => {
+                    @compileLog(xev.backend);
                     @compileError("unsupported backend");
                 },
             };

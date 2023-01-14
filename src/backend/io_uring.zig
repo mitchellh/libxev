@@ -1,374 +1,374 @@
-pub const IO_Uring = @This();
-
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
 const xev = @import("../main.zig").IO_Uring;
 
-ring: linux.IO_Uring,
+pub const Loop = struct {
+    ring: linux.IO_Uring,
 
-/// The number of active completions. This DOES NOT include completions that
-/// are queued in the submissions queue.
-active: usize = 0,
+    /// The number of active completions. This DOES NOT include completions that
+    /// are queued in the submissions queue.
+    active: usize = 0,
 
-/// Our queue of submissions that failed to enqueue.
-submissions: IntrusiveQueue(Completion) = .{},
+    /// Our queue of submissions that failed to enqueue.
+    submissions: IntrusiveQueue(Completion) = .{},
 
-/// Our queue of completed completions where the callback hasn't been called.
-completions: IntrusiveQueue(Completion) = .{},
+    /// Our queue of completed completions where the callback hasn't been called.
+    completions: IntrusiveQueue(Completion) = .{},
 
-/// Initialize the event loop. "entries" is the maximum number of
-/// submissions that can be queued at one time. The number of completions
-/// always matches the number of entries so the memory allocated will be
-/// 2x entries (plus the basic loop overhead).
-pub fn init(entries: u13) !IO_Uring {
-    return .{
-        // TODO(mitchellh): add an init_advanced function or something
-        // for people using the io_uring API directly to be able to set
-        // the flags for this.
-        .ring = try linux.IO_Uring.init(entries, 0),
-    };
-}
-
-pub fn deinit(self: *IO_Uring) void {
-    self.ring.deinit();
-}
-
-/// Run the event loop. See RunMode documentation for details on modes.
-pub fn run(self: *IO_Uring, mode: xev.RunMode) !void {
-    switch (mode) {
-        .no_wait => try self.tick(0),
-        .once => try self.tick(1),
-        .until_done => while (!self.done()) try self.tick(1),
-    }
-}
-
-fn done(self: *IO_Uring) bool {
-    return self.active == 0 and
-        self.submissions.empty();
-}
-
-/// Tick through the event loop once, waiting for at least "wait" completions
-/// to be processed by the loop itself.
-pub fn tick(self: *IO_Uring, wait: u32) !void {
-    // TODO: make configurable
-    const busy_wait = 0; //20_000;
-
-    // If we have no queued submissions then we do the wait as part
-    // of the submit call, because then we can do exactly once syscall
-    // to get all our events.
-    if (busy_wait == 0 and self.submissions.empty()) {
-        _ = try self.ring.submit_and_wait(wait);
-    } else {
-        // We have submissions, meaning we have to do multiple submissions
-        // anyways so we always just do non-waiting ones.
-        _ = try self.submit();
-    }
-
-    // During some real world testing, I found that the overhead of
-    // io_uring waits (GETEVENTS) under heavy load is higher than busy
-    // waiting on the userspace CQ ring. So, we spend some time spinning
-    // the CPU checking for CQ readiness before giving up and going to sleep.
-    // This stops being true as soon as there are many tasks or threads
-    // fighting for CPU contention that assist in moving forward the
-    // ring.
-    //
-    // The busy_wait parameter is tune-able. The higher it is the higher
-    // CPU will be but the lower latency. The default 20_000 was empirically
-    // chosen on a test machine since its about the cost of the syscall
-    // when it has to wait under load, and avoiding the context switch makes
-    // up for the time.
-    var i: usize = 0;
-    while (self.ring.cq_ready() == 0 and i < busy_wait) : (i += 1) {}
-
-    // Sync our completions with the wait amount we specified. If we did
-    // the submit_and_wait above then the wait number should be immediately
-    // ready.
-    try self.sync_completions(wait);
-
-    // Run all our callbacks
-    self.invoke_completions();
-}
-
-/// Submit all queued operations. This never does an io_uring submit
-/// and wait operation.
-pub fn submit(self: *IO_Uring) !void {
-    _ = try self.ring.submit();
-
-    // If we have any submissions that failed to submit, we try to
-    // send those now. We have to make a copy so that any failures are
-    // resubmitted without an infinite loop.
-    var queued = self.submissions;
-    self.submissions = .{};
-    while (queued.pop()) |c| self.add_(c, true);
-}
-
-/// Handle all of the completions.
-fn complete(self: *IO_Uring) !void {
-    // Sync
-    try self.sync_completions(0);
-
-    // Run our callbacks
-    self.invoke_completions();
-}
-
-/// Add a timer to the loop. The timer will initially execute in "next_ms"
-/// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
-/// zero then the timer is oneshot. If "next_ms" is zero then the timer will
-/// invoke immediately (the callback will be called immediately -- as part
-/// of this function call -- to avoid any additional system calls).
-pub fn timer(
-    self: *IO_Uring,
-    c: *Completion,
-    next_ms: u64,
-    userdata: ?*anyopaque,
-    comptime cb: xev.Callback,
-) void {
-    // Get the timestamp of the absolute time that we'll execute this timer.
-    const next_ts = next_ts: {
-        var now: std.os.timespec = undefined;
-        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
-        break :next_ts .{
-            .tv_sec = now.tv_sec,
-            // TODO: overflow handling
-            .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+    /// Initialize the event loop. "entries" is the maximum number of
+    /// submissions that can be queued at one time. The number of completions
+    /// always matches the number of entries so the memory allocated will be
+    /// 2x entries (plus the basic loop overhead).
+    pub fn init(entries: u13) !Loop {
+        return .{
+            // TODO(mitchellh): add an init_advanced function or something
+            // for people using the io_uring API directly to be able to set
+            // the flags for this.
+            .ring = try linux.IO_Uring.init(entries, 0),
         };
-    };
-
-    c.* = .{
-        .op = .{
-            .timer = .{
-                .next = next_ts,
-            },
-        },
-        .userdata = userdata,
-        .callback = cb,
-    };
-
-    self.add(c);
-}
-
-/// Add a completion to the loop. This does NOT start the operation!
-/// You must call "submit" at some point to submit all of the queued
-/// work.
-pub fn add(self: *IO_Uring, completion: *Completion) void {
-    self.add_(completion, false);
-}
-
-/// Internal add function. The only difference is try_submit. If try_submit
-/// is true, then this function will attempt to submit the queue to the
-/// ring if the submission queue is full rather than filling up our FIFO.
-fn add_(
-    self: *IO_Uring,
-    completion: *Completion,
-    try_submit: bool,
-) void {
-    const sqe = self.ring.get_sqe() catch |err| switch (err) {
-        error.SubmissionQueueFull => retry: {
-            // If the queue is full and we're in try_submit mode then we
-            // attempt to submit. This is used during submission flushing.
-            if (try_submit) {
-                if (self.submit()) {
-                    // Submission succeeded but we may still fail (unlikely)
-                    // to get an SQE...
-                    if (self.ring.get_sqe()) |sqe| {
-                        break :retry sqe;
-                    } else |retry_err| switch (retry_err) {
-                        error.SubmissionQueueFull => {},
-                    }
-                } else |_| {}
-            }
-
-            // Add the completion to our submissions to try to flush later.
-            self.submissions.push(completion);
-            return;
-        },
-    };
-
-    // Increase active to the amount in the ring.
-    self.active += 1;
-
-    // Setup the submission depending on the operation
-    switch (completion.op) {
-        .accept => |*v| linux.io_uring_prep_accept(
-            sqe,
-            v.socket,
-            &v.addr,
-            &v.addr_size,
-            v.flags,
-        ),
-
-        .close => |v| linux.io_uring_prep_close(
-            sqe,
-            v.fd,
-        ),
-
-        .connect => |*v| linux.io_uring_prep_connect(
-            sqe,
-            v.socket,
-            &v.addr.any,
-            v.addr.getOsSockLen(),
-        ),
-
-        .read => |*v| switch (v.buffer) {
-            .array => |*buf| linux.io_uring_prep_read(
-                sqe,
-                v.fd,
-                buf,
-                0,
-            ),
-
-            .slice => |buf| linux.io_uring_prep_read(
-                sqe,
-                v.fd,
-                buf,
-                0,
-            ),
-        },
-
-        .recv => |*v| switch (v.buffer) {
-            .array => |*buf| linux.io_uring_prep_recv(
-                sqe,
-                v.fd,
-                buf,
-                0,
-            ),
-
-            .slice => |buf| linux.io_uring_prep_recv(
-                sqe,
-                v.fd,
-                buf,
-                0,
-            ),
-        },
-
-        .recvmsg => |*v| {
-            linux.io_uring_prep_recvmsg(
-                sqe,
-                v.fd,
-                v.msghdr,
-                0,
-            );
-        },
-
-        .send => |*v| switch (v.buffer) {
-            .array => |*buf| linux.io_uring_prep_send(
-                sqe,
-                v.fd,
-                buf.array[0..buf.len],
-                0,
-            ),
-
-            .slice => |buf| linux.io_uring_prep_send(
-                sqe,
-                v.fd,
-                buf,
-                0,
-            ),
-        },
-
-        .sendmsg => |*v| {
-            if (v.buffer) |_| {
-                @panic("TODO: sendmsg with buffer");
-            }
-
-            linux.io_uring_prep_sendmsg(
-                sqe,
-                v.fd,
-                v.msghdr,
-                0,
-            );
-        },
-
-        .shutdown => |v| linux.io_uring_prep_shutdown(
-            sqe,
-            v.socket,
-            switch (v.how) {
-                .both => linux.SHUT.RDWR,
-                .send => linux.SHUT.WR,
-                .recv => linux.SHUT.RD,
-            },
-        ),
-
-        .timer => |*v| linux.io_uring_prep_timeout(
-            sqe,
-            &v.next,
-            0,
-            linux.IORING_TIMEOUT_ABS,
-        ),
-
-        .timer_remove => |v| linux.io_uring_prep_timeout_remove(
-            sqe,
-            @ptrToInt(v.timer),
-            0,
-        ),
-
-        .write => |*v| switch (v.buffer) {
-            .array => |*buf| linux.io_uring_prep_write(
-                sqe,
-                v.fd,
-                buf.array[0..buf.len],
-                0,
-            ),
-
-            .slice => |buf| linux.io_uring_prep_write(
-                sqe,
-                v.fd,
-                buf,
-                0,
-            ),
-        },
     }
 
-    // Our sqe user data always points back to the completion.
-    // The prep functions above reset the user data so we have to do this
-    // here.
-    sqe.user_data = @ptrToInt(completion);
-}
-
-/// Sync the completions that are done. This appends to self.completions.
-fn sync_completions(self: *IO_Uring, wait: u32) !void {
-    // The number of completions we want to wait for, since we can go
-    // through the loop multiple times.
-    var wait_rem = wait;
-
-    // We load cqes in two phases. We first load all the CQEs into our
-    // queue, and then we process all CQEs. We do this in two phases so
-    // that any callbacks that call into the loop don't cause unbounded
-    // stack growth.
-    var cqes: [128]linux.io_uring_cqe = undefined;
-    while (true) {
-        // Guard against waiting indefinitely (if there are too few requests inflight),
-        // especially if this is not the first time round the loop:
-        const count = self.ring.copy_cqes(&cqes, wait_rem) catch |err| switch (err) {
-            else => return err,
-        };
-
-        // Subtract down to zero
-        wait_rem -|= count;
-
-        for (cqes[0..count]) |cqe| {
-            const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
-            c.res = cqe.res;
-            self.completions.push(c);
-        }
-
-        // If copy_cqes didn't fill our buffer we have to be done.
-        if (count < cqes.len) break;
+    pub fn deinit(self: *Loop) void {
+        self.ring.deinit();
     }
-}
 
-/// Call all of our completion callbacks for any queued completions.
-fn invoke_completions(self: *IO_Uring) void {
-    while (self.completions.pop()) |c| {
-        self.active -= 1;
-        switch (c.invoke(self)) {
-            .disarm => {},
-            .rearm => self.add(c),
+    /// Run the event loop. See RunMode documentation for details on modes.
+    pub fn run(self: *Loop, mode: xev.RunMode) !void {
+        switch (mode) {
+            .no_wait => try self.tick(0),
+            .once => try self.tick(1),
+            .until_done => while (!self.done()) try self.tick(1),
         }
     }
-}
+
+    fn done(self: *Loop) bool {
+        return self.active == 0 and
+            self.submissions.empty();
+    }
+
+    /// Tick through the event loop once, waiting for at least "wait" completions
+    /// to be processed by the loop itself.
+    pub fn tick(self: *Loop, wait: u32) !void {
+        // TODO: make configurable
+        const busy_wait = 0; //20_000;
+
+        // If we have no queued submissions then we do the wait as part
+        // of the submit call, because then we can do exactly once syscall
+        // to get all our events.
+        if (busy_wait == 0 and self.submissions.empty()) {
+            _ = try self.ring.submit_and_wait(wait);
+        } else {
+            // We have submissions, meaning we have to do multiple submissions
+            // anyways so we always just do non-waiting ones.
+            _ = try self.submit();
+        }
+
+        // During some real world testing, I found that the overhead of
+        // io_uring waits (GETEVENTS) under heavy load is higher than busy
+        // waiting on the userspace CQ ring. So, we spend some time spinning
+        // the CPU checking for CQ readiness before giving up and going to sleep.
+        // This stops being true as soon as there are many tasks or threads
+        // fighting for CPU contention that assist in moving forward the
+        // ring.
+        //
+        // The busy_wait parameter is tune-able. The higher it is the higher
+        // CPU will be but the lower latency. The default 20_000 was empirically
+        // chosen on a test machine since its about the cost of the syscall
+        // when it has to wait under load, and avoiding the context switch makes
+        // up for the time.
+        var i: usize = 0;
+        while (self.ring.cq_ready() == 0 and i < busy_wait) : (i += 1) {}
+
+        // Sync our completions with the wait amount we specified. If we did
+        // the submit_and_wait above then the wait number should be immediately
+        // ready.
+        try self.sync_completions(wait);
+
+        // Run all our callbacks
+        self.invoke_completions();
+    }
+
+    /// Submit all queued operations. This never does an io_uring submit
+    /// and wait operation.
+    pub fn submit(self: *Loop) !void {
+        _ = try self.ring.submit();
+
+        // If we have any submissions that failed to submit, we try to
+        // send those now. We have to make a copy so that any failures are
+        // resubmitted without an infinite loop.
+        var queued = self.submissions;
+        self.submissions = .{};
+        while (queued.pop()) |c| self.add_(c, true);
+    }
+
+    /// Handle all of the completions.
+    fn complete(self: *Loop) !void {
+        // Sync
+        try self.sync_completions(0);
+
+        // Run our callbacks
+        self.invoke_completions();
+    }
+
+    /// Add a timer to the loop. The timer will initially execute in "next_ms"
+    /// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
+    /// zero then the timer is oneshot. If "next_ms" is zero then the timer will
+    /// invoke immediately (the callback will be called immediately -- as part
+    /// of this function call -- to avoid any additional system calls).
+    pub fn timer(
+        self: *Loop,
+        c: *Completion,
+        next_ms: u64,
+        userdata: ?*anyopaque,
+        comptime cb: xev.Callback,
+    ) void {
+        // Get the timestamp of the absolute time that we'll execute this timer.
+        const next_ts = next_ts: {
+            var now: std.os.timespec = undefined;
+            std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
+            break :next_ts .{
+                .tv_sec = now.tv_sec,
+                // TODO: overflow handling
+                .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+            };
+        };
+
+        c.* = .{
+            .op = .{
+                .timer = .{
+                    .next = next_ts,
+                },
+            },
+            .userdata = userdata,
+            .callback = cb,
+        };
+
+        self.add(c);
+    }
+
+    /// Add a completion to the loop. This does NOT start the operation!
+    /// You must call "submit" at some point to submit all of the queued
+    /// work.
+    pub fn add(self: *Loop, completion: *Completion) void {
+        self.add_(completion, false);
+    }
+
+    /// Internal add function. The only difference is try_submit. If try_submit
+    /// is true, then this function will attempt to submit the queue to the
+    /// ring if the submission queue is full rather than filling up our FIFO.
+    fn add_(
+        self: *Loop,
+        completion: *Completion,
+        try_submit: bool,
+    ) void {
+        const sqe = self.ring.get_sqe() catch |err| switch (err) {
+            error.SubmissionQueueFull => retry: {
+                // If the queue is full and we're in try_submit mode then we
+                // attempt to submit. This is used during submission flushing.
+                if (try_submit) {
+                    if (self.submit()) {
+                        // Submission succeeded but we may still fail (unlikely)
+                        // to get an SQE...
+                        if (self.ring.get_sqe()) |sqe| {
+                            break :retry sqe;
+                        } else |retry_err| switch (retry_err) {
+                            error.SubmissionQueueFull => {},
+                        }
+                    } else |_| {}
+                }
+
+                // Add the completion to our submissions to try to flush later.
+                self.submissions.push(completion);
+                return;
+            },
+        };
+
+        // Increase active to the amount in the ring.
+        self.active += 1;
+
+        // Setup the submission depending on the operation
+        switch (completion.op) {
+            .accept => |*v| linux.io_uring_prep_accept(
+                sqe,
+                v.socket,
+                &v.addr,
+                &v.addr_size,
+                v.flags,
+            ),
+
+            .close => |v| linux.io_uring_prep_close(
+                sqe,
+                v.fd,
+            ),
+
+            .connect => |*v| linux.io_uring_prep_connect(
+                sqe,
+                v.socket,
+                &v.addr.any,
+                v.addr.getOsSockLen(),
+            ),
+
+            .read => |*v| switch (v.buffer) {
+                .array => |*buf| linux.io_uring_prep_read(
+                    sqe,
+                    v.fd,
+                    buf,
+                    0,
+                ),
+
+                .slice => |buf| linux.io_uring_prep_read(
+                    sqe,
+                    v.fd,
+                    buf,
+                    0,
+                ),
+            },
+
+            .recv => |*v| switch (v.buffer) {
+                .array => |*buf| linux.io_uring_prep_recv(
+                    sqe,
+                    v.fd,
+                    buf,
+                    0,
+                ),
+
+                .slice => |buf| linux.io_uring_prep_recv(
+                    sqe,
+                    v.fd,
+                    buf,
+                    0,
+                ),
+            },
+
+            .recvmsg => |*v| {
+                linux.io_uring_prep_recvmsg(
+                    sqe,
+                    v.fd,
+                    v.msghdr,
+                    0,
+                );
+            },
+
+            .send => |*v| switch (v.buffer) {
+                .array => |*buf| linux.io_uring_prep_send(
+                    sqe,
+                    v.fd,
+                    buf.array[0..buf.len],
+                    0,
+                ),
+
+                .slice => |buf| linux.io_uring_prep_send(
+                    sqe,
+                    v.fd,
+                    buf,
+                    0,
+                ),
+            },
+
+            .sendmsg => |*v| {
+                if (v.buffer) |_| {
+                    @panic("TODO: sendmsg with buffer");
+                }
+
+                linux.io_uring_prep_sendmsg(
+                    sqe,
+                    v.fd,
+                    v.msghdr,
+                    0,
+                );
+            },
+
+            .shutdown => |v| linux.io_uring_prep_shutdown(
+                sqe,
+                v.socket,
+                switch (v.how) {
+                    .both => linux.SHUT.RDWR,
+                    .send => linux.SHUT.WR,
+                    .recv => linux.SHUT.RD,
+                },
+            ),
+
+            .timer => |*v| linux.io_uring_prep_timeout(
+                sqe,
+                &v.next,
+                0,
+                linux.IORING_TIMEOUT_ABS,
+            ),
+
+            .timer_remove => |v| linux.io_uring_prep_timeout_remove(
+                sqe,
+                @ptrToInt(v.timer),
+                0,
+            ),
+
+            .write => |*v| switch (v.buffer) {
+                .array => |*buf| linux.io_uring_prep_write(
+                    sqe,
+                    v.fd,
+                    buf.array[0..buf.len],
+                    0,
+                ),
+
+                .slice => |buf| linux.io_uring_prep_write(
+                    sqe,
+                    v.fd,
+                    buf,
+                    0,
+                ),
+            },
+        }
+
+        // Our sqe user data always points back to the completion.
+        // The prep functions above reset the user data so we have to do this
+        // here.
+        sqe.user_data = @ptrToInt(completion);
+    }
+
+    /// Sync the completions that are done. This appends to self.completions.
+    fn sync_completions(self: *Loop, wait: u32) !void {
+        // The number of completions we want to wait for, since we can go
+        // through the loop multiple times.
+        var wait_rem = wait;
+
+        // We load cqes in two phases. We first load all the CQEs into our
+        // queue, and then we process all CQEs. We do this in two phases so
+        // that any callbacks that call into the loop don't cause unbounded
+        // stack growth.
+        var cqes: [128]linux.io_uring_cqe = undefined;
+        while (true) {
+            // Guard against waiting indefinitely (if there are too few requests inflight),
+            // especially if this is not the first time round the loop:
+            const count = self.ring.copy_cqes(&cqes, wait_rem) catch |err| switch (err) {
+                else => return err,
+            };
+
+            // Subtract down to zero
+            wait_rem -|= count;
+
+            for (cqes[0..count]) |cqe| {
+                const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
+                c.res = cqe.res;
+                self.completions.push(c);
+            }
+
+            // If copy_cqes didn't fill our buffer we have to be done.
+            if (count < cqes.len) break;
+        }
+    }
+
+    /// Call all of our completion callbacks for any queued completions.
+    fn invoke_completions(self: *Loop) void {
+        while (self.completions.pop()) |c| {
+            self.active -= 1;
+            switch (c.invoke(self)) {
+                .disarm => {},
+                .rearm => self.add(c),
+            }
+        }
+    }
+};
 
 /// A completion represents a single queued request in the ring.
 /// Completions must have stable pointers.
@@ -393,7 +393,7 @@ pub const Completion = struct {
 
     /// Invokes the callback for this completion after properly constructing
     /// the Result based on the res code.
-    fn invoke(self: *Completion, loop: *IO_Uring) xev.CallbackAction {
+    fn invoke(self: *Completion, loop: *Loop) xev.CallbackAction {
         const res: Result = switch (self.op) {
             .accept => .{
                 .accept = if (self.res >= 0)
@@ -720,7 +720,7 @@ test "Completion size" {
 test "io_uring: timerfd" {
     const testing = std.testing;
 
-    var loop = try IO_Uring.init(16);
+    var loop = try Loop.init(16);
     defer loop.deinit();
 
     // We'll try with a simple timerfd
@@ -731,7 +731,7 @@ test "io_uring: timerfd" {
 
     // Add the timer
     var called = false;
-    var c: IO_Uring.Completion = .{
+    var c: Completion = .{
         .op = .{
             .read = .{
                 .fd = t.fd,
@@ -743,9 +743,9 @@ test "io_uring: timerfd" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *IO_Uring,
-                c: *IO_Uring.Completion,
-                r: IO_Uring.Result,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
             ) xev.CallbackAction {
                 _ = c;
                 _ = r;
@@ -766,14 +766,14 @@ test "io_uring: timerfd" {
 test "io_uring: timer" {
     const testing = std.testing;
 
-    var loop = try IO_Uring.init(16);
+    var loop = try Loop.init(16);
     defer loop.deinit();
 
     // Add the timer
     var called = false;
-    var c1: IO_Uring.Completion = undefined;
+    var c1: Completion = undefined;
     loop.timer(&c1, 1, &called, (struct {
-        fn callback(ud: ?*anyopaque, l: *IO_Uring, _: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
             const b = @ptrCast(*bool, ud.?);
@@ -784,9 +784,9 @@ test "io_uring: timer" {
 
     // Add another timer
     var called2 = false;
-    var c2: IO_Uring.Completion = undefined;
+    var c2: Completion = undefined;
     loop.timer(&c2, 100_000, &called2, (struct {
-        fn callback(ud: ?*anyopaque, l: *IO_Uring, _: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
             const b = @ptrCast(*bool, ud.?);
@@ -804,14 +804,14 @@ test "io_uring: timer" {
 test "io_uring: timer remove" {
     const testing = std.testing;
 
-    var loop = try IO_Uring.init(16);
+    var loop = try Loop.init(16);
     defer loop.deinit();
 
     // Add the timer
     var called = false;
-    var c1: IO_Uring.Completion = undefined;
+    var c1: Completion = undefined;
     loop.timer(&c1, 100_000, &called, (struct {
-        fn callback(ud: ?*anyopaque, l: *IO_Uring, _: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             const b = @ptrCast(*bool, ud.?);
             const trigger = r.timer catch unreachable;
@@ -821,7 +821,7 @@ test "io_uring: timer remove" {
     }).callback);
 
     // Remove it
-    var c_remove: IO_Uring.Completion = .{
+    var c_remove: Completion = .{
         .op = .{
             .timer_remove = .{
                 .timer = &c1,
@@ -830,7 +830,7 @@ test "io_uring: timer remove" {
 
         .userdata = null,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 _ = ud;
@@ -852,7 +852,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     const os = std.os;
     const testing = std.testing;
 
-    var loop = try IO_Uring.init(16);
+    var loop = try Loop.init(16);
     defer loop.deinit();
 
     // Create a TCP server socket
@@ -870,7 +870,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
     // Accept
     var server_conn: os.socket_t = 0;
-    var c_accept: IO_Uring.Completion = .{
+    var c_accept: Completion = .{
         .op = .{
             .accept = .{
                 .socket = ln,
@@ -879,7 +879,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &server_conn,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
@@ -892,7 +892,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
     // Connect
     var connected = false;
-    var c_connect: IO_Uring.Completion = .{
+    var c_connect: Completion = .{
         .op = .{
             .connect = .{
                 .socket = client_conn,
@@ -902,7 +902,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &connected,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.connect catch unreachable;
@@ -920,7 +920,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     try testing.expect(connected);
 
     // Send
-    var c_send: IO_Uring.Completion = .{
+    var c_send: Completion = .{
         .op = .{
             .send = .{
                 .fd = client_conn,
@@ -929,7 +929,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
         },
 
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.send catch unreachable;
@@ -943,7 +943,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     // Receive
     var recv_buf: [128]u8 = undefined;
     var recv_len: usize = 0;
-    var c_recv: IO_Uring.Completion = .{
+    var c_recv: Completion = .{
         .op = .{
             .recv = .{
                 .fd = server_conn,
@@ -953,7 +953,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &recv_len,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
@@ -970,7 +970,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
     // Shutdown
     var shutdown = false;
-    var c_client_shutdown: IO_Uring.Completion = .{
+    var c_client_shutdown: Completion = .{
         .op = .{
             .shutdown = .{
                 .socket = client_conn,
@@ -979,7 +979,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &shutdown,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.shutdown catch unreachable;
@@ -1005,7 +1005,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &eof,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
@@ -1023,7 +1023,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     try testing.expect(eof.? == true);
 
     // Close
-    var c_client_close: IO_Uring.Completion = .{
+    var c_client_close: Completion = .{
         .op = .{
             .close = .{
                 .fd = client_conn,
@@ -1032,7 +1032,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &client_conn,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
@@ -1044,7 +1044,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     };
     loop.add(&c_client_close);
 
-    var c_server_close: IO_Uring.Completion = .{
+    var c_server_close: Completion = .{
         .op = .{
             .close = .{
                 .fd = ln,
@@ -1053,7 +1053,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
         .userdata = &ln,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
@@ -1077,7 +1077,7 @@ test "io_uring: sendmsg/recvmsg" {
     const os = std.os;
     const testing = std.testing;
 
-    var loop = try IO_Uring.init(16);
+    var loop = try Loop.init(16);
     defer loop.deinit();
 
     // Create a TCP server socket
@@ -1105,7 +1105,7 @@ test "io_uring: sendmsg/recvmsg" {
         .controllen = 0,
         .flags = 0,
     };
-    var c_sendmsg: IO_Uring.Completion = .{
+    var c_sendmsg: Completion = .{
         .op = .{
             .sendmsg = .{
                 .fd = client,
@@ -1114,7 +1114,7 @@ test "io_uring: sendmsg/recvmsg" {
         },
 
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = ud;
                 _ = l;
                 _ = c;
@@ -1143,7 +1143,7 @@ test "io_uring: sendmsg/recvmsg" {
         .flags = 0,
     };
     var recv_size: usize = 0;
-    var c_recvmsg: IO_Uring.Completion = .{
+    var c_recvmsg: Completion = .{
         .op = .{
             .recvmsg = .{
                 .fd = server,
@@ -1153,7 +1153,7 @@ test "io_uring: sendmsg/recvmsg" {
 
         .userdata = &recv_size,
         .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *IO_Uring, c: *IO_Uring.Completion, r: IO_Uring.Result) xev.CallbackAction {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
                 const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));

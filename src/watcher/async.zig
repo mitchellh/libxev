@@ -9,7 +9,7 @@ pub fn Async(comptime xev: type) type {
         const Self = @This();
 
         /// The error that can come in the wait callback.
-        pub const WaitError = xev.Loop.ReadError;
+        pub const WaitError = xev.ReadError;
 
         /// eventfd file descriptor
         fd: os.fd_t,

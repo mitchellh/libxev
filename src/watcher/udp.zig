@@ -159,7 +159,7 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .other => {},
+                .io_uring, .other, .wasi_poll => {},
                 .epoll => c.flags.dup = true,
             }
 
@@ -264,7 +264,7 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .other => {},
+                .io_uring, .other, .wasi_poll => {},
                 .epoll => c.flags.dup = true,
             }
 
@@ -315,9 +315,9 @@ pub fn UDP(comptime xev: type) type {
             loop.add(c);
         }
 
-        pub const CloseError = xev.Loop.CloseError;
-        pub const ReadError = xev.Loop.ReadError;
-        pub const WriteError = xev.Loop.WriteError;
+        pub const CloseError = xev.CloseError;
+        pub const ReadError = xev.ReadError;
+        pub const WriteError = xev.WriteError;
 
         test "UDP: read/write" {
             const testing = std.testing;

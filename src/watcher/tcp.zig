@@ -89,7 +89,7 @@ pub fn TCP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .other => {},
+                .io_uring, .other, .wasi_poll => {},
                 .epoll => c.flags.dup = true,
             }
 
@@ -283,7 +283,7 @@ pub fn TCP(comptime xev: type) type {
 
                     // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
-                        .io_uring, .other => {},
+                        .io_uring, .other, .wasi_poll => {},
                         .epoll => c.flags.dup = true,
                     }
 
@@ -342,7 +342,7 @@ pub fn TCP(comptime xev: type) type {
 
                     // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
-                        .io_uring, .other => {},
+                        .io_uring, .other, .wasi_poll => {},
                         .epoll => c.flags.dup = true,
                     }
 
@@ -351,12 +351,12 @@ pub fn TCP(comptime xev: type) type {
             }
         }
 
-        pub const AcceptError = xev.Loop.AcceptError;
-        pub const CloseError = xev.Loop.CloseError;
-        pub const ConnectError = xev.Loop.ConnectError;
-        pub const ShutdownError = xev.Loop.ShutdownError;
-        pub const ReadError = xev.Loop.ReadError;
-        pub const WriteError = xev.Loop.WriteError;
+        pub const AcceptError = xev.AcceptError;
+        pub const CloseError = xev.CloseError;
+        pub const ConnectError = xev.ConnectError;
+        pub const ShutdownError = xev.ShutdownError;
+        pub const ReadError = xev.ReadError;
+        pub const WriteError = xev.WriteError;
 
         test "TCP: accept/connect/send/recv/close" {
             const testing = std.testing;
