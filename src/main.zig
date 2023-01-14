@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system.
-pub usingnamespace Epoll;
+pub usingnamespace Backend.default().Api();
 
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed
@@ -11,6 +11,30 @@ pub usingnamespace Epoll;
 /// don't use any interface it will NOT be compiled (yay!).
 pub const IO_Uring = Xev(@import("linux/IO_Uring.zig"));
 pub const Epoll = Xev(@import("Epoll.zig"));
+
+/// The backend types.
+pub const Backend = enum {
+    io_uring,
+    epoll,
+    other,
+
+    /// Returns a recommend default backend from inspecting the system.
+    pub fn default() Backend {
+        return switch (builtin.os.tag) {
+            .linux => .io_uring,
+            else => .other,
+        };
+    }
+
+    /// Returns the Api (return value of Xev) for the given backend type.
+    pub fn Api(comptime self: Backend) type {
+        return switch (self) {
+            .io_uring => IO_Uring,
+            .epoll => Epoll,
+            else => @compileError("no well known API for backend"),
+        };
+    }
+};
 
 /// Creates the Xev API based on a backend type.
 ///
@@ -50,6 +74,13 @@ pub fn Xev(comptime T: type) type {
             completion: *Completion,
             result: Result,
         ) CallbackAction;
+
+        /// The backend that this is.
+        pub const backend: Backend = switch (T) {
+            IO_Uring.Loop => .io_uring,
+            Epoll.Loop => .epoll,
+            else => .other,
+        };
 
         test {
             @import("std").testing.refAllDecls(@This());

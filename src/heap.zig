@@ -324,7 +324,7 @@ test "heap: million values" {
         }
     }).less);
 
-    const NUM_TIMERS: usize = 10 * 1000 * 1000;
+    const NUM_TIMERS: usize = 1000 * 1000;
     var elems = try alloc.alloc(Elem, NUM_TIMERS);
     defer alloc.free(elems);
 

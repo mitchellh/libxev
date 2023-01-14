@@ -44,7 +44,11 @@ pub fn UDP(comptime xev: type) type {
         /// resource.
         pub fn init(addr: std.net.Address) !Self {
             return .{
-                .socket = try os.socket(addr.any.family, os.SOCK.DGRAM, 0),
+                .socket = try os.socket(
+                    addr.any.family,
+                    os.SOCK.NONBLOCK | os.SOCK.DGRAM | os.SOCK.CLOEXEC,
+                    0,
+                ),
             };
         }
 
