@@ -127,21 +127,10 @@ pub fn UDP(comptime xev: type) type {
                 },
             }
 
-            // On backends like epoll, you watch file descriptors for
-            // specific events. Our implementation doesn't merge multiple
-            // completions for a single fd, so we have to dup the fd. This
-            // means we use more fds than we could optimally. This isn't a
-            // problem with io_uring.
-            const dup = comptime switch (xev.backend) {
-                .io_uring => false,
-                .epoll, .other => true,
-            };
-            const fd = if (!dup) self.socket else std.os.dup(self.socket) catch unreachable;
-
             c.* = .{
                 .op = .{
                     .recvmsg = .{
-                        .fd = fd,
+                        .fd = self.socket,
                         .msghdr = &s.op.recv.msghdr,
                     },
                 },
@@ -168,13 +157,11 @@ pub fn UDP(comptime xev: type) type {
                 }).callback,
             };
 
-            // If we're dup-ing, then we have to ask the backend to close on
-            // disarm.
-            if (dup) switch (xev.backend) {
-                .io_uring => unreachable,
-                .other => unreachable,
-                .epoll => c.flags.close_disarm = true,
-            };
+            // If we're dup-ing, then we ask the backend to manage the fd.
+            switch (xev.backend) {
+                .io_uring, .other => {},
+                .epoll => c.flags.dup = true,
+            }
 
             loop.add(c);
         }
@@ -244,16 +231,11 @@ pub fn UDP(comptime xev: type) type {
             // completions for a single fd, so we have to dup the fd. This
             // means we use more fds than we could optimally. This isn't a
             // problem with io_uring.
-            const dup = comptime switch (xev.backend) {
-                .io_uring => false,
-                .epoll, .other => true,
-            };
-            const fd = if (!dup) self.socket else std.os.dup(self.socket) catch unreachable;
 
             c.* = .{
                 .op = .{
                     .sendmsg = .{
-                        .fd = fd,
+                        .fd = self.socket,
                         .msghdr = &s.op.send.msghdr,
                     },
                 },
@@ -280,13 +262,11 @@ pub fn UDP(comptime xev: type) type {
                 }).callback,
             };
 
-            // If we're dup-ing, then we have to ask the backend to close on
-            // disarm.
-            if (dup) switch (xev.backend) {
-                .io_uring => unreachable,
-                .other => unreachable,
-                .epoll => c.flags.close_disarm = true,
-            };
+            // If we're dup-ing, then we ask the backend to manage the fd.
+            switch (xev.backend) {
+                .io_uring, .other => {},
+                .epoll => c.flags.dup = true,
+            }
 
             loop.add(c);
         }

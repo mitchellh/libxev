@@ -208,8 +208,8 @@ pub fn tick(self: *Epoll, wait: u32) !void {
 
                 // We get the fd and mark this as in progress we can properly
                 // clean this up late.r
-                const fd = c.fd();
-                const close_disarm = c.flags.close_disarm;
+                const fd = if (c.flags.dup) c.flags.dup_fd else c.fd();
+                const close_dup = c.flags.dup;
                 c.flags.state = .dead;
 
                 const res = c.perform();
@@ -226,7 +226,7 @@ pub fn tick(self: *Epoll, wait: u32) !void {
                                 null,
                             ) catch unreachable;
 
-                            if (close_disarm) {
+                            if (close_dup) {
                                 std.os.close(v);
                             }
                         }
@@ -261,22 +261,25 @@ fn start(self: *Epoll, completion: *Completion) void {
             break :res .{ .cancel = {} };
         },
 
-        .accept => |*v| res: {
+        .accept => res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .accept = err };
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.socket,
+                fd,
                 &ev,
             )) null else |err| .{ .accept = err };
         },
 
         .connect => |*v| res: {
-            if (std.os.connect(v.socket, &v.addr.any, v.addr.getOsSockLen())) {
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .connect = err };
+
+            if (std.os.connect(fd, &v.addr.any, v.addr.getOsSockLen())) {
                 break :res .{ .connect = {} };
             } else |err| switch (err) {
                 // If we would block then we register with epoll
@@ -296,49 +299,52 @@ fn start(self: *Epoll, completion: *Completion) void {
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.socket,
+                fd,
                 &ev,
             )) null else |err| .{ .connect = err };
         },
 
-        .read => |*v| res: {
+        .read => res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.fd,
+                fd,
                 &ev,
             )) null else |err| .{ .read = err };
         },
 
-        .send => |*v| res: {
+        .send => res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.OUT,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .send = err };
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.fd,
+                fd,
                 &ev,
             )) null else |err| .{ .send = err };
         },
 
-        .recv => |*v| res: {
+        .recv => res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recv = err };
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.fd,
+                fd,
                 &ev,
             )) null else |err| .{ .recv = err };
         },
@@ -353,24 +359,26 @@ fn start(self: *Epoll, completion: *Completion) void {
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .sendmsg = err };
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.fd,
+                fd,
                 &ev,
             )) null else |err| .{ .sendmsg = err };
         },
 
-        .recvmsg => |*v| res: {
+        .recvmsg => res: {
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                 .data = .{ .ptr = @ptrToInt(completion) },
             };
 
+            const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recvmsg = err };
             break :res if (std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
-                v.fd,
+                fd,
                 &ev,
             )) null else |err| .{ .recvmsg = err };
         },
@@ -485,8 +493,13 @@ pub const Completion = struct {
         /// multiple times before a loop tick and handle the state properly.
         state: State = .dead,
 
-        /// Set to true to close on disarm.
-        close_disarm: bool = false,
+        /// Set to true to dup the file descriptor for the operation prior
+        /// to setting it up with epoll. This is a hack to make it so that
+        /// a completion can represent a single op per fd, since epoll requires
+        /// a single fd for multiple ops. We don't want to track that esp
+        /// since epoll isn't the primary Linux interface.
+        dup: bool = false,
+        dup_fd: std.os.fd_t = 0,
     } = .{},
 
     /// Intrusive queue field
@@ -592,6 +605,17 @@ pub const Completion = struct {
                 };
             },
         };
+    }
+
+    /// Return the fd for the completion. This will perform a dup(2) if
+    /// requested.
+    fn fd_maybe_dup(self: *Completion) error{DupFailed}!std.os.fd_t {
+        const old_fd = self.fd().?;
+        if (!self.flags.dup) return old_fd;
+        if (self.flags.dup_fd > 0) return self.flags.dup_fd;
+
+        self.flags.dup_fd = std.os.dup(old_fd) catch return error.DupFailed;
+        return self.flags.dup_fd;
     }
 
     /// Returns the fd associated with the completion (if any).
@@ -769,6 +793,7 @@ pub const WriteBuffer = union(enum) {
 pub const CancelError = error{};
 
 pub const AcceptError = std.os.EpollCtlError || error{
+    DupFailed,
     Unknown,
 };
 
@@ -781,6 +806,7 @@ pub const ShutdownError = std.os.EpollCtlError || std.os.ShutdownError || error{
 };
 
 pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
+    DupFailed,
     Unknown,
 };
 
@@ -788,6 +814,7 @@ pub const ReadError = std.os.EpollCtlError ||
     std.os.ReadError ||
     std.os.RecvFromError ||
     error{
+    DupFailed,
     EOF,
     Unknown,
 };
@@ -795,7 +822,10 @@ pub const ReadError = std.os.EpollCtlError ||
 pub const WriteError = std.os.EpollCtlError ||
     std.os.SendError ||
     std.os.SendMsgError ||
-    error{Unknown};
+    error{
+    DupFailed,
+    Unknown,
+};
 
 pub const TimerError = error{
     Unexpected,
