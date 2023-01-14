@@ -209,6 +209,7 @@ pub fn tick(self: *Epoll, wait: u32) !void {
                 // We get the fd and mark this as in progress we can properly
                 // clean this up late.r
                 const fd = c.fd();
+                const close_disarm = c.flags.close_disarm;
                 c.flags.state = .dead;
 
                 const res = c.perform();
@@ -224,6 +225,10 @@ pub fn tick(self: *Epoll, wait: u32) !void {
                                 v,
                                 null,
                             ) catch unreachable;
+
+                            if (close_disarm) {
+                                std.os.close(v);
+                            }
                         }
 
                         self.active -= 1;
@@ -479,6 +484,9 @@ pub const Completion = struct {
         /// we're active, adding, deleting, etc. This lets us add and delete
         /// multiple times before a loop tick and handle the state properly.
         state: State = .dead,
+
+        /// Set to true to close on disarm.
+        close_disarm: bool = false,
     } = .{},
 
     /// Intrusive queue field
