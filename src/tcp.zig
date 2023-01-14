@@ -87,6 +87,12 @@ pub fn TCP(comptime xev: type) type {
                 }).callback,
             };
 
+            // If we're dup-ing, then we ask the backend to manage the fd.
+            switch (xev.backend) {
+                .io_uring, .other => {},
+                .epoll => c.flags.dup = true,
+            }
+
             loop.add(c);
         }
 
@@ -275,6 +281,12 @@ pub fn TCP(comptime xev: type) type {
                         }).callback,
                     };
 
+                    // If we're dup-ing, then we ask the backend to manage the fd.
+                    switch (xev.backend) {
+                        .io_uring, .other => {},
+                        .epoll => c.flags.dup = true,
+                    }
+
                     loop.add(c);
                 },
             }
@@ -327,6 +339,12 @@ pub fn TCP(comptime xev: type) type {
                             }
                         }).callback,
                     };
+
+                    // If we're dup-ing, then we ask the backend to manage the fd.
+                    switch (xev.backend) {
+                        .io_uring, .other => {},
+                        .epoll => c.flags.dup = true,
+                    }
 
                     loop.add(c);
                 },
