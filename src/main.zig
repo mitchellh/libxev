@@ -94,6 +94,9 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
             result: Result,
         ) CallbackAction;
 
+        /// A way to access the raw type.
+        pub const Sys = T;
+
         test {
             @import("std").testing.refAllDecls(@This());
         }

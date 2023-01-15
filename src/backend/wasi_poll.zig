@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const wasi = std.os.wasi;
 const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
@@ -7,6 +8,9 @@ const xev = @import("../main.zig").WasiPoll;
 
 pub const Loop = struct {
     const TimerHeap = heap.IntrusiveHeap(Timer, void, Timer.less);
+    const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
+    const WakeupType = if (threaded) std.atomic.Atomic(bool) else bool;
+    const wakeup_init = if (threaded) .{ .value = false } else false;
 
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
@@ -15,11 +19,19 @@ pub const Loop = struct {
     /// Our queue of submissions that we want to enqueue on the next tick.
     submissions: IntrusiveQueue(Completion) = .{},
 
+    /// Our list of async waiters.
+    asyncs: IntrusiveQueue(Completion) = .{},
+
     /// Batch of subscriptions to send to poll.
     batch: Batch = .{},
 
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
+
+    /// The wakeup signal variable for Async. If we have Wasm threads
+    /// enabled then we use an atomic for this, otherwise we just use a plain
+    /// bool because we know we're single threaded.
+    wakeup: WakeupType = wakeup_init,
 
     pub fn init(entries: u13) !Loop {
         _ = entries;
@@ -50,6 +62,29 @@ pub const Loop = struct {
     fn done(self: *Loop) bool {
         return self.active == 0 and
             self.submissions.empty();
+    }
+
+    /// Wake up the event loop and force a tick. This only works if there
+    /// is a corresponding async_wait completion _already registered_ with
+    /// the event loop. If there isn't already a completion, it will still
+    /// work, but the async_wait will be triggered on the next loop tick
+    /// it is added, and the loop won't wake up until then. This is usually
+    /// pointless since completions can only be added from the main thread.
+    ///
+    /// The completion c doesn't yet have to be registered as a waiter, but
+    ///
+    ///
+    /// This function can be called from any thread.
+    pub fn async_notify(self: *Loop, c: *Completion) void {
+        assert(c.op == .async_wait);
+
+        if (threaded) {
+            self.wakeup.store(true, .SeqCst);
+            c.op.async_wait.wakeup.store(true, .SeqCst);
+        } else {
+            self.wakeup = true;
+            c.op.async_wait.wakeup = true;
+        }
     }
 
     /// Tick through the event loop once, waiting for at least "wait" completions
@@ -101,11 +136,60 @@ pub const Loop = struct {
                     }
                 }
 
+                // Run our async waiters
+                if (!self.asyncs.empty()) {
+                    const wakeup = if (threaded) self.wakeup.load(.SeqCst) else self.wakeup;
+                    if (wakeup) {
+                        // Reset to false, we've "woken up" now.
+                        if (threaded)
+                            self.wakeup.store(false, .SeqCst)
+                        else
+                            self.wakeup = false;
+
+                        // There is at least one pending async. This isn't efficient
+                        // AT ALL. We should improve this in the short term by
+                        // using a queue here of asyncs we know should wake up
+                        // (we know because we have access to it in async_notify).
+                        // I didn't do that right away because we need a Wasm
+                        // compatibile std.Thread.Mutex.
+                        var asyncs = self.asyncs;
+                        self.asyncs = .{};
+                        while (asyncs.pop()) |c| {
+                            const c_wakeup = if (threaded)
+                                c.op.async_wait.wakeup.load(.SeqCst)
+                            else
+                                c.op.async_wait.wakeup;
+
+                            // If we aren't waking this one up, requeue
+                            if (!c_wakeup) {
+                                self.asyncs.push(c);
+                                continue;
+                            }
+
+                            // We are waking up, mark this as dead and call it.
+                            c.flags.state = .dead;
+                            self.active -= 1;
+
+                            const action = c.callback(c.userdata, self, c, .{ .async_wait = {} });
+                            switch (action) {
+                                // We disarm by default
+                                .disarm => {},
+
+                                // Rearm we just restart it. We use start instead of
+                                // add because then it'll become immediately available
+                                // if we loop again.
+                                .rearm => self.start(c),
+                            }
+                        }
+                    }
+                }
+
                 // Setup our timeout. If we have nothing to wait for then
                 // we just set an expiring timer so that we still poll but it
                 // will return ASAP.
                 const timeout: wasi.timestamp_t = if (wait_rem == 0) now else timeout: {
-                    const t: *const Timer = self.timers.peek() orelse &.{ .next = now };
+                    // If we have a timer use that value, otherwise, wake up ASAP.
+                    const t: *const Timer = self.timers.peek() orelse break :timeout now;
                     break :timeout t.next;
                 };
                 self.batch.array[0] = .{
@@ -233,6 +317,12 @@ pub const Loop = struct {
             .close => |v| res: {
                 std.os.close(v.fd);
                 break :res .{ .close = {} };
+            },
+
+            .async_wait => res: {
+                // Add our async to the list of asyncs
+                self.asyncs.push(completion);
+                break :res null;
             },
 
             .timer => |*v| res: {
@@ -467,6 +557,7 @@ pub const Completion = struct {
             },
 
             .close,
+            .async_wait,
             .shutdown,
             .cancel,
             .timer,
@@ -481,6 +572,7 @@ pub const Completion = struct {
             // This should never happen because we always do these synchronously
             // or in another location.
             .close,
+            .async_wait,
             .shutdown,
             .cancel,
             .timer,
@@ -595,6 +687,7 @@ pub const OperationType = enum {
     shutdown,
     close,
     timer,
+    async_wait,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -609,6 +702,7 @@ pub const Result = union(OperationType) {
     shutdown: ShutdownError!void,
     close: CloseError!void,
     timer: TimerError!TimerTrigger,
+    async_wait: AsyncError!void,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -651,6 +745,10 @@ pub const Operation = union(OperationType) {
 
     close: struct {
         fd: std.os.fd_t,
+    },
+
+    async_wait: struct {
+        wakeup: Loop.WakeupType = Loop.wakeup_init,
     },
 
     timer: Timer,
@@ -700,6 +798,10 @@ pub const ReadError = Batch.Error || std.os.ReadError ||
 
 pub const WriteError = Batch.Error || std.os.WriteError ||
     error{
+    Unknown,
+};
+
+pub const AsyncError = error{
     Unknown,
 };
 

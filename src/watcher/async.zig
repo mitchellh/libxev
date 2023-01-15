@@ -6,13 +6,82 @@ const os = std.os;
 
 pub fn Async(comptime xev: type) type {
     return switch (xev.backend) {
-        // Supported
+        // Supported, uses eventfd
         .io_uring,
         .epoll,
         => AsyncEventFd(xev),
 
-        // Not supported
-        .wasi_poll => return struct {},
+        // Supported, uses the backend API
+        .wasi_poll => AsyncLoopState(xev),
+    };
+}
+
+/// Async implementation that is deferred to the backend implementation
+/// loop state.
+fn AsyncLoopState(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        c: *xev.Completion,
+
+        /// The error that can come in the wait callback.
+        pub const WaitError = xev.Sys.AsyncError;
+
+        pub fn init(c: *xev.Completion) !Self {
+            // Initialize the completion so we can modify it safely.
+            c.* = .{
+                .op = .{
+                    .async_wait = .{},
+                },
+                .userdata = null,
+                .callback = undefined,
+            };
+
+            return .{ .c = c };
+        }
+
+        pub fn deinit(self: *Self) void {
+            _ = self;
+        }
+
+        pub fn wait(
+            self: Self,
+            loop: *xev.Loop,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!void,
+            ) xev.CallbackAction,
+        ) void {
+            self.c.userdata = userdata;
+            self.c.callback = (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    return @call(.always_inline, cb, .{
+                        @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                        l_inner,
+                        c_inner,
+                        if (r.async_wait) |_| {} else |err| err,
+                    });
+                }
+            }).callback;
+
+            loop.add(self.c);
+        }
+
+        pub fn notify(self: Self, loop: *xev.Loop) !void {
+            loop.async_notify(self.c);
+        }
+
+        /// Common tests
+        pub usingnamespace AsyncTests(xev, Self);
     };
 }
 
@@ -27,11 +96,15 @@ fn AsyncEventFd(comptime xev: type) type {
         /// eventfd file descriptor
         fd: os.fd_t,
 
+        /// Completion associated with this async.
+        c: *xev.Completion,
+
         /// Create a new async. An async can be assigned to exactly one loop
-        /// to be woken up.
-        pub fn init() !Self {
+        /// to be woken up. The completion must be allocated in advance.
+        pub fn init(c: *xev.Completion) !Self {
             return .{
                 .fd = try std.os.eventfd(0, 0),
+                .c = c,
             };
         }
 
@@ -54,7 +127,6 @@ fn AsyncEventFd(comptime xev: type) type {
         pub fn wait(
             self: Self,
             loop: *xev.Loop,
-            c: *xev.Completion,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
@@ -64,7 +136,7 @@ fn AsyncEventFd(comptime xev: type) type {
                 r: WaitError!void,
             ) xev.CallbackAction,
         ) void {
-            c.* = .{
+            self.c.* = .{
                 .op = .{
                     .read = .{
                         .fd = self.fd,
@@ -90,12 +162,14 @@ fn AsyncEventFd(comptime xev: type) type {
                 }).callback,
             };
 
-            loop.add(c);
+            loop.add(self.c);
         }
 
         /// Notify a loop to wake up synchronously. This should never block forever
         /// (it will always EVENTUALLY succeed regardless of if the loop is currently
         /// ticking or not).
+        ///
+        /// The "c" value is the completion associated with the "wait".
         ///
         /// Internal details subject to change but if you're relying on these
         /// details then you may want to consider using a lower level interface
@@ -104,7 +178,9 @@ fn AsyncEventFd(comptime xev: type) type {
         ///   - linux+io_uring: eventfd is used. If the eventfd write would block
         ///     (EAGAIN) then we assume success because the eventfd is full.
         ///
-        pub fn notify(self: Self) !void {
+        pub fn notify(self: Self, loop: *xev.Loop) !void {
+            _ = loop;
+
             // We want to just write "1" in the correct byte order as our host.
             const val = @bitCast([8]u8, @as(u64, 1));
             _ = os.write(self.fd, &val) catch |err| switch (err) {
@@ -126,13 +202,13 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
             var loop = try xev.Loop.init(16);
             defer loop.deinit();
 
-            var notifier = try Impl.init();
+            var c_wait: xev.Completion = undefined;
+            var notifier = try Impl.init(&c_wait);
             defer notifier.deinit();
 
             // Wait
             var wake: bool = false;
-            var c_wait: xev.Completion = undefined;
-            notifier.wait(&loop, &c_wait, bool, &wake, (struct {
+            notifier.wait(&loop, bool, &wake, (struct {
                 fn callback(
                     ud: ?*bool,
                     _: *xev.Loop,
@@ -146,7 +222,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
             }).callback);
 
             // Send a notification
-            try notifier.notify();
+            try notifier.notify(&loop);
 
             // Wait for wake
             try loop.run(.until_done);
@@ -159,16 +235,16 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
             var loop = try xev.Loop.init(16);
             defer loop.deinit();
 
-            var notifier = try Impl.init();
+            var c_wait: xev.Completion = undefined;
+            var notifier = try Impl.init(&c_wait);
             defer notifier.deinit();
 
             // Send a notification
-            try notifier.notify();
+            try notifier.notify(&loop);
 
             // Wait
             var wake: bool = false;
-            var c_wait: xev.Completion = undefined;
-            notifier.wait(&loop, &c_wait, bool, &wake, (struct {
+            notifier.wait(&loop, bool, &wake, (struct {
                 fn callback(
                     ud: ?*bool,
                     _: *xev.Loop,

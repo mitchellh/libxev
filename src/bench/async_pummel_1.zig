@@ -18,16 +18,16 @@ pub fn run(comptime thread_count: comptime_int) !void {
     defer loop.deinit();
 
     // Create our async
-    notifier = try xev.Async.init();
+    var c_notifier: xev.Completion = undefined;
+    notifier = try xev.Async.init(&c_notifier);
     defer notifier.deinit();
 
-    var c: xev.Completion = undefined;
-    notifier.wait(&loop, &c, void, null, asyncCallback);
+    notifier.wait(&loop, void, null, asyncCallback);
 
     // Initialize all our threads
     var threads: [thread_count]std.Thread = undefined;
     for (threads) |*thr| {
-        thr.* = try std.Thread.spawn(.{}, threadMain, .{});
+        thr.* = try std.Thread.spawn(.{}, threadMain, .{&loop});
     }
 
     const start_time = try Instant.now();
@@ -65,7 +65,7 @@ fn asyncCallback(
     return .disarm;
 }
 
-fn threadMain() !void {
-    while (state == .running) try notifier.notify();
+fn threadMain(loop: *xev.Loop) !void {
+    while (state == .running) try notifier.notify(loop);
     state = .stopped;
 }

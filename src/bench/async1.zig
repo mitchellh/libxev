@@ -20,10 +20,17 @@ pub fn run(comptime thread_count: comptime_int) !void {
     // Initialize all our threads
     var contexts: [thread_count]Thread = undefined;
     var threads: [contexts.len]std.Thread = undefined;
-    var comps: [contexts.len]xev.Completion = undefined;
+    var main_comps: [contexts.len]xev.Completion = undefined;
+    var worker_comps: [contexts.len]xev.Completion = undefined;
     for (contexts) |*ctx, i| {
-        ctx.* = try Thread.init();
-        ctx.main_async.wait(&loop, &comps[i], Thread, ctx, mainAsyncCallback);
+        const main_async = try xev.Async.init(&main_comps[i]);
+        const worker_async = try xev.Async.init(&worker_comps[i]);
+        ctx.* = try Thread.init(
+            &loop,
+            main_async,
+            worker_async,
+        );
+        main_async.wait(&loop, Thread, ctx, mainAsyncCallback);
         threads[i] = try std.Thread.spawn(.{}, Thread.threadMain, .{ctx});
     }
 
@@ -49,7 +56,7 @@ fn mainAsyncCallback(
     _ = r catch unreachable;
 
     const self = ud.?;
-    self.worker_async.notify() catch unreachable;
+    self.worker_async.notify(&self.loop) catch unreachable;
     self.main_sent += 1;
     self.main_seen += 1;
 
@@ -60,27 +67,32 @@ fn mainAsyncCallback(
 const Thread = struct {
     loop: xev.Loop,
     worker_async: xev.Async,
+    main_loop: *xev.Loop,
     main_async: xev.Async,
     worker_sent: usize = 0,
     worker_seen: usize = 0,
     main_sent: usize = 0,
     main_seen: usize = 0,
 
-    pub fn init() !Thread {
+    pub fn init(
+        main_loop: *xev.Loop,
+        main_async: xev.Async,
+        worker_async: xev.Async,
+    ) !Thread {
         return .{
             .loop = try xev.Loop.init(std.math.pow(u13, 2, 12)),
-            .worker_async = try xev.Async.init(),
-            .main_async = try xev.Async.init(),
+            .worker_async = worker_async,
+            .main_loop = main_loop,
+            .main_async = main_async,
         };
     }
 
     pub fn threadMain(self: *Thread) !void {
         // Kick us off
-        try self.main_async.notify();
+        try self.main_async.notify(self.main_loop);
 
         // Start our waiter
-        var c: xev.Completion = undefined;
-        self.worker_async.wait(&self.loop, &c, Thread, self, asyncCallback);
+        self.worker_async.wait(&self.loop, Thread, self, asyncCallback);
 
         // Run
         try self.loop.run(.until_done);
@@ -95,7 +107,7 @@ const Thread = struct {
     ) xev.CallbackAction {
         _ = r catch unreachable;
         const self = ud.?;
-        self.main_async.notify() catch unreachable;
+        self.main_async.notify(self.main_loop) catch unreachable;
         self.worker_sent += 1;
         self.worker_seen += 1;
         return if (self.worker_sent >= NUM_PINGS) .disarm else .rearm;
