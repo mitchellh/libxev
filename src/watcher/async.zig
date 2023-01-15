@@ -5,16 +5,19 @@ const assert = std.debug.assert;
 const os = std.os;
 
 pub fn Async(comptime xev: type) type {
-    switch (xev.backend) {
+    return switch (xev.backend) {
         // Supported
         .io_uring,
         .epoll,
-        => {},
+        => AsyncEventFd(xev),
 
         // Not supported
         .wasi_poll => return struct {},
-    }
+    };
+}
 
+/// Async implementation using eventfd (Linux).
+fn AsyncEventFd(comptime xev: type) type {
     return struct {
         const Self = @This();
 
@@ -110,13 +113,20 @@ pub fn Async(comptime xev: type) type {
             };
         }
 
+        /// Common tests
+        pub usingnamespace AsyncTests(xev, Self);
+    };
+}
+
+fn AsyncTests(comptime xev: type, comptime Impl: type) type {
+    return struct {
         test "async" {
             const testing = std.testing;
 
             var loop = try xev.Loop.init(16);
             defer loop.deinit();
 
-            var notifier = try init();
+            var notifier = try Impl.init();
             defer notifier.deinit();
 
             // Wait
@@ -127,7 +137,7 @@ pub fn Async(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: WaitError!void,
+                    r: Impl.WaitError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -149,7 +159,7 @@ pub fn Async(comptime xev: type) type {
             var loop = try xev.Loop.init(16);
             defer loop.deinit();
 
-            var notifier = try init();
+            var notifier = try Impl.init();
             defer notifier.deinit();
 
             // Send a notification
@@ -163,7 +173,7 @@ pub fn Async(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: WaitError!void,
+                    r: Impl.WaitError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
