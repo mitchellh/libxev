@@ -146,11 +146,6 @@ pub fn Timer(comptime xev: type) type {
                         }
                     }).callback,
                 },
-
-                .other => {
-                    @compileLog(xev.backend);
-                    @compileError("unsupported backend");
-                },
             };
 
             loop.add(c);

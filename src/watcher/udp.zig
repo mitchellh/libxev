@@ -11,6 +11,16 @@ const os = std.os;
 /// if you have specific needs or want to push for the most optimal performance,
 /// use the platform-specific Loop directly.
 pub fn UDP(comptime xev: type) type {
+    switch (xev.backend) {
+        // Supported
+        .io_uring,
+        .epoll,
+        => {},
+
+        // Not supported
+        .wasi_poll => return struct {},
+    }
+
     return struct {
         const Self = @This();
 
