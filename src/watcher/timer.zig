@@ -120,7 +120,9 @@ pub fn Timer(comptime xev: type) type {
                     }).callback,
                 },
 
-                .epoll => .{
+                .epoll,
+                .wasi_poll,
+                => .{
                     .op = .{
                         .cancel = .{
                             .c = c_cancel,
@@ -145,7 +147,7 @@ pub fn Timer(comptime xev: type) type {
                     }).callback,
                 },
 
-                .other, .wasi_poll => {
+                .other => {
                     @compileLog(xev.backend);
                     @compileError("unsupported backend");
                 },
@@ -163,18 +165,7 @@ pub fn Timer(comptime xev: type) type {
             Unexpected,
         };
 
-        pub const CancelError = error{
-            /// The timer to cancel was not found. It possibly already expired
-            /// and has been dequeued.
-            NotFound,
-
-            /// The timer was found but it was already in process of being
-            /// processed for expiration. It was not canceled.
-            ExpirationInProgress,
-
-            /// Unknown error
-            Unexpected,
-        };
+        pub const CancelError = xev.CancelError;
 
         test "timer" {
             const testing = std.testing;
