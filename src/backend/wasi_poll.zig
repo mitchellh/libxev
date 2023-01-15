@@ -262,6 +262,12 @@ pub const Loop = struct {
                 break :res null;
             },
 
+            .write => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .write = err };
+                sub.* = completion.subscription();
+                break :res null;
+            },
+
             .timer => |*v| res: {
                 // Point back to completion since we need this. In the future
                 // we want to use @fieldParentPtr but https://github.com/ziglang/zig/issues/6611
@@ -445,6 +451,18 @@ pub const Completion = struct {
                 },
             },
 
+            .write => |v| .{
+                .userdata = @ptrToInt(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .u = .{
+                        .fd_write = .{
+                            .fd = v.fd,
+                        },
+                    },
+                },
+            },
+
             .cancel, .timer => unreachable,
         };
     }
@@ -472,6 +490,17 @@ pub const Completion = struct {
                         err,
                 };
             },
+
+            .write => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| std.os.write(op.fd, v),
+                    .array => |*v| std.os.write(op.fd, v.array[0..v.len]),
+                };
+
+                break :res .{
+                    .write = if (n_) |n| n else |err| err,
+                };
+            },
         };
     }
 };
@@ -479,6 +508,7 @@ pub const Completion = struct {
 pub const OperationType = enum {
     cancel,
     read,
+    write,
     timer,
 };
 
@@ -487,6 +517,7 @@ pub const OperationType = enum {
 pub const Result = union(OperationType) {
     cancel: CancelError!void,
     read: ReadError!usize,
+    write: WriteError!usize,
     timer: TimerError!TimerTrigger,
 };
 
@@ -502,6 +533,11 @@ pub const Operation = union(OperationType) {
     read: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
+    },
+
+    write: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
     },
 
     timer: Timer,
@@ -532,6 +568,11 @@ pub const CancelError = error{
 pub const ReadError = Batch.Error || std.os.ReadError ||
     error{
     EOF,
+    Unknown,
+};
+
+pub const WriteError = Batch.Error || std.os.WriteError ||
+    error{
     Unknown,
 };
 
@@ -824,4 +865,43 @@ test "wasi: file" {
     // Tick. The reader should NOT read because we are blocked with no data.
     try loop.run(.until_done);
     try testing.expect(read_len.? == 0);
+
+    // Start a writer
+    var write_buf = "hello!";
+    var write_len: ?usize = null;
+    var c_write: xev.Completion = .{
+        .op = .{
+            .write = .{
+                .fd = f.handle,
+                .buffer = .{ .slice = write_buf },
+            },
+        },
+
+        .userdata = &write_len,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*?usize, @alignCast(@alignOf(?usize), ud.?));
+                ptr.* = r.write catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_write);
+
+    try loop.run(.until_done);
+    try testing.expect(write_len.? == write_buf.len);
+
+    // Read and verify we've written
+    f.close();
+    const f_verify = try dir.openFile(path, .{});
+    defer f_verify.close();
+    read_len = try f_verify.readAll(&read_buf);
+    try testing.expectEqualStrings(write_buf, read_buf[0..read_len.?]);
 }
