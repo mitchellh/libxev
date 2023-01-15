@@ -197,6 +197,18 @@ pub const Loop = struct {
                 break :res null;
             },
 
+            .recv => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .recv = err };
+                sub.* = completion.subscription();
+                break :res null;
+            },
+
+            .send => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .send = err };
+                sub.* = completion.subscription();
+                break :res null;
+            },
+
             .accept => res: {
                 const sub = self.batch.get(completion) catch |err| break :res .{ .accept = err };
                 sub.* = completion.subscription();
@@ -430,6 +442,30 @@ pub const Completion = struct {
                 },
             },
 
+            .recv => |v| .{
+                .userdata = @ptrToInt(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .u = .{
+                        .fd_read = .{
+                            .fd = v.fd,
+                        },
+                    },
+                },
+            },
+
+            .send => |v| .{
+                .userdata = @ptrToInt(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .u = .{
+                        .fd_write = .{
+                            .fd = v.fd,
+                        },
+                    },
+                },
+            },
+
             .close,
             .shutdown,
             .cancel,
@@ -484,6 +520,67 @@ pub const Completion = struct {
                     .write = if (n_) |n| n else |err| err,
                 };
             },
+
+            .recv => |*op| res: {
+                var n: usize = undefined;
+                var roflags: wasi.roflags_t = undefined;
+                const errno = switch (op.buffer) {
+                    .slice => |v| slice: {
+                        const iovs = [1]std.os.iovec{std.os.iovec{
+                            .iov_base = v.ptr,
+                            .iov_len = v.len,
+                        }};
+
+                        break :slice wasi.sock_recv(op.fd, &iovs[0], iovs.len, 0, &n, &roflags);
+                    },
+
+                    .array => |*v| array: {
+                        const iovs = [1]std.os.iovec{std.os.iovec{
+                            .iov_base = v,
+                            .iov_len = v.len,
+                        }};
+
+                        break :array wasi.sock_recv(op.fd, &iovs[0], iovs.len, 0, &n, &roflags);
+                    },
+                };
+
+                break :res .{
+                    .recv = switch (errno) {
+                        .SUCCESS => n,
+                        else => |err| std.os.unexpectedErrno(err),
+                    },
+                };
+            },
+
+            .send => |*op| res: {
+                var n: usize = undefined;
+                const errno = switch (op.buffer) {
+                    .slice => |v| slice: {
+                        const iovs = [1]std.os.iovec_const{std.os.iovec_const{
+                            .iov_base = v.ptr,
+                            .iov_len = v.len,
+                        }};
+
+                        break :slice wasi.sock_send(op.fd, &iovs[0], iovs.len, 0, &n);
+                    },
+
+                    .array => |*v| array: {
+                        const iovs = [1]std.os.iovec_const{std.os.iovec_const{
+                            .iov_base = &v.array,
+                            .iov_len = v.len,
+                        }};
+
+                        break :array wasi.sock_send(op.fd, &iovs[0], iovs.len, 0, &n);
+                    },
+                };
+
+                break :res .{
+                    .send = switch (errno) {
+                        .SUCCESS => n,
+                        else => |err| std.os.unexpectedErrno(err),
+                    },
+                };
+            },
         };
     }
 };
@@ -493,6 +590,8 @@ pub const OperationType = enum {
     accept,
     read,
     write,
+    recv,
+    send,
     shutdown,
     close,
     timer,
@@ -505,6 +604,8 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.fd_t,
     read: ReadError!usize,
     write: WriteError!usize,
+    recv: ReadError!usize,
+    send: WriteError!usize,
     shutdown: ShutdownError!void,
     close: CloseError!void,
     timer: TimerError!TimerTrigger,
@@ -531,6 +632,16 @@ pub const Operation = union(OperationType) {
     write: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
+    },
+
+    send: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+    },
+
+    recv: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
     },
 
     shutdown: struct {
