@@ -5,77 +5,6 @@ const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
 
-/// A batch of subscriptions to send to poll_oneoff.
-const Batch = struct {
-    pub const capacity = 1024;
-
-    /// The array of subscriptions. Sub zero is ALWAYS our loop timeout
-    /// so the actual capacity of this for user completions is (len - 1).
-    array: [capacity]wasi.subscription_t = undefined,
-
-    /// The length of the used slots in the array including our reserved slot.
-    len: usize = 1,
-
-    pub const Error = error{BatchFull};
-
-    /// Initialize a batch entry for the given completion. This will
-    /// store the batch index on the completion.
-    pub fn get(self: *Batch, c: *Completion) Error!*wasi.subscription_t {
-        if (self.len >= self.array.len) return error.BatchFull;
-        c.batch_idx = self.len;
-        self.len += 1;
-        return &self.array[c.batch_idx];
-    }
-
-    /// Put an entry back.
-    pub fn put(self: *Batch, c: *Completion) void {
-        assert(c.batch_idx > 0);
-        assert(self.len > 1);
-
-        const old_idx = c.batch_idx;
-        c.batch_idx = 0;
-        self.len -= 1;
-
-        // If we're empty then we don't worry about swapping.
-        if (self.len == 0) return;
-
-        // We're not empty so swap the value we just removed with the
-        // last one so our empty slot is always at the end.
-        self.array[old_idx] = self.array[self.len];
-        const swapped = @intToPtr(*Completion, @intCast(usize, self.array[old_idx].userdata));
-        swapped.batch_idx = old_idx;
-    }
-
-    test {
-        const testing = std.testing;
-
-        var b: Batch = .{};
-        var cs: [capacity - 1]Completion = undefined;
-        for (cs) |*c, i| {
-            c.* = .{ .op = undefined, .callback = undefined };
-            const sub = try b.get(c);
-            sub.* = .{ .userdata = @ptrToInt(c), .u = undefined };
-            try testing.expectEqual(@as(usize, i + 1), c.batch_idx);
-        }
-
-        var bad: Completion = .{ .op = undefined, .callback = undefined };
-        try testing.expectError(error.BatchFull, b.get(&bad));
-
-        // Put one back
-        const old = cs[4].batch_idx;
-        const replace = &cs[cs.len - 1];
-        b.put(&cs[4]);
-        try testing.expect(b.len == capacity - 1);
-        try testing.expect(b.array[old].userdata == @ptrToInt(replace));
-        try testing.expect(replace.batch_idx == old);
-
-        // Put it back in
-        const sub = try b.get(&cs[4]);
-        sub.* = .{ .userdata = @ptrToInt(&cs[4]), .u = undefined };
-        try testing.expect(cs[4].batch_idx == capacity - 1);
-    }
-};
-
 pub const Loop = struct {
     const TimerHeap = heap.IntrusiveHeap(Timer, void, Timer.less);
 
@@ -264,6 +193,12 @@ pub const Loop = struct {
 
             .write => res: {
                 const sub = self.batch.get(completion) catch |err| break :res .{ .write = err };
+                sub.* = completion.subscription();
+                break :res null;
+            },
+
+            .accept => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .accept = err };
                 sub.* = completion.subscription();
                 break :res null;
             },
@@ -468,6 +403,18 @@ pub const Completion = struct {
                 },
             },
 
+            .accept => |v| .{
+                .userdata = @ptrToInt(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .u = .{
+                        .fd_read = .{
+                            .fd = v.socket,
+                        },
+                    },
+                },
+            },
+
             .close,
             .cancel,
             .timer,
@@ -485,6 +432,16 @@ pub const Completion = struct {
             .cancel,
             .timer,
             => unreachable,
+
+            .accept => |*op| res: {
+                var out_fd: std.os.fd_t = undefined;
+                break :res .{
+                    .accept = switch (wasi.sock_accept(op.socket, 0, &out_fd)) {
+                        .SUCCESS => out_fd,
+                        else => |err| std.os.unexpectedErrno(err),
+                    },
+                };
+            },
 
             .read => |*op| res: {
                 const n_ = switch (op.buffer) {
@@ -516,6 +473,7 @@ pub const Completion = struct {
 
 pub const OperationType = enum {
     cancel,
+    accept,
     read,
     write,
     close,
@@ -526,6 +484,7 @@ pub const OperationType = enum {
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
     cancel: CancelError!void,
+    accept: AcceptError!std.os.fd_t,
     read: ReadError!usize,
     write: WriteError!usize,
     close: CloseError!void,
@@ -539,6 +498,10 @@ pub const Result = union(OperationType) {
 pub const Operation = union(OperationType) {
     cancel: struct {
         c: *Completion,
+    },
+
+    accept: struct {
+        socket: std.os.fd_t,
     },
 
     read: struct {
@@ -582,6 +545,10 @@ pub const CancelError = error{
 
 pub const CloseError = error{
     Unknown,
+};
+
+pub const AcceptError = Batch.Error || error{
+    Unexpected,
 };
 
 pub const ReadError = Batch.Error || std.os.ReadError ||
@@ -644,6 +611,77 @@ pub const WriteBuffer = union(enum) {
     },
 
     // TODO: future will have vectors
+};
+
+/// A batch of subscriptions to send to poll_oneoff.
+const Batch = struct {
+    pub const capacity = 1024;
+
+    /// The array of subscriptions. Sub zero is ALWAYS our loop timeout
+    /// so the actual capacity of this for user completions is (len - 1).
+    array: [capacity]wasi.subscription_t = undefined,
+
+    /// The length of the used slots in the array including our reserved slot.
+    len: usize = 1,
+
+    pub const Error = error{BatchFull};
+
+    /// Initialize a batch entry for the given completion. This will
+    /// store the batch index on the completion.
+    pub fn get(self: *Batch, c: *Completion) Error!*wasi.subscription_t {
+        if (self.len >= self.array.len) return error.BatchFull;
+        c.batch_idx = self.len;
+        self.len += 1;
+        return &self.array[c.batch_idx];
+    }
+
+    /// Put an entry back.
+    pub fn put(self: *Batch, c: *Completion) void {
+        assert(c.batch_idx > 0);
+        assert(self.len > 1);
+
+        const old_idx = c.batch_idx;
+        c.batch_idx = 0;
+        self.len -= 1;
+
+        // If we're empty then we don't worry about swapping.
+        if (self.len == 0) return;
+
+        // We're not empty so swap the value we just removed with the
+        // last one so our empty slot is always at the end.
+        self.array[old_idx] = self.array[self.len];
+        const swapped = @intToPtr(*Completion, @intCast(usize, self.array[old_idx].userdata));
+        swapped.batch_idx = old_idx;
+    }
+
+    test {
+        const testing = std.testing;
+
+        var b: Batch = .{};
+        var cs: [capacity - 1]Completion = undefined;
+        for (cs) |*c, i| {
+            c.* = .{ .op = undefined, .callback = undefined };
+            const sub = try b.get(c);
+            sub.* = .{ .userdata = @ptrToInt(c), .u = undefined };
+            try testing.expectEqual(@as(usize, i + 1), c.batch_idx);
+        }
+
+        var bad: Completion = .{ .op = undefined, .callback = undefined };
+        try testing.expectError(error.BatchFull, b.get(&bad));
+
+        // Put one back
+        const old = cs[4].batch_idx;
+        const replace = &cs[cs.len - 1];
+        b.put(&cs[4]);
+        try testing.expect(b.len == capacity - 1);
+        try testing.expect(b.array[old].userdata == @ptrToInt(replace));
+        try testing.expect(replace.batch_idx == old);
+
+        // Put it back in
+        const sub = try b.get(&cs[4]);
+        sub.* = .{ .userdata = @ptrToInt(&cs[4]), .u = undefined };
+        try testing.expect(cs[4].batch_idx == capacity - 1);
+    }
 };
 
 test "wasi: timer" {
