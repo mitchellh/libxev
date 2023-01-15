@@ -169,7 +169,7 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .other, .wasi_poll => {},
+                .io_uring, .wasi_poll => {},
                 .epoll => c.flags.dup = true,
             }
 
@@ -274,7 +274,7 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .other, .wasi_poll => {},
+                .io_uring, .wasi_poll => {},
                 .epoll => c.flags.dup = true,
             }
 

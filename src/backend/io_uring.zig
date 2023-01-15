@@ -668,6 +668,10 @@ pub const AcceptError = error{
     Unexpected,
 };
 
+pub const CancelError = TimerRemoveError || error{
+    Unexpected,
+};
+
 pub const CloseError = error{
     Unexpected,
 };
