@@ -203,6 +203,21 @@ pub const Loop = struct {
                 break :res null;
             },
 
+            .shutdown => |v| res: {
+                const how: wasi.sdflags_t = switch (v.how) {
+                    .both => wasi.SHUT.WR | wasi.SHUT.RD,
+                    .recv => wasi.SHUT.RD,
+                    .send => wasi.SHUT.WR,
+                };
+
+                break :res .{
+                    .shutdown = switch (wasi.sock_shutdown(v.socket, how)) {
+                        .SUCCESS => {},
+                        else => |err| std.os.unexpectedErrno(err),
+                    },
+                };
+            },
+
             .close => |v| res: {
                 std.os.close(v.fd);
                 break :res .{ .close = {} };
@@ -416,6 +431,7 @@ pub const Completion = struct {
             },
 
             .close,
+            .shutdown,
             .cancel,
             .timer,
             => unreachable,
@@ -429,6 +445,7 @@ pub const Completion = struct {
             // This should never happen because we always do these synchronously
             // or in another location.
             .close,
+            .shutdown,
             .cancel,
             .timer,
             => unreachable,
@@ -476,6 +493,7 @@ pub const OperationType = enum {
     accept,
     read,
     write,
+    shutdown,
     close,
     timer,
 };
@@ -487,6 +505,7 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.fd_t,
     read: ReadError!usize,
     write: WriteError!usize,
+    shutdown: ShutdownError!void,
     close: CloseError!void,
     timer: TimerError!TimerTrigger,
 };
@@ -501,7 +520,7 @@ pub const Operation = union(OperationType) {
     },
 
     accept: struct {
-        socket: std.os.fd_t,
+        socket: std.os.socket_t,
     },
 
     read: struct {
@@ -512,6 +531,11 @@ pub const Operation = union(OperationType) {
     write: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
+    },
+
+    shutdown: struct {
+        socket: std.os.socket_t,
+        how: std.os.ShutdownHow = .both,
     },
 
     close: struct {
@@ -548,6 +572,10 @@ pub const CloseError = error{
 };
 
 pub const AcceptError = Batch.Error || error{
+    Unexpected,
+};
+
+pub const ShutdownError = error{
     Unexpected,
 };
 
