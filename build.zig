@@ -13,9 +13,15 @@ pub fn build(b: *std.build.Builder) !void {
 
     const bench_install = b.option(
         bool,
-        "install-bench",
+        "bench",
         "Install the benchmark binaries to zig-out/bench",
-    ) orelse true;
+    ) orelse (mode == .Debug);
+
+    const bench_name = b.option(
+        []const u8,
+        "bench-name",
+        "Build and install a single benchmark",
+    );
 
     // We always build our test exe as part of `zig build` so that
     // we can easily run it manually without digging through the cache.
@@ -32,7 +38,7 @@ pub fn build(b: *std.build.Builder) !void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests_run.step);
 
-    _ = try benchTargets(b, target, mode, bench_install);
+    _ = try benchTargets(b, target, mode, bench_install, bench_name);
 }
 
 fn benchTargets(
@@ -40,6 +46,7 @@ fn benchTargets(
     target: std.zig.CrossTarget,
     mode: std.builtin.Mode,
     install: bool,
+    install_name: ?[]const u8,
 ) !std.StringHashMap(*LibExeObjStep) {
     _ = mode;
 
@@ -63,6 +70,11 @@ fn benchTargets(
             c_dir_path,
             entry.name,
         });
+
+        // If we have specified a specific name, only install that one.
+        if (install_name) |n| {
+            if (!std.mem.eql(u8, n, name)) continue;
+        }
 
         // Executable builder.
         const c_exe = b.addExecutable(name, path);
