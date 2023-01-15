@@ -5,6 +5,77 @@ const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
 
+/// A batch of subscriptions to send to poll_oneoff.
+const Batch = struct {
+    pub const capacity = 1024;
+
+    /// The array of subscriptions. Sub zero is ALWAYS our loop timeout
+    /// so the actual capacity of this for user completions is (len - 1).
+    array: [capacity]wasi.subscription_t = undefined,
+
+    /// The length of the used slots in the array including our reserved slot.
+    len: usize = 1,
+
+    pub const Error = error{BatchFull};
+
+    /// Initialize a batch entry for the given completion. This will
+    /// store the batch index on the completion.
+    pub fn get(self: *Batch, c: *Completion) Error!*wasi.subscription_t {
+        if (self.len >= self.array.len) return error.BatchFull;
+        c.batch_idx = self.len;
+        self.len += 1;
+        return &self.array[c.batch_idx];
+    }
+
+    /// Put an entry back.
+    pub fn put(self: *Batch, c: *Completion) void {
+        assert(c.batch_idx > 0);
+        assert(self.len > 1);
+
+        const old_idx = c.batch_idx;
+        c.batch_idx = 0;
+        self.len -= 1;
+
+        // If we're empty then we don't worry about swapping.
+        if (self.len == 0) return;
+
+        // We're not empty so swap the value we just removed with the
+        // last one so our empty slot is always at the end.
+        self.array[old_idx] = self.array[self.len];
+        const swapped = @intToPtr(*Completion, @intCast(usize, self.array[old_idx].userdata));
+        swapped.batch_idx = old_idx;
+    }
+
+    test {
+        const testing = std.testing;
+
+        var b: Batch = .{};
+        var cs: [capacity - 1]Completion = undefined;
+        for (cs) |*c, i| {
+            c.* = .{ .op = undefined, .callback = undefined };
+            const sub = try b.get(c);
+            sub.* = .{ .userdata = @ptrToInt(c), .u = undefined };
+            try testing.expectEqual(@as(usize, i + 1), c.batch_idx);
+        }
+
+        var bad: Completion = .{ .op = undefined, .callback = undefined };
+        try testing.expectError(error.BatchFull, b.get(&bad));
+
+        // Put one back
+        const old = cs[4].batch_idx;
+        const replace = &cs[cs.len - 1];
+        b.put(&cs[4]);
+        try testing.expect(b.len == capacity - 1);
+        try testing.expect(b.array[old].userdata == @ptrToInt(replace));
+        try testing.expect(replace.batch_idx == old);
+
+        // Put it back in
+        const sub = try b.get(&cs[4]);
+        sub.* = .{ .userdata = @ptrToInt(&cs[4]), .u = undefined };
+        try testing.expect(cs[4].batch_idx == capacity - 1);
+    }
+};
+
 pub const Loop = struct {
     const TimerHeap = heap.IntrusiveHeap(Timer, void, Timer.less);
 
@@ -16,14 +87,13 @@ pub const Loop = struct {
     submissions: IntrusiveQueue(Completion) = .{},
 
     /// Batch of subscriptions to send to poll.
-    batch: [1024]wasi.subscription_t = undefined,
+    batch: Batch = .{},
 
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
 
     pub fn init(entries: u13) !Loop {
         _ = entries;
-
         return .{};
     }
 
@@ -102,18 +172,64 @@ pub const Loop = struct {
                     }
                 }
 
-                // Determine our next timeout based on the timers
-                if (wait_rem > 0) timeout: {
-                    // If we have a timer, we want to set the timeout to our next
-                    // timer value. If we have no timer, we wait forever.
-                    const t = self.timers.peek() orelse break :timeout;
+                // Setup our timeout. If we have nothing to wait for then
+                // we just set an expiring timer so that we still poll but it
+                // will return ASAP.
+                const timeout: wasi.timestamp_t = if (wait_rem == 0) now else timeout: {
+                    const t: *const Timer = self.timers.peek() orelse &.{ .next = now };
+                    break :timeout t.next;
+                };
+                self.batch.array[0] = .{
+                    .userdata = 0,
+                    .u = .{
+                        .tag = wasi.EVENTTYPE_CLOCK,
+                        .u = .{
+                            .clock = .{
+                                .id = @bitCast(u32, std.os.CLOCK.MONOTONIC),
+                                .timeout = timeout,
+                                .precision = 1 * std.time.ns_per_ms,
+                                .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
+                            },
+                        },
+                    },
+                };
 
-                    // Determine the time in milliseconds.
-                    const timeout = t.next -| now;
-                    _ = timeout;
+                // Build our batch of subscriptions and poll
+                var events: [Batch.capacity]wasi.event_t = undefined;
+                const subs = self.batch.array[0..self.batch.len];
+                assert(events.len >= subs.len);
+                var n: usize = 0;
+                switch (wasi.poll_oneoff(&subs[0], &events[0], subs.len, &n)) {
+                    .SUCCESS => {},
+                    else => |err| return std.os.unexpectedErrno(err),
                 }
 
-                const n = 0;
+                // Poll!
+                for (events[0..n]) |ev| {
+                    // A system event
+                    if (ev.userdata == 0) continue;
+
+                    const c = @intToPtr(*Completion, @intCast(usize, ev.userdata));
+
+                    // We assume disarm since this is the safest time to access
+                    // the completion. It makes rearms slightly more expensive
+                    // but not by very much.
+                    c.flags.state = .dead;
+                    self.batch.put(c);
+                    self.active -= 1;
+
+                    const res = c.perform();
+                    const action = c.callback(c.userdata, self, c, res);
+                    switch (action) {
+                        // We disarm by default
+                        .disarm => {},
+
+                        // Rearm we just restart it. We use start instead of
+                        // add because then it'll become immediately available
+                        // if we loop again.
+                        .rearm => self.start(c),
+                    }
+                }
 
                 if (wait == 0) break;
                 wait_rem -|= n;
@@ -138,6 +254,12 @@ pub const Loop = struct {
 
                 // We always run timers
                 break :res .{ .cancel = {} };
+            },
+
+            .read => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .read = err };
+                sub.* = completion.subscription();
+                break :res null;
             },
 
             .timer => |*v| res: {
@@ -289,6 +411,9 @@ pub const Completion = struct {
     /// Intrusive queue field
     next: ?*Completion = null,
 
+    /// Index in the batch array.
+    batch_idx: usize = 0,
+
     const State = enum(u3) {
         /// completion is not part of any loop
         dead = 0,
@@ -305,10 +430,55 @@ pub const Completion = struct {
         /// completion is being performed and callback invoked
         in_progress = 4,
     };
+
+    fn subscription(self: *Completion) wasi.subscription_t {
+        return switch (self.op) {
+            .read => |v| .{
+                .userdata = @ptrToInt(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .u = .{
+                        .fd_read = .{
+                            .fd = v.fd,
+                        },
+                    },
+                },
+            },
+
+            .cancel, .timer => unreachable,
+        };
+    }
+
+    /// Perform the operation associated with this completion. This will
+    /// perform the full blocking operation for the completion.
+    fn perform(self: *Completion) Result {
+        return switch (self.op) {
+            // This should never happen because we always do these synchronously
+            // or in another location.
+            .cancel,
+            .timer,
+            => unreachable,
+
+            .read => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| std.os.read(op.fd, v),
+                    .array => |*v| std.os.read(op.fd, v),
+                };
+
+                break :res .{
+                    .read = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
+            },
+        };
+    }
 };
 
 pub const OperationType = enum {
     cancel,
+    read,
     timer,
 };
 
@@ -316,6 +486,7 @@ pub const OperationType = enum {
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
     cancel: CancelError!void,
+    read: ReadError!usize,
     timer: TimerError!TimerTrigger,
 };
 
@@ -326,6 +497,11 @@ pub const Result = union(OperationType) {
 pub const Operation = union(OperationType) {
     cancel: struct {
         c: *Completion,
+    },
+
+    read: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
     },
 
     timer: Timer,
@@ -353,6 +529,12 @@ pub const CancelError = error{
     InvalidOp,
 };
 
+pub const ReadError = Batch.Error || std.os.ReadError ||
+    error{
+    EOF,
+    Unknown,
+};
+
 pub const TimerError = error{
     Unexpected,
 };
@@ -366,6 +548,42 @@ pub const TimerTrigger = enum {
 
     /// Unused
     request,
+};
+
+/// ReadBuffer are the various options for reading.
+pub const ReadBuffer = union(enum) {
+    /// Read into this slice.
+    slice: []u8,
+
+    /// Read into this array, just set this to undefined and it will
+    /// be populated up to the size of the array. This is an option because
+    /// the other union members force a specific size anyways so this lets us
+    /// use the other size in the union to support small reads without worrying
+    /// about buffer allocation.
+    ///
+    /// To know the size read you have to use the return value of the
+    /// read operations (i.e. recv).
+    ///
+    /// Note that the union at the time of this writing could accomodate a
+    /// much larger fixed size array here but we want to retain flexiblity
+    /// for future fields.
+    array: [32]u8,
+
+    // TODO: future will have vectors
+};
+
+/// WriteBuffer are the various options for writing.
+pub const WriteBuffer = union(enum) {
+    /// Write from this buffer.
+    slice: []const u8,
+
+    /// Write from this array. See ReadBuffer.array for why we support this.
+    array: struct {
+        array: [32]u8,
+        len: usize,
+    },
+
+    // TODO: future will have vectors
 };
 
 test "wasi: timer" {
@@ -536,4 +754,74 @@ test "wasi: canceling a completed operation" {
     try loop.run(.until_done);
     try testing.expect(called);
     try testing.expect(trigger.? == .expiration);
+}
+
+test "wasi: file" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(16);
+    defer loop.deinit();
+
+    // Create a file
+    const path = "zig-cache/wasi-test-file.txt";
+    const dir = std.fs.cwd();
+    // We can't use dir.createFile yet: https://github.com/ziglang/zig/issues/14324
+    const f = f: {
+        const w = wasi;
+        var oflags = w.O.CREAT | w.O.TRUNC;
+        var base: w.rights_t = w.RIGHT.FD_WRITE |
+            w.RIGHT.FD_READ |
+            w.RIGHT.FD_DATASYNC |
+            w.RIGHT.FD_SEEK |
+            w.RIGHT.FD_TELL |
+            w.RIGHT.FD_FDSTAT_SET_FLAGS |
+            w.RIGHT.FD_SYNC |
+            w.RIGHT.FD_ALLOCATE |
+            w.RIGHT.FD_ADVISE |
+            w.RIGHT.FD_FILESTAT_SET_TIMES |
+            w.RIGHT.FD_FILESTAT_SET_SIZE |
+            w.RIGHT.FD_FILESTAT_GET |
+            w.RIGHT.POLL_FD_READWRITE;
+        var fdflags: w.fdflags_t = w.FDFLAG.SYNC | w.FDFLAG.RSYNC | w.FDFLAG.DSYNC;
+        const fd = try std.os.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags);
+        break :f std.fs.File{ .handle = fd };
+    };
+    defer dir.deleteFile(path) catch unreachable;
+    defer f.close();
+
+    // Start a reader
+    var read_buf: [128]u8 = undefined;
+    var read_len: ?usize = null;
+    var c_read: xev.Completion = .{
+        .op = .{
+            .read = .{
+                .fd = f.handle,
+                .buffer = .{ .slice = &read_buf },
+            },
+        },
+
+        .userdata = &read_len,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*?usize, @alignCast(@alignOf(?usize), ud.?));
+                ptr.* = r.read catch |err| switch (err) {
+                    error.EOF => 0,
+                    else => unreachable,
+                };
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_read);
+
+    // Tick. The reader should NOT read because we are blocked with no data.
+    try loop.run(.until_done);
+    try testing.expect(read_len.? == 0);
 }

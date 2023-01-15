@@ -66,8 +66,8 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const Loop = T.Loop;
         pub const Completion = T.Completion;
         pub const Result = T.Result;
-        // pub const ReadBuffer = T.ReadBuffer;
-        // pub const WriteBuffer = T.WriteBuffer;
+        pub const ReadBuffer = T.ReadBuffer;
+        pub const WriteBuffer = T.WriteBuffer;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
 
