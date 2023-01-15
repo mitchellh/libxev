@@ -20,6 +20,8 @@ pub fn TCP(comptime xev: type) type {
         /// the family is used, the actual address has no impact on the created
         /// resource.
         pub fn init(addr: std.net.Address) !Self {
+            if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
+
             return .{
                 .socket = try os.socket(
                     addr.any.family,
@@ -38,6 +40,8 @@ pub fn TCP(comptime xev: type) type {
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
+            if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
+
             try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
             try os.bind(self.socket, &addr.any, addr.getOsSockLen());
         }
@@ -45,6 +49,8 @@ pub fn TCP(comptime xev: type) type {
         /// Listen for connections on the socket. This puts the socket into passive
         /// listening mode. Connections must still be accepted one at a time.
         pub fn listen(self: Self, backlog: u31) !void {
+            if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
+
             try os.listen(self.socket, backlog);
         }
 
@@ -89,7 +95,7 @@ pub fn TCP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .other, .wasi_poll => {},
+                .io_uring, .wasi_poll => {},
                 .epoll => c.flags.dup = true,
             }
 
@@ -112,6 +118,8 @@ pub fn TCP(comptime xev: type) type {
                 r: ConnectError!void,
             ) xev.CallbackAction,
         ) void {
+            if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
+
             c.* = .{
                 .op = .{
                     .connect = .{
@@ -283,7 +291,7 @@ pub fn TCP(comptime xev: type) type {
 
                     // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
-                        .io_uring, .other, .wasi_poll => {},
+                        .io_uring, .wasi_poll => {},
                         .epoll => c.flags.dup = true,
                     }
 
@@ -342,7 +350,7 @@ pub fn TCP(comptime xev: type) type {
 
                     // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
-                        .io_uring, .other, .wasi_poll => {},
+                        .io_uring, .wasi_poll => {},
                         .epoll => c.flags.dup = true,
                     }
 
@@ -359,6 +367,9 @@ pub fn TCP(comptime xev: type) type {
         pub const WriteError = xev.WriteError;
 
         test "TCP: accept/connect/send/recv/close" {
+            // We have no way to get a socket in WASI from a WASI context.
+            if (xev.backend == .wasi_poll) return error.SkipZigTest;
+
             const testing = std.testing;
 
             var loop = try xev.Loop.init(16);

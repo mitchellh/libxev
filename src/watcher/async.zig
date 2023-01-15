@@ -5,6 +5,16 @@ const assert = std.debug.assert;
 const os = std.os;
 
 pub fn Async(comptime xev: type) type {
+    switch (xev.backend) {
+        // Supported
+        .io_uring,
+        .epoll,
+        => {},
+
+        // Not supported
+        .wasi_poll => return struct {},
+    }
+
     return struct {
         const Self = @This();
 

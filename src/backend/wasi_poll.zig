@@ -686,6 +686,8 @@ pub const AcceptError = Batch.Error || error{
     Unexpected,
 };
 
+pub const ConnectError = error{};
+
 pub const ShutdownError = error{
     Unexpected,
 };
