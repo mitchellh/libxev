@@ -170,6 +170,9 @@ pub const Loop = struct {
                             c.flags.state = .dead;
                             self.active -= 1;
 
+                            // Lower our waiters
+                            wait_rem -|= 1;
+
                             const action = c.callback(c.userdata, self, c, .{ .async_wait = {} });
                             switch (action) {
                                 // We disarm by default
@@ -188,8 +191,12 @@ pub const Loop = struct {
                 // we just set an expiring timer so that we still poll but it
                 // will return ASAP.
                 const timeout: wasi.timestamp_t = if (wait_rem == 0) now else timeout: {
-                    // If we have a timer use that value, otherwise, wake up ASAP.
-                    const t: *const Timer = self.timers.peek() orelse break :timeout now;
+                    // If we have a timer use that value, otherwise we can afford
+                    // to sleep for awhile since we're waiting for something to
+                    // happen. We set this sleep to 60 seconds arbitrarily. On
+                    // other backends we wait indefinitely.
+                    const t: *const Timer = self.timers.peek() orelse
+                        break :timeout now + (60 * std.time.ns_per_s);
                     break :timeout t.next;
                 };
                 self.batch.array[0] = .{
