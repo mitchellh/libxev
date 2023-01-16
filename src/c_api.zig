@@ -112,6 +112,11 @@ export fn xev_timer_cancel(
 
 //-------------------------------------------------------------------
 // Sync with xev.h
+
+/// Since we can't pass the callback at comptime with C, we have to
+/// have an additional field on completions to store our callback pointer.
+/// We just tack it onto the end of the memory chunk that C programs allocate
+/// for completions.
 const Completion = extern struct {
     data: [@sizeOf(xev.Completion)]u8,
     c_callback: ?*const anyopaque,
@@ -132,7 +137,7 @@ test "c-api sizes" {
     //
     // THE MAGIC NUMBERS ARE KEPT IN SYNC WITH "include/xev.h"
     const testing = std.testing;
+    try testing.expect(@sizeOf(Completion) <= 256);
     try testing.expect(@sizeOf(xev.Loop) <= 256);
-    try testing.expect(@sizeOf(xev.Completion) <= 256);
     try testing.expect(@sizeOf(xev.Timer) <= 256);
 }
