@@ -54,20 +54,21 @@ pub fn build(b: *std.build.Builder) !void {
         static_binding_test.setTarget(target);
         static_binding_test.linkLibC();
         static_binding_test.addIncludePath("include");
-        static_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
+        static_binding_test.addCSourceFile("examples/million-timers.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" });
         static_binding_test.linkLibrary(static_lib);
+        static_binding_test.install();
 
         const static_binding_test_run = static_binding_test.run();
         test_step.dependOn(&static_binding_test_run.step);
     }
 
     // C Headers
-    // const c_header = b.addInstallFileWithDir(
-    //     .{ .path = "include/xev.h" },
-    //     .header,
-    //     "xev.h",
-    // );
-    // b.getInstallStep().dependOn(&c_header.step);
+    const c_header = b.addInstallFileWithDir(
+        .{ .path = "include/xev.h" },
+        .header,
+        "xev.h",
+    );
+    b.getInstallStep().dependOn(&c_header.step);
 }
 
 fn benchTargets(

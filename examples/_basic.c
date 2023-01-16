@@ -2,12 +2,7 @@
 #include <stdio.h>
 #include <xev.h>
 
-xev_cb_action timerCallback(
-    xev_loop* loop,
-    xev_completion* c,
-    int result,
-    void *userdata
-) {
+xev_cb_action timerCallback(xev_loop* loop, xev_completion* c, int result, void *userdata) {
     return XEV_DISARM;
 }
 

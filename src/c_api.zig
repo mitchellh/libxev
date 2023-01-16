@@ -52,7 +52,7 @@ export fn xev_timer_run(
     ) callconv(.C) xev.CallbackAction,
 ) void {
     const Callback = @TypeOf(cb);
-    const extern_c = @ptrCast(*Completion, c);
+    const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c));
     extern_c.c_callback = @ptrCast(?*const anyopaque, cb);
 
     v.run(loop, c, next_ms, anyopaque, userdata, (struct {

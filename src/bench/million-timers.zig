@@ -26,7 +26,7 @@ pub fn main() !void {
     }
 
     const before_run = try Instant.now();
-    try loop.run(.until_done);
+    //try loop.run(.until_done);
     const after_run = try Instant.now();
     const after_all = try Instant.now();
 
