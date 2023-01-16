@@ -9,7 +9,8 @@ with C APIs).
 
 ## Features
 
-**Cross-platform.** Linux (`io_uring` and `epoll`), TODO.
+**Cross-platform.** Linux (`io_uring` and `epoll`), WebAssembly + WASI
+(`poll_oneoff`, threaded and non-threaded runtimes).
 
 **[Proactor API](https://en.wikipedia.org/wiki/Proactor_pattern).** Work
 is submitted to the libxev event loop and the caller is notified of
