@@ -3,7 +3,8 @@ const builtin = @import("builtin");
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system.
-pub usingnamespace Backend.default().Api();
+const xev = Backend.default().Api();
+pub usingnamespace xev;
 //pub usingnamespace Epoll;
 
 /// System-specific interfaces. Note that they are always pub for
@@ -13,6 +14,7 @@ pub usingnamespace Backend.default().Api();
 pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
 pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
 pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
+
 /// The backend types.
 pub const Backend = enum {
     io_uring,
@@ -123,4 +125,15 @@ test {
 
         else => {},
     }
+}
+
+test "c-api sizes" {
+    // This tests the sizes that are defined in the C API. We must ensure
+    // that our main structure sizes never exceed these so that the C ABI
+    // is maintained.
+    //
+    // THE MAGIC NUMBERS ARE KEPT IN SYNC WITH "include/xev.h"
+    const testing = std.testing;
+    try testing.expect(@sizeOf(xev.Loop) <= 256);
+    try testing.expect(@sizeOf(xev.Completion) <= 256);
 }

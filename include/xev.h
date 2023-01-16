@@ -1,0 +1,35 @@
+#ifndef XEV_H
+#define XEV_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stdint.h>
+
+/* TODO(mitchellh): we should use platform detection to set the correct
+ * byte sizes here. We choose some overly large values for now so that
+ * we can retain ABI compatibility. */
+#define XEV_SIZEOF_LOOP 256
+#define XEV_SIZEOF_COMPLETION 256
+
+/* There's a ton of preprocessor directives missing here for real cross-platform
+ * compatibility. I'm going to defer to the community or future issues to help
+ * plug those holes. For now, we get some stuff working we can test! */
+
+/* Opaque types. These types have a size defined so that they can be
+ * statically allocated but they are not to be accessed. */
+typedef struct { uint8_t data[XEV_SIZEOF_LOOP]; } xev_loop;
+typedef struct { uint8_t data[XEV_SIZEOF_COMPLETION]; } xev_completion;
+
+/* Documentation for functions can be found in man pages or online. I
+ * purposely do not add docs to the header so that you can quickly scan
+ * all exported functions. */
+int xev_loop_init(xev_loop* loop, uint32_t queue_size);
+void xev_loop_deinit(xev_loop* loop);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* XEV_H */

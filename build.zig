@@ -15,7 +15,7 @@ pub fn build(b: *std.build.Builder) !void {
         bool,
         "bench",
         "Install the benchmark binaries to zig-out/bench",
-    ) orelse (mode == .Debug);
+    ) orelse false;
 
     const bench_name = b.option(
         []const u8,
@@ -38,7 +38,36 @@ pub fn build(b: *std.build.Builder) !void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests_run.step);
 
+    // Benchmarks
     _ = try benchTargets(b, target, mode, bench_install, bench_name);
+
+    // Static C lib
+    {
+        const static_lib = b.addStaticLibrary("xev", "src/c_api.zig");
+        static_lib.setBuildMode(mode);
+        static_lib.setTarget(target);
+        static_lib.install();
+        b.default_step.dependOn(&static_lib.step);
+
+        const static_binding_test = b.addExecutable("static-binding", null);
+        static_binding_test.setBuildMode(mode);
+        static_binding_test.setTarget(target);
+        static_binding_test.linkLibC();
+        static_binding_test.addIncludePath("include");
+        static_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
+        static_binding_test.linkLibrary(static_lib);
+
+        const static_binding_test_run = static_binding_test.run();
+        test_step.dependOn(&static_binding_test_run.step);
+    }
+
+    // C Headers
+    // const c_header = b.addInstallFileWithDir(
+    //     .{ .path = "include/xev.h" },
+    //     .header,
+    //     "xev.h",
+    // );
+    // b.getInstallStep().dependOn(&c_header.step);
 }
 
 fn benchTargets(
