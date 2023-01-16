@@ -26,7 +26,7 @@ pub fn main() !void {
     }
 
     const before_run = try Instant.now();
-    //try loop.run(.until_done);
+    try loop.run(.until_done);
     const after_run = try Instant.now();
     const after_all = try Instant.now();
 
@@ -36,7 +36,9 @@ pub fn main() !void {
     std.log.info("{d:.2} seconds cleanup", .{@intToFloat(f64, after_all.since(after_run)) / 1e9});
 }
 
-pub const log_level: std.log.Level = .info;
+pub const std_options = struct {
+    pub const log_level: std.log.Level = .info;
+};
 
 var timer_callback_count: usize = 0;
 
