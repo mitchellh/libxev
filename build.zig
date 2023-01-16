@@ -47,9 +47,10 @@ pub fn build(b: *std.build.Builder) !void {
         static_lib.setBuildMode(mode);
         static_lib.setTarget(target);
         static_lib.install();
+        static_lib.linkLibC();
         b.default_step.dependOn(&static_lib.step);
 
-        const static_binding_test = b.addExecutable("static-binding", null);
+        const static_binding_test = b.addExecutable("static-binding-test", null);
         static_binding_test.setBuildMode(mode);
         static_binding_test.setTarget(target);
         static_binding_test.linkLibC();

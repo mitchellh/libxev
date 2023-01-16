@@ -1,5 +1,4 @@
 // C version of the million-timers benchmark.
-#include <assert.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -31,13 +30,16 @@ int main(void) {
   uint64_t after_all;
   int timeout;
   int i;
+  int err;
 
   timers = malloc(NUM_TIMERS * sizeof(timers[0]));
   completions = malloc(NUM_TIMERS * sizeof(completions[0]));
-  assert(timers != NULL);
 
-  assert(xev_loop_init(&loop, 4096) == 0);
-  timeout = 0;
+  if ((err = xev_loop_init(&loop, 4096)) != 0) {
+      fprintf(stderr, "xev_loop_init failure\n");
+      return 1;
+  }
+  timeout = 1;
 
   before_all = hrtime();
   for (i = 0; i < NUM_TIMERS; i++) {
@@ -47,11 +49,11 @@ int main(void) {
   }
 
   before_run = hrtime();
-  //xev_loop_run(&loop, XEV_RUN_UNTIL_DONE);
+  xev_loop_run(&loop, XEV_RUN_UNTIL_DONE);
   after_run = hrtime();
   after_all = hrtime();
 
-  //assert(timer_cb_called == NUM_TIMERS);
+  if (timer_cb_called != NUM_TIMERS) return 1;
   free(timers);
   free(completions);
 
