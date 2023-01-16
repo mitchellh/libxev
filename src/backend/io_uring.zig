@@ -17,17 +17,23 @@ pub const Loop = struct {
     /// Our queue of completed completions where the callback hasn't been called.
     completions: IntrusiveQueue(Completion) = .{},
 
+    /// Cached time
+    now: std.os.timespec = undefined,
+
     /// Initialize the event loop. "entries" is the maximum number of
     /// submissions that can be queued at one time. The number of completions
     /// always matches the number of entries so the memory allocated will be
     /// 2x entries (plus the basic loop overhead).
     pub fn init(entries: u13) !Loop {
-        return .{
+        var result: Loop = .{
             // TODO(mitchellh): add an init_advanced function or something
             // for people using the io_uring API directly to be able to set
             // the flags for this.
             .ring = try linux.IO_Uring.init(entries, 0),
         };
+        result.update_now();
+
+        return result;
     }
 
     pub fn deinit(self: *Loop) void {
@@ -48,11 +54,16 @@ pub const Loop = struct {
             self.submissions.empty();
     }
 
+    /// Update the cached time.
+    pub fn update_now(self: *Loop) void {
+        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.now) catch {};
+    }
+
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
         // TODO: make configurable
-        const busy_wait = 0; //20_000;
+        const busy_wait = 0;
 
         // If we have no queued submissions then we do the wait as part
         // of the submit call, because then we can do exactly once syscall
@@ -64,6 +75,9 @@ pub const Loop = struct {
             // anyways so we always just do non-waiting ones.
             _ = try self.submit();
         }
+
+        // We always update our concept of "now"
+        self.update_now();
 
         // During some real world testing, I found that the overhead of
         // io_uring waits (GETEVENTS) under heavy load is higher than busy
@@ -125,14 +139,10 @@ pub const Loop = struct {
         comptime cb: xev.Callback,
     ) void {
         // Get the timestamp of the absolute time that we'll execute this timer.
-        const next_ts = next_ts: {
-            var now: std.os.timespec = undefined;
-            std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
-            break :next_ts .{
-                .tv_sec = now.tv_sec,
-                // TODO: overflow handling
-                .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
-            };
+        const next_ts: std.os.timespec = .{
+            .tv_sec = self.now.tv_sec,
+            // TODO: overflow handling
+            .tv_nsec = self.now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
         };
 
         c.* = .{

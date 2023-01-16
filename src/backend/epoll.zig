@@ -26,12 +26,18 @@ pub const Loop = struct {
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
 
+    /// Cached time
+    now: std.os.timespec,
+
     pub fn init(entries: u13) !Loop {
         _ = entries;
 
-        return .{
+        var res: Loop = .{
             .fd = try std.os.epoll_create1(std.os.O.CLOEXEC),
+            .now = undefined,
         };
+        res.update_now();
+        return res;
     }
 
     pub fn deinit(self: *Loop) void {
@@ -88,6 +94,11 @@ pub const Loop = struct {
         self.deletions.push(completion);
     }
 
+    /// Update the cached time.
+    pub fn update_now(self: *Loop) void {
+        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.now) catch {};
+    }
+
     /// Add a timer to the loop. The timer will initially execute in "next_ms"
     /// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
     /// zero then the timer is oneshot. If "next_ms" is zero then the timer will
@@ -101,14 +112,10 @@ pub const Loop = struct {
         comptime cb: xev.Callback,
     ) void {
         // Get the timestamp of the absolute time that we'll execute this timer.
-        const next_ts = next_ts: {
-            var now: std.os.timespec = undefined;
-            std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now) catch unreachable;
-            break :next_ts .{
-                .tv_sec = now.tv_sec,
-                // TODO: overflow handling
-                .tv_nsec = now.tv_nsec + (@intCast(isize, next_ms) * std.time.ns_per_ms),
-            };
+        const next_ts: std.os.timespec = .{
+            .tv_sec = self.now.tv_sec,
+            // TODO: overflow handling
+            .tv_nsec = self.now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
         };
 
         c.* = .{
@@ -145,103 +152,107 @@ pub const Loop = struct {
             self.stop(c);
         }
 
+        // If we have no active handles then we return no matter what.
+        if (self.active == 0) {
+            // We still have to update our concept of "now".
+            self.update_now();
+            return;
+        }
+
         // Wait and process events. We only do this if we have any active.
-        if (self.active > 0) {
-            var events: [1024]linux.epoll_event = undefined;
-            var wait_rem = @intCast(usize, wait);
-            while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
-                var now: std.os.timespec = undefined;
-                try std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &now);
-                const now_timer: Operation.Timer = .{ .next = now };
+        var events: [1024]linux.epoll_event = undefined;
+        var wait_rem = @intCast(usize, wait);
+        while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
+            self.update_now();
+            const now_timer: Operation.Timer = .{ .next = self.now };
 
-                // Run our expired timers
-                while (self.timers.peek()) |t| {
-                    if (!Operation.Timer.less({}, t, &now_timer)) break;
+            // Run our expired timers
+            while (self.timers.peek()) |t| {
+                if (!Operation.Timer.less({}, t, &now_timer)) break;
 
-                    // Remove the timer
-                    assert(self.timers.deleteMin().? == t);
+                // Remove the timer
+                assert(self.timers.deleteMin().? == t);
 
-                    // Mark completion as done
-                    const c = t.c;
-                    c.flags.state = .dead;
-                    self.active -= 1;
+                // Mark completion as done
+                const c = t.c;
+                c.flags.state = .dead;
+                self.active -= 1;
 
-                    // Lower our remaining count
-                    wait_rem -|= 1;
+                // Lower our remaining count
+                wait_rem -|= 1;
 
-                    // Invoke
-                    const action = c.callback(c.userdata, self, c, .{
-                        .timer = .expiration,
-                    });
-                    switch (action) {
-                        .disarm => {},
-                        .rearm => self.start(c),
-                    }
+                // Invoke
+                const action = c.callback(c.userdata, self, c, .{
+                    .timer = .expiration,
+                });
+                switch (action) {
+                    .disarm => {},
+                    .rearm => self.start(c),
                 }
-
-                // Determine our next timeout based on the timers
-                const timeout: i32 = if (wait_rem == 0) 0 else timeout: {
-                    // If we have a timer, we want to set the timeout to our next
-                    // timer value. If we have no timer, we wait forever.
-                    const t = self.timers.peek() orelse break :timeout -1;
-
-                    // Determine the time in milliseconds.
-                    const ms_now = @intCast(u64, now.tv_sec) * std.time.ms_per_s +
-                        @intCast(u64, now.tv_nsec) / std.time.ns_per_ms;
-                    const ms_next = @intCast(u64, t.next.tv_sec) * std.time.ms_per_s +
-                        @intCast(u64, t.next.tv_nsec) / std.time.ns_per_ms;
-                    break :timeout @intCast(i32, ms_next -| ms_now);
-                };
-
-                const n = std.os.epoll_wait(self.fd, &events, timeout);
-                if (n < 0) {
-                    switch (std.os.errno(n)) {
-                        .INTR => continue,
-                        else => |err| return std.os.unexpectedErrno(err),
-                    }
-                }
-
-                // Process all our events and invoke their completion handlers
-                for (events[0..n]) |ev| {
-                    const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
-
-                    // We get the fd and mark this as in progress we can properly
-                    // clean this up late.r
-                    const fd = if (c.flags.dup) c.flags.dup_fd else c.fd();
-                    const close_dup = c.flags.dup;
-                    c.flags.state = .dead;
-
-                    const res = c.perform();
-                    const action = c.callback(c.userdata, self, c, res);
-                    switch (action) {
-                        .disarm => {
-                            // We can't use self.stop because we can't trust
-                            // that c is still a valid pointer.
-                            if (fd) |v| {
-                                std.os.epoll_ctl(
-                                    self.fd,
-                                    linux.EPOLL.CTL_DEL,
-                                    v,
-                                    null,
-                                ) catch unreachable;
-
-                                if (close_dup) {
-                                    std.os.close(v);
-                                }
-                            }
-
-                            self.active -= 1;
-                        },
-
-                        // For epoll, epoll remains armed by default. We have to
-                        // reset the state, that is all.
-                        .rearm => c.flags.state = .active,
-                    }
-                }
-
-                if (wait == 0) break;
-                wait_rem -|= n;
             }
+
+            // Determine our next timeout based on the timers
+            const timeout: i32 = if (wait_rem == 0) 0 else timeout: {
+                // If we have a timer, we want to set the timeout to our next
+                // timer value. If we have no timer, we wait forever.
+                const t = self.timers.peek() orelse break :timeout -1;
+
+                // Determine the time in milliseconds.
+                const ms_now = @intCast(u64, self.now.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, self.now.tv_nsec) / std.time.ns_per_ms;
+                const ms_next = @intCast(u64, t.next.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, t.next.tv_nsec) / std.time.ns_per_ms;
+                break :timeout @intCast(i32, ms_next -| ms_now);
+            };
+
+            const n = std.os.epoll_wait(self.fd, &events, timeout);
+            if (n < 0) {
+                switch (std.os.errno(n)) {
+                    .INTR => continue,
+                    else => |err| return std.os.unexpectedErrno(err),
+                }
+            }
+
+            // Process all our events and invoke their completion handlers
+            for (events[0..n]) |ev| {
+                const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
+
+                // We get the fd and mark this as in progress we can properly
+                // clean this up late.r
+                const fd = if (c.flags.dup) c.flags.dup_fd else c.fd();
+                const close_dup = c.flags.dup;
+                c.flags.state = .dead;
+
+                const res = c.perform();
+                const action = c.callback(c.userdata, self, c, res);
+                switch (action) {
+                    .disarm => {
+                        // We can't use self.stop because we can't trust
+                        // that c is still a valid pointer.
+                        if (fd) |v| {
+                            std.os.epoll_ctl(
+                                self.fd,
+                                linux.EPOLL.CTL_DEL,
+                                v,
+                                null,
+                            ) catch unreachable;
+
+                            if (close_dup) {
+                                std.os.close(v);
+                            }
+                        }
+
+                        self.active -= 1;
+                    },
+
+                    // For epoll, epoll remains armed by default. We have to
+                    // reset the state, that is all.
+                    .rearm => c.flags.state = .active,
+                }
+            }
+
+            if (wait == 0) break;
+            wait_rem -|= n;
         }
     }
 
