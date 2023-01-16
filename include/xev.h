@@ -43,6 +43,7 @@ int xev_loop_run(xev_loop* loop, xev_run_mode mode);
 int xev_timer_init(xev_watcher *w);
 void xev_timer_deinit(xev_watcher *w);
 void xev_timer_run(xev_watcher *w, xev_loop* loop, xev_completion* c, uint64_t next_ms, void* userdata, xev_cb_action* cb);
+void xev_timer_cancel(xev_watcher *w, xev_loop* loop, xev_completion* c, xev_completion* c_cancel, void* userdata, xev_cb_action* cb);
 
 #ifdef __cplusplus
 }
