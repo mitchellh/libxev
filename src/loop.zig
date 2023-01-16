@@ -8,29 +8,29 @@ const xev = @import("main.zig");
 /// The loop run mode -- all backends are required to support this in some way.
 /// Backends may provide backend-specific APIs that behave slightly differently
 /// or in a more configurable way.
-pub const RunMode = enum {
+pub const RunMode = enum(c_int) {
     /// Run the event loop once. If there are no blocking operations ready,
     /// return immediately.
-    no_wait,
+    no_wait = 0,
 
     /// Run the event loop once, waiting for at least one blocking operation
     /// to complete.
-    once,
+    once = 1,
 
     /// Run the event loop until it is "done". "Doneness" is defined as
     /// there being no more completions that are active.
-    until_done,
+    until_done = 2,
 };
 
 /// The result type for callbacks. This should be used by all loop
 /// implementations and higher level abstractions in order to control
 /// what to do after the loop completes.
-pub const CallbackAction = enum {
+pub const CallbackAction = enum(c_int) {
     /// The request is complete and is not repeated. For example, a read
     /// callback only fires once and is no longer watched for reads. You
     /// can always free memory associated with the completion prior to
     /// returning this.
-    disarm,
+    disarm = 0,
 
     /// Requeue the same operation request with the same parameters
     /// with the event loop. This makes it easy to repeat a read, timer,
@@ -41,5 +41,5 @@ pub const CallbackAction = enum {
     ///
     /// The completion is reused so it is not safe to use the same completion
     /// for anything else.
-    rearm,
+    rearm = 1,
 };

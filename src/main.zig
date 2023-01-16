@@ -110,6 +110,9 @@ test {
     _ = @import("heap.zig");
     _ = @import("queue.zig");
 
+    // Test the C API
+    if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
+
     // OS-specific tests
     switch (builtin.os.tag) {
         .linux => {
@@ -125,15 +128,4 @@ test {
 
         else => {},
     }
-}
-
-test "c-api sizes" {
-    // This tests the sizes that are defined in the C API. We must ensure
-    // that our main structure sizes never exceed these so that the C ABI
-    // is maintained.
-    //
-    // THE MAGIC NUMBERS ARE KEPT IN SYNC WITH "include/xev.h"
-    const testing = std.testing;
-    try testing.expect(@sizeOf(xev.Loop) <= 256);
-    try testing.expect(@sizeOf(xev.Completion) <= 256);
 }
