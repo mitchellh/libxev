@@ -1,4 +1,4 @@
-// C version of the million-timers benchmark.
+// libuv million-timers benchmark ported to libxev
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
