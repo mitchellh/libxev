@@ -40,10 +40,15 @@ typedef enum {
 int xev_loop_init(xev_loop* loop, uint32_t queue_size);
 void xev_loop_deinit(xev_loop* loop);
 int xev_loop_run(xev_loop* loop, xev_run_mode mode);
+
 int xev_timer_init(xev_watcher *w);
 void xev_timer_deinit(xev_watcher *w);
-void xev_timer_run(xev_watcher *w, xev_loop* loop, xev_completion* c, uint64_t next_ms, void* userdata, xev_cb_action* cb);
-void xev_timer_cancel(xev_watcher *w, xev_loop* loop, xev_completion* c, xev_completion* c_cancel, void* userdata, xev_cb_action* cb);
+void xev_timer_run(xev_watcher *w, xev_loop* loop, xev_completion* c, uint64_t next_ms, void* userdata, xev_timer_cb* cb);
+void xev_timer_cancel(xev_watcher *w, xev_loop* loop, xev_completion* c, xev_completion* c_cancel, void* userdata, xev_timer_cb* cb);
+
+int xev_async_init(xev_watcher *w, xev_completion *c);
+int xev_async_notify(xev_watcher *w, xev_loop* loop);
+void xev_async_wait(xev_watcher *w, xev_loop* loop, void* userdata, xev_timer_cb* cb);
 
 #ifdef __cplusplus
 }

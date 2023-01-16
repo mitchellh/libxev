@@ -1,5 +1,6 @@
 const std = @import("std");
 const LibExeObjStep = std.build.LibExeObjStep;
+const ScdocStep = @import("src/build/ScdocStep.zig");
 
 /// Use this with addPackage in your project.
 pub const pkg = std.build.Pkg{
@@ -10,6 +11,17 @@ pub const pkg = std.build.Pkg{
 pub fn build(b: *std.build.Builder) !void {
     const target = b.standardTargetOptions(.{});
     const mode = b.standardReleaseOptions();
+
+    const man_pages = b.option(
+        bool,
+        "man-pages",
+        "Set to true to build man pages. Requires scdoc. Defaults to true if scdoc is found.",
+    ) orelse if (b.findProgram(&[_][]const u8{"scdoc"}, &[_][]const u8{})) |_|
+        true
+    else |err| switch (err) {
+        error.FileNotFound => false,
+        else => return err,
+    };
 
     const bench_install = b.option(
         bool,
@@ -70,6 +82,11 @@ pub fn build(b: *std.build.Builder) !void {
         "xev.h",
     );
     b.getInstallStep().dependOn(&c_header.step);
+
+    if (man_pages) {
+        const scdoc_step = ScdocStep.create(b);
+        try scdoc_step.install();
+    }
 }
 
 fn benchTargets(
