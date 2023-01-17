@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
-const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
+const queue = @import("../queue.zig");
 const xev = @import("../main.zig").IO_Uring;
 
 pub const Loop = struct {
@@ -12,10 +12,10 @@ pub const Loop = struct {
     active: usize = 0,
 
     /// Our queue of submissions that failed to enqueue.
-    submissions: IntrusiveQueue(Completion) = .{},
+    submissions: queue.Intrusive(Completion) = .{},
 
     /// Our queue of completed completions where the callback hasn't been called.
-    completions: IntrusiveQueue(Completion) = .{},
+    completions: queue.Intrusive(Completion) = .{},
 
     /// Cached time
     now: std.os.timespec = undefined,

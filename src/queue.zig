@@ -11,7 +11,7 @@ const assert = std.debug.assert;
 /// management to the caller: the data structure implementation doesn't need
 /// to allocate "nodes" to contain each element. Instead, the caller provides
 /// the element and how its allocated is up to them.
-pub fn IntrusiveQueue(comptime T: type) type {
+pub fn Intrusive(comptime T: type) type {
     return struct {
         const Self = @This();
 
@@ -60,7 +60,7 @@ pub fn IntrusiveQueue(comptime T: type) type {
     };
 }
 
-test IntrusiveQueue {
+test Intrusive {
     const testing = std.testing;
 
     // Types
@@ -68,7 +68,7 @@ test IntrusiveQueue {
         const Self = @This();
         next: ?*Self = null,
     };
-    const Queue = IntrusiveQueue(Elem);
+    const Queue = Intrusive(Elem);
     var q: Queue = .{};
     try testing.expect(q.empty());
 

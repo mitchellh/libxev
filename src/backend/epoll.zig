@@ -1,14 +1,14 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
-const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
+const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const main = @import("../main.zig");
 const xev = main.Epoll;
 const ThreadPool = main.ThreadPool;
 
 pub const Loop = struct {
-    const TimerHeap = heap.IntrusiveHeap(Operation.Timer, void, Operation.Timer.less);
+    const TimerHeap = heap.Intrusive(Operation.Timer, void, Operation.Timer.less);
 
     fd: std.os.fd_t,
 
@@ -17,13 +17,13 @@ pub const Loop = struct {
     active: usize = 0,
 
     /// Our queue of submissions that we want to enqueue on the next tick.
-    submissions: IntrusiveQueue(Completion) = .{},
+    submissions: queue.Intrusive(Completion) = .{},
 
     /// The queue for completions to delete from the epoll fd.
-    deletions: IntrusiveQueue(Completion) = .{},
+    deletions: queue.Intrusive(Completion) = .{},
 
     /// The queue for completions representing cancellation requests.
-    cancellations: IntrusiveQueue(Completion) = .{},
+    cancellations: queue.Intrusive(Completion) = .{},
 
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
@@ -786,7 +786,7 @@ pub const Operation = union(OperationType) {
         next: std.os.linux.kernel_timespec,
 
         /// Internal heap fields.
-        heap: heap.IntrusiveHeapField(Timer) = .{},
+        heap: heap.IntrusiveField(Timer) = .{},
 
         /// We point back to completion for now. When issue[1] is fixed,
         /// we can juse use that from our heap fields.

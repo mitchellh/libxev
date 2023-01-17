@@ -21,7 +21,7 @@ const assert = std.debug.assert;
 ///
 /// [1]: https://en.wikipedia.org/wiki/Pairing_heap
 /// [2]: https://www.boost.org/doc/libs/1_64_0/doc/html/intrusive/intrusive_vs_nontrusive.html
-pub fn IntrusiveHeap(
+pub fn Intrusive(
     comptime T: type,
     comptime Context: type,
     comptime less: *const fn (ctx: Context, a: *T, b: *T) bool,
@@ -172,7 +172,7 @@ pub fn IntrusiveHeap(
 
 /// The state that is required for IntrusiveHeap element types. This
 /// should be set as the "heap" field in the type T.
-pub fn IntrusiveHeapField(comptime T: type) type {
+pub fn IntrusiveField(comptime T: type) type {
     return struct {
         child: ?*T = null,
         prev: ?*T = null,
@@ -191,10 +191,10 @@ test "heap" {
     const Elem = struct {
         const Self = @This();
         value: usize = 0,
-        heap: IntrusiveHeapField(Self) = .{},
+        heap: IntrusiveField(Self) = .{},
     };
 
-    const Heap = IntrusiveHeap(Elem, void, (struct {
+    const Heap = Intrusive(Elem, void, (struct {
         fn less(ctx: void, a: *Elem, b: *Elem) bool {
             _ = ctx;
             return a.value < b.value;
@@ -229,10 +229,10 @@ test "heap remove root" {
     const Elem = struct {
         const Self = @This();
         value: usize = 0,
-        heap: IntrusiveHeapField(Self) = .{},
+        heap: IntrusiveField(Self) = .{},
     };
 
-    const Heap = IntrusiveHeap(Elem, void, (struct {
+    const Heap = Intrusive(Elem, void, (struct {
         fn less(ctx: void, a: *Elem, b: *Elem) bool {
             _ = ctx;
             return a.value < b.value;
@@ -256,10 +256,10 @@ test "heap remove with children" {
     const Elem = struct {
         const Self = @This();
         value: usize = 0,
-        heap: IntrusiveHeapField(Self) = .{},
+        heap: IntrusiveField(Self) = .{},
     };
 
-    const Heap = IntrusiveHeap(Elem, void, (struct {
+    const Heap = Intrusive(Elem, void, (struct {
         fn less(ctx: void, a: *Elem, b: *Elem) bool {
             _ = ctx;
             return a.value < b.value;
@@ -288,10 +288,10 @@ test "heap equal values" {
     const Elem = struct {
         const Self = @This();
         value: usize = 0,
-        heap: IntrusiveHeapField(Self) = .{},
+        heap: IntrusiveField(Self) = .{},
     };
 
-    const Heap = IntrusiveHeap(Elem, void, (struct {
+    const Heap = Intrusive(Elem, void, (struct {
         fn less(ctx: void, a: *Elem, b: *Elem) bool {
             _ = ctx;
             return a.value < b.value;
@@ -323,10 +323,10 @@ test "heap: million values" {
     const Elem = struct {
         const Self = @This();
         value: usize = 0,
-        heap: IntrusiveHeapField(Self) = .{},
+        heap: IntrusiveField(Self) = .{},
     };
 
-    const Heap = IntrusiveHeap(Elem, void, (struct {
+    const Heap = Intrusive(Elem, void, (struct {
         fn less(ctx: void, a: *Elem, b: *Elem) bool {
             _ = ctx;
             return a.value < b.value;
