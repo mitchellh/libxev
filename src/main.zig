@@ -114,6 +114,7 @@ test {
     // Tested on all platforms
     _ = @import("heap.zig");
     _ = @import("queue.zig");
+    _ = @import("queue_mpsc.zig");
     _ = ThreadPool;
 
     // Test the C API
