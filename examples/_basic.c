@@ -11,7 +11,7 @@ int main(void) {
     // value here. We can even pass around the loop by value! The loop
     // will contain all of our "completions" (watches).
     xev_loop loop;
-    if (xev_loop_init(&loop, 128) != 0) {
+    if (xev_loop_init(&loop) != 0) {
         printf("xev_loop_init failure\n");
         return 1;
     }

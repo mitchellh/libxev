@@ -35,7 +35,7 @@ int main(void) {
   timers = malloc(NUM_TIMERS * sizeof(timers[0]));
   completions = malloc(NUM_TIMERS * sizeof(completions[0]));
 
-  if ((err = xev_loop_init(&loop, 4096)) != 0) {
+  if ((err = xev_loop_init(&loop)) != 0) {
       fprintf(stderr, "xev_loop_init failure\n");
       return 1;
   }

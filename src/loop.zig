@@ -5,6 +5,15 @@ const std = @import("std");
 const assert = std.debug.assert;
 const xev = @import("main.zig");
 
+/// Common options across backends. Not all options apply to all backends.
+/// Read the doc comment for individual fields to learn what backends they
+/// apply to.
+pub const Options = struct {
+    /// The number of queued completions that can be in flight before
+    /// requiring interaction with the kernel. This only applies to io_uring.
+    entries: u32 = 256,
+};
+
 /// The loop run mode -- all backends are required to support this in some way.
 /// Backends may provide backend-specific APIs that behave slightly differently
 /// or in a more configurable way.

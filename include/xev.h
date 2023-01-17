@@ -37,7 +37,7 @@ typedef enum {
 /* Documentation for functions can be found in man pages or online. I
  * purposely do not add docs to the header so that you can quickly scan
  * all exported functions. */
-int xev_loop_init(xev_loop* loop, uint32_t queue_size);
+int xev_loop_init(xev_loop* loop);
 void xev_loop_deinit(xev_loop* loop);
 int xev_loop_run(xev_loop* loop, xev_run_mode mode);
 

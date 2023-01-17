@@ -332,7 +332,7 @@ pub fn UDP(comptime xev: type) type {
         test "UDP: read/write" {
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(16);
+            var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
             const address = try std.net.Address.parseIp4("127.0.0.1", 3131);

@@ -199,7 +199,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
         test "async" {
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(16);
+            var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
             var c_wait: xev.Completion = undefined;
@@ -232,7 +232,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
         test "async: notify first" {
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(16);
+            var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
             var c_wait: xev.Completion = undefined;

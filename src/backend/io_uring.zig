@@ -24,7 +24,10 @@ pub const Loop = struct {
     /// submissions that can be queued at one time. The number of completions
     /// always matches the number of entries so the memory allocated will be
     /// 2x entries (plus the basic loop overhead).
-    pub fn init(entries: u13) !Loop {
+    pub fn init(options: xev.Options) !Loop {
+        // TODO: overflow
+        const entries = @intCast(u13, options.entries);
+
         var result: Loop = .{
             // TODO(mitchellh): add an init_advanced function or something
             // for people using the io_uring API directly to be able to set
@@ -734,7 +737,7 @@ test "Completion size" {
 test "io_uring: timerfd" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // We'll try with a simple timerfd
@@ -780,7 +783,7 @@ test "io_uring: timerfd" {
 test "io_uring: timer" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -818,7 +821,7 @@ test "io_uring: timer" {
 test "io_uring: timer remove" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -866,7 +869,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
     const os = std.os;
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Create a TCP server socket
@@ -1091,7 +1094,7 @@ test "io_uring: sendmsg/recvmsg" {
     const os = std.os;
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Create a TCP server socket

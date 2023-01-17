@@ -216,7 +216,7 @@ pub fn File(comptime xev: type) type {
 
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(16);
+            var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
             // Create our file

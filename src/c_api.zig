@@ -11,9 +11,9 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const xev = @import("main.zig");
 
-export fn xev_loop_init(loop: *xev.Loop, entries: u32) c_int {
+export fn xev_loop_init(loop: *xev.Loop) c_int {
     // TODO: overflow
-    loop.* = xev.Loop.init(@intCast(u13, entries)) catch |err| return errorCode(err);
+    loop.* = xev.Loop.init(.{}) catch |err| return errorCode(err);
     return 0;
 }
 

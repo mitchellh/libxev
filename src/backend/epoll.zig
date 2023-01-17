@@ -29,8 +29,8 @@ pub const Loop = struct {
     /// Cached time
     now: std.os.timespec,
 
-    pub fn init(entries: u13) !Loop {
-        _ = entries;
+    pub fn init(options: xev.Options) !Loop {
+        _ = options;
 
         var res: Loop = .{
             .fd = try std.os.epoll_create1(std.os.O.CLOEXEC),
@@ -894,7 +894,7 @@ test "Completion size" {
 test "epoll: timer" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -942,7 +942,7 @@ test "epoll: timer" {
 test "epoll: timerfd" {
     const testing = std.testing;
 
-    var loop = try Loop.init(0);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // We'll try with a simple timerfd
@@ -991,7 +991,7 @@ test "epoll: socket accept/connect/send/recv/close" {
     const os = std.os;
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Create a TCP server socket
@@ -1257,7 +1257,7 @@ test "epoll: socket accept/connect/send/recv/close" {
 test "epoll: timer cancellation" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -1318,7 +1318,7 @@ test "epoll: timer cancellation" {
 test "epoll: canceling a completed operation" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
