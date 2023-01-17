@@ -329,6 +329,21 @@ pub const Loop = struct {
                 )) null else |err| .{ .read = err };
             },
 
+            .write => res: {
+                var ev: linux.epoll_event = .{
+                    .events = linux.EPOLL.OUT,
+                    .data = .{ .ptr = @ptrToInt(completion) },
+                };
+
+                const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
+                break :res if (std.os.epoll_ctl(
+                    self.fd,
+                    linux.EPOLL.CTL_ADD,
+                    fd,
+                    &ev,
+                )) null else |err| .{ .write = err };
+            },
+
             .send => res: {
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.OUT,
@@ -575,6 +590,13 @@ pub const Completion = struct {
                 };
             },
 
+            .write => |*op| .{
+                .write = switch (op.buffer) {
+                    .slice => |v| std.os.write(op.fd, v),
+                    .array => |*v| std.os.write(op.fd, v.array[0..v.len]),
+                },
+            },
+
             .send => |*op| .{
                 .send = switch (op.buffer) {
                     .slice => |v| std.os.send(op.fd, v, 0),
@@ -636,6 +658,7 @@ pub const Completion = struct {
             .connect => |v| v.socket,
             .read => |v| v.fd,
             .recv => |v| v.fd,
+            .write => |v| v.fd,
             .send => |v| v.fd,
             .sendmsg => |v| v.fd,
             .recvmsg => |v| v.fd,
@@ -653,6 +676,7 @@ pub const OperationType = enum {
     accept,
     connect,
     read,
+    write,
     send,
     recv,
     sendmsg,
@@ -669,6 +693,7 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     read: ReadError!usize,
+    write: WriteError!usize,
     send: WriteError!usize,
     recv: ReadError!usize,
     sendmsg: WriteError!usize,
@@ -703,6 +728,11 @@ pub const Operation = union(OperationType) {
     read: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
+    },
+
+    write: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
     },
 
     send: struct {
@@ -831,6 +861,7 @@ pub const ReadError = std.os.EpollCtlError ||
 };
 
 pub const WriteError = std.os.EpollCtlError ||
+    std.os.WriteError ||
     std.os.SendError ||
     std.os.SendMsgError ||
     error{
