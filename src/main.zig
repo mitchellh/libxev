@@ -110,6 +110,7 @@ test {
     // Tested on all platforms
     _ = @import("heap.zig");
     _ = @import("queue.zig");
+    _ = @import("ThreadPool.zig");
 
     // Test the C API
     if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
