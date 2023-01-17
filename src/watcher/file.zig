@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
+const main = @import("../main.zig");
 
 /// File operations.
 ///
@@ -211,12 +212,14 @@ pub fn File(comptime xev: type) type {
         test {
             // wasi: local files don't work with poll (always ready)
             if (builtin.os.tag == .wasi) return error.SkipZigTest;
-            // epoll can't read/write to regular files
             if (xev.backend == .epoll) return error.SkipZigTest;
 
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(.{});
+            var tpool = main.ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
             // Create our file

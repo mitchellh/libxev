@@ -15,6 +15,9 @@ pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
 pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
 pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
 
+/// Generic thread pool implementation.
+pub const ThreadPool = @import("ThreadPool.zig");
+
 /// The backend types.
 pub const Backend = enum {
     io_uring,
@@ -111,7 +114,7 @@ test {
     // Tested on all platforms
     _ = @import("heap.zig");
     _ = @import("queue.zig");
-    _ = @import("ThreadPool.zig");
+    _ = ThreadPool;
 
     // Test the C API
     if (builtin.os.tag != .wasi) _ = @import("c_api.zig");

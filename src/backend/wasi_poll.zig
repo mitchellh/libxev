@@ -33,8 +33,8 @@ pub const Loop = struct {
     /// bool because we know we're single threaded.
     wakeup: WakeupType = wakeup_init,
 
-    pub fn init(entries: u13) !Loop {
-        _ = entries;
+    pub fn init(options: xev.Options) !Loop {
+        _ = options;
         return .{};
     }
 
@@ -937,7 +937,7 @@ const Batch = struct {
 test "wasi: timer" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -985,7 +985,7 @@ test "wasi: timer" {
 test "wasi: timer cancellation" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -1046,7 +1046,7 @@ test "wasi: timer cancellation" {
 test "wasi: canceling a completed operation" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Add the timer
@@ -1107,7 +1107,7 @@ test "wasi: canceling a completed operation" {
 test "wasi: file" {
     const testing = std.testing;
 
-    var loop = try Loop.init(16);
+    var loop = try Loop.init(.{});
     defer loop.deinit();
 
     // Create a file

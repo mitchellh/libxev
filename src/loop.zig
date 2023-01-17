@@ -12,6 +12,14 @@ pub const Options = struct {
     /// The number of queued completions that can be in flight before
     /// requiring interaction with the kernel. This only applies to io_uring.
     entries: u32 = 256,
+
+    /// A thread pool to use for blocking operations. If the backend doesn't
+    /// need to perform any blocking operations then no threads will ever
+    /// be spawned. If the backend does need to perform blocking operations
+    /// on a thread and no thread pool is provided, the operations will simply
+    /// fail. Unless you're trying to really optimize for space, it is
+    /// recommended you provide a thread pool.
+    thread_pool: ?*xev.ThreadPool = null,
 };
 
 /// The loop run mode -- all backends are required to support this in some way.

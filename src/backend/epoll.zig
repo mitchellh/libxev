@@ -3,7 +3,9 @@ const assert = std.debug.assert;
 const linux = std.os.linux;
 const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
 const heap = @import("../heap.zig");
-const xev = @import("../main.zig").Epoll;
+const main = @import("../main.zig");
+const xev = main.Epoll;
+const ThreadPool = main.ThreadPool;
 
 pub const Loop = struct {
     const TimerHeap = heap.IntrusiveHeap(Operation.Timer, void, Operation.Timer.less);
@@ -26,14 +28,17 @@ pub const Loop = struct {
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
 
+    /// The thread pool to use for blocking operations that aren't supported
+    /// by epoll.
+    thread_pool: ?*ThreadPool,
+
     /// Cached time
     now: std.os.timespec,
 
     pub fn init(options: xev.Options) !Loop {
-        _ = options;
-
         var res: Loop = .{
             .fd = try std.os.epoll_create1(std.os.O.CLOEXEC),
+            .thread_pool = options.thread_pool,
             .now = undefined,
         };
         res.update_now();
@@ -341,7 +346,10 @@ pub const Loop = struct {
                     linux.EPOLL.CTL_ADD,
                     fd,
                     &ev,
-                )) null else |err| .{ .write = err };
+                )) null else |err| switch (err) {
+                    error.FileDescriptorIncompatibleWithEpoll => unreachable,
+                    else => .{ .write = err },
+                };
             },
 
             .send => res: {

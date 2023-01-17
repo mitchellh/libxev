@@ -76,14 +76,17 @@ const Sync = packed struct {
 /// TODO: add CPU core affinity?
 pub const Config = struct {
     stack_size: u32 = (std.Thread.SpawnConfig{}).stack_size,
-    max_threads: u32,
+    max_threads: u32 = 0,
 };
 
 /// Statically initialize the thread pool using the configuration.
 pub fn init(config: Config) ThreadPool {
     return .{
         .stack_size = std.math.max(1, config.stack_size),
-        .max_threads = std.math.max(1, config.max_threads),
+        .max_threads = if (config.max_threads > 0)
+            config.max_threads
+        else
+            @intCast(u32, std.Thread.getCpuCount() catch 1),
     };
 }
 
