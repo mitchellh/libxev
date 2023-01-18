@@ -68,6 +68,8 @@ jobs:
     # will ensure we have all our dependencies.
     - name: test
       run: nix develop -c zig build test
+    - name: test wasi
+      run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime
 
     # Run a full build to ensure that works
     # - run: nix build
