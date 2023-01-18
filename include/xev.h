@@ -10,7 +10,7 @@ extern "C" {
 /* TODO(mitchellh): we should use platform detection to set the correct
  * byte sizes here. We choose some overly large values for now so that
  * we can retain ABI compatibility. */
-#define XEV_SIZEOF_LOOP 256
+#define XEV_SIZEOF_LOOP 512
 #define XEV_SIZEOF_COMPLETION 256
 #define XEV_SIZEOF_WATCHER 256
 

@@ -83,9 +83,9 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const ShutdownError = T.ShutdownError;
         pub const WriteError = T.WriteError;
         pub const ReadError = T.ReadError;
-        //
-        // /// The high-level helper interfaces that make it easier to perform
-        // /// common tasks. These may not work with all possible Loop implementations.
+
+        /// The high-level helper interfaces that make it easier to perform
+        /// common tasks. These may not work with all possible Loop implementations.
         pub const Async = @import("watcher/async.zig").Async(Self);
         pub const TCP = @import("watcher/tcp.zig").TCP(Self);
         pub const UDP = @import("watcher/udp.zig").UDP(Self);

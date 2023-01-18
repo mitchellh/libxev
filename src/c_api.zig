@@ -137,7 +137,7 @@ test "c-api sizes" {
     //
     // THE MAGIC NUMBERS ARE KEPT IN SYNC WITH "include/xev.h"
     const testing = std.testing;
+    try testing.expect(@sizeOf(xev.Loop) <= 512);
     try testing.expect(@sizeOf(Completion) <= 256);
-    try testing.expect(@sizeOf(xev.Loop) <= 256);
     try testing.expect(@sizeOf(xev.Timer) <= 256);
 }

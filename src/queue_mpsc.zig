@@ -23,9 +23,9 @@ pub fn Intrusive(comptime T: type) type {
         const Self = @This();
 
         /// Head is the front of the queue and tail is the back of the queue.
-        head: *T = undefined,
-        tail: *T = undefined,
-        stub: T = undefined,
+        head: *T,
+        tail: *T,
+        stub: T,
 
         /// Initialize the queue. This requires a stable pointer to itself.
         /// This must be called before the queue is used concurrently.
@@ -84,7 +84,7 @@ test Intrusive {
         next: ?*Self = null,
     };
     const Queue = Intrusive(Elem);
-    var q: Queue = .{};
+    var q: Queue = undefined;
     q.init();
 
     // Elems

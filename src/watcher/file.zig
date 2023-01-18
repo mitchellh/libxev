@@ -139,10 +139,11 @@ pub fn File(comptime xev: type) type {
                         }).callback,
                     };
 
-                    // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
                         .io_uring, .wasi_poll => {},
-                        .epoll => c.flags.dup = true,
+
+                        // Epoll we must run on a threadpool
+                        .epoll => c.flags.threadpool = true,
                     }
 
                     loop.add(c);
@@ -198,10 +199,11 @@ pub fn File(comptime xev: type) type {
                         }).callback,
                     };
 
-                    // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
                         .io_uring, .wasi_poll => {},
-                        .epoll => c.flags.dup = true,
+
+                        // Epoll we must run on a threadpool
+                        .epoll => c.flags.threadpool = true,
                     }
 
                     loop.add(c);
@@ -212,7 +214,6 @@ pub fn File(comptime xev: type) type {
         test {
             // wasi: local files don't work with poll (always ready)
             if (builtin.os.tag == .wasi) return error.SkipZigTest;
-            if (xev.backend == .epoll) return error.SkipZigTest;
 
             const testing = std.testing;
 
@@ -253,10 +254,17 @@ pub fn File(comptime xev: type) type {
             // Wait for the write
             try loop.run(.until_done);
 
+            // Make sure the data is on disk
+            try f.sync();
+
+            const f2 = try std.fs.cwd().openFile(path, .{});
+            defer f2.close();
+            const file2 = try init(f2);
+
             // Read
             var read_buf: [128]u8 = undefined;
             var read_len: usize = 0;
-            file.read(&loop, &c_write, .{ .slice = &read_buf }, usize, &read_len, (struct {
+            file2.read(&loop, &c_write, .{ .slice = &read_buf }, usize, &read_len, (struct {
                 fn callback(
                     ud: ?*usize,
                     _: *xev.Loop,

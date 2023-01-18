@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const queue = @import("../queue.zig");
+const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
 const main = @import("../main.zig");
 const xev = main.Epoll;
@@ -9,8 +10,12 @@ const ThreadPool = main.ThreadPool;
 
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Operation.Timer, void, Operation.Timer.less);
+    const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);
 
     fd: std.os.fd_t,
+
+    /// True once it is initialized.
+    init: bool = false,
 
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
@@ -28,9 +33,11 @@ pub const Loop = struct {
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
 
-    /// The thread pool to use for blocking operations that aren't supported
-    /// by epoll.
+    /// The thread pool to use for blocking operations that epoll can't do.
     thread_pool: ?*ThreadPool,
+
+    /// The MPSC queue for completed completions from the thread pool.
+    thread_pool_completions: TaskCompletionQueue,
 
     /// Cached time
     now: std.os.timespec,
@@ -39,6 +46,7 @@ pub const Loop = struct {
         var res: Loop = .{
             .fd = try std.os.epoll_create1(std.os.O.CLOEXEC),
             .thread_pool = options.thread_pool,
+            .thread_pool_completions = undefined,
             .now = undefined,
         };
         res.update_now();
@@ -50,6 +58,7 @@ pub const Loop = struct {
     }
 
     /// Run the event loop. See RunMode documentation for details on modes.
+    /// Once the loop is run, the pointer MUST remain stable.
     pub fn run(self: *Loop, mode: xev.RunMode) !void {
         switch (mode) {
             .no_wait => try self.tick(0),
@@ -139,6 +148,14 @@ pub const Loop = struct {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
+        // Initialize
+        if (!self.init) {
+            self.init = true;
+            if (self.thread_pool != null) {
+                self.thread_pool_completions.init();
+            }
+        }
+
         // Submit all the submissions. We copy the submission queue so that
         // any resubmits don't cause an infinite loop.
         var queued = self.submissions;
@@ -196,11 +213,32 @@ pub const Loop = struct {
                 }
             }
 
+            // Run our completed thread pool work
+            if (self.thread_pool != null) {
+                while (self.thread_pool_completions.pop()) |c| {
+                    // Mark completion as done
+                    c.flags.state = .dead;
+                    self.active -= 1;
+
+                    // Lower our remaining count
+                    wait_rem -|= 1;
+
+                    // Invoke
+                    const action = c.callback(c.userdata, self, c, c.task_result);
+                    switch (action) {
+                        .disarm => {},
+                        .rearm => self.start(c),
+                    }
+                }
+            }
+
             // Determine our next timeout based on the timers
             const timeout: i32 = if (wait_rem == 0) 0 else timeout: {
                 // If we have a timer, we want to set the timeout to our next
                 // timer value. If we have no timer, we wait forever.
-                const t = self.timers.peek() orelse break :timeout -1;
+                // TODO: do not wait 100ms here, use an eventfd for our
+                // thread pool to wake us up.
+                const t = self.timers.peek() orelse break :timeout 100;
 
                 // Determine the time in milliseconds.
                 const ms_now = @intCast(u64, self.now.tv_sec) * std.time.ms_per_s +
@@ -261,9 +299,41 @@ pub const Loop = struct {
         }
     }
 
+    /// Shedule a completion to run on a thread.
+    fn thread_schedule(self: *Loop, c: *Completion) !void {
+        const pool = self.thread_pool orelse return error.ThreadPoolRequired;
+
+        // Setup our completion state so that thread_perform can do stuff
+        c.task_completions = &self.thread_pool_completions;
+        c.task = .{ .callback = Loop.thread_perform };
+
+        // We need to mark this completion as active before we schedule.
+        c.flags.state = .active;
+        self.active += 1;
+
+        // Schedule it, from this point forward its not safe to touch c.
+        pool.schedule(ThreadPool.Batch.from(&c.task));
+    }
+
+    /// This is the main callback for the threadpool to perform work
+    /// on completions for the loop.
+    fn thread_perform(t: *ThreadPool.Task) void {
+        const c = @fieldParentPtr(Completion, "task", t);
+
+        // Do our task
+        c.task_result = c.perform();
+
+        // Add to our completion queue
+        c.task_completions.push(c);
+    }
+
     fn start(self: *Loop, completion: *Completion) void {
         const res_: ?Result = switch (completion.op) {
             .cancel => |v| res: {
+                if (completion.flags.threadpool) {
+                    break :res .{ .cancel = error.ThreadPoolUnsupported };
+                }
+
                 // We stop immediately. We only stop if we are in the
                 // "adding" state because cancellation or any other action
                 // means we're complete already.
@@ -320,6 +390,13 @@ pub const Loop = struct {
             },
 
             .read => res: {
+                if (completion.flags.threadpool) {
+                    if (self.thread_schedule(completion)) |_|
+                        return
+                    else |err|
+                        break :res .{ .read = err };
+                }
+
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                     .data = .{ .ptr = @ptrToInt(completion) },
@@ -335,6 +412,13 @@ pub const Loop = struct {
             },
 
             .write => res: {
+                if (completion.flags.threadpool) {
+                    if (self.thread_schedule(completion)) |_|
+                        return
+                    else |err|
+                        break :res .{ .write = err };
+                }
+
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.OUT,
                     .data = .{ .ptr = @ptrToInt(completion) },
@@ -346,10 +430,7 @@ pub const Loop = struct {
                     linux.EPOLL.CTL_ADD,
                     fd,
                     &ev,
-                )) null else |err| switch (err) {
-                    error.FileDescriptorIncompatibleWithEpoll => unreachable,
-                    else => .{ .write = err },
-                };
+                )) null else |err| .{ .write = err };
             },
 
             .send => res: {
@@ -458,6 +539,10 @@ pub const Loop = struct {
             return;
         }
 
+        // If the completion was requested on a threadpool we should
+        // never reach her.
+        assert(!completion.flags.threadpool);
+
         // Mark the completion as active if we reached this point
         completion.flags.state = .active;
 
@@ -521,11 +606,21 @@ pub const Completion = struct {
     //---------------------------------------------------------------
     // Internal fields
 
+    /// If scheduled on a thread pool, this will be set. This is NOT a
+    /// reliable way to get access to the loop and shouldn't be used
+    /// except internally.
+    task: ThreadPool.Task = undefined,
+    task_completions: *Loop.TaskCompletionQueue = undefined,
+    task_result: Result = undefined,
+
     flags: packed struct {
         /// Watch state of this completion. We use this to determine whether
         /// we're active, adding, deleting, etc. This lets us add and delete
         /// multiple times before a loop tick and handle the state properly.
         state: State = .dead,
+
+        /// Schedule this onto the threadpool rather than epoll.
+        threadpool: bool = false,
 
         /// Set to true to dup the file descriptor for the operation prior
         /// to setting it up with epoll. This is a hack to make it so that
@@ -839,7 +934,12 @@ pub const WriteBuffer = union(enum) {
     // TODO: future will have vectors
 };
 
-pub const CancelError = error{};
+const ThreadPoolError = error{
+    ThreadPoolRequired,
+    ThreadPoolUnsupported,
+};
+
+pub const CancelError = ThreadPoolError || error{};
 
 pub const AcceptError = std.os.EpollCtlError || error{
     DupFailed,
@@ -859,7 +959,7 @@ pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
     Unknown,
 };
 
-pub const ReadError = std.os.EpollCtlError ||
+pub const ReadError = ThreadPoolError || std.os.EpollCtlError ||
     std.os.ReadError ||
     std.os.RecvFromError ||
     error{
@@ -868,7 +968,7 @@ pub const ReadError = std.os.EpollCtlError ||
     Unknown,
 };
 
-pub const WriteError = std.os.EpollCtlError ||
+pub const WriteError = ThreadPoolError || std.os.EpollCtlError ||
     std.os.WriteError ||
     std.os.SendError ||
     std.os.SendMsgError ||
@@ -896,7 +996,7 @@ test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 200), @sizeOf(Completion));
 }
 
 test "epoll: timer" {
