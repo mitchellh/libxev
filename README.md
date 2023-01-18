@@ -22,6 +22,13 @@ predictable and makes libxev well suited for embedded environments.
 **Timers, TCP, UDP.** High-level platform-agnostic APIs for interacting
 with timers, TCP/UDP sockets, and more.
 
+**Generic Thread Pool (Optional).** You can create a generic thread pool,
+configure its resource utilization, and use this to perform custom background
+tasks. The thread pool is used by some backends to do non-blocking tasks that
+don't have reliable non-blocking APIs (such as local file operations with
+`kqueue`). The thread pool can be shared across multiple threads and event
+loops to optimize resource utilization.
+
 **Low-level and High-Level API.** The high-level API is platform-agnostic
 but has some  opinionated behavior and limited flexibility. The high-level
 API is recommended but the low-level API is always an available escape hatch.
