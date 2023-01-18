@@ -6,6 +6,16 @@ const main = @import("../main.zig");
 
 /// File operations.
 ///
+/// These operations typically run on the event loop thread pool, rather
+/// than the core async OS APIs, because most core async OS APIs don't support
+/// async operations on regular files (with many caveats attached to that
+/// statement). This high-level abstraction will attempt to make the right
+/// decision about what to do but this should generally be used by
+/// operations that need to run on a thread pool. For operations that you're
+/// sure are better supported by core async OS APIs (such as sockets, pipes,
+/// TTYs, etc.), use a specific high-level abstraction like xev.TCP or
+/// the generic xev.Stream.
+///
 /// This is a "higher-level abstraction" in libxev. The goal of higher-level
 /// abstractions in libxev are to make it easier to use specific functionality
 /// with the event loop, but does not promise perfect flexibility or optimal
