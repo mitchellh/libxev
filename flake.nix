@@ -47,6 +47,9 @@
             wabt
             wasmtime
             wasmer
+
+            # Website
+            nodejs
           ];
         };
 
