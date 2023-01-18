@@ -79,6 +79,33 @@ pub fn build(b: *std.build.Builder) !void {
 
         const static_binding_test_run = static_binding_test.run();
         test_step.dependOn(&static_binding_test_run.step);
+
+        // Dynamic C lib. We only build this if this is the native target so we
+        // can link to libxml2 on our native system.
+        if (target.isNative()) {
+            const dynamic_lib_name = if (target.isWindows())
+                "xev.dll"
+            else
+                "xev";
+
+            const dynamic_lib = b.addSharedLibrary(dynamic_lib_name, "src/c_api.zig", .unversioned);
+            dynamic_lib.setBuildMode(mode);
+            dynamic_lib.setTarget(target);
+            dynamic_lib.install();
+            b.default_step.dependOn(&dynamic_lib.step);
+
+            const dynamic_binding_test = b.addExecutable("dynamic-binding-test", null);
+            dynamic_binding_test.setBuildMode(mode);
+            dynamic_binding_test.setTarget(target);
+            dynamic_binding_test.linkLibC();
+            dynamic_binding_test.addIncludePath("include");
+            dynamic_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
+            dynamic_binding_test.linkLibrary(dynamic_lib);
+            if (test_install) dynamic_binding_test.install();
+
+            const dynamic_binding_test_run = dynamic_binding_test.run();
+            test_step.dependOn(&dynamic_binding_test_run.step);
+        }
     }
 
     // C Headers
