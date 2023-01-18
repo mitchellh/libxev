@@ -13,6 +13,7 @@ jobs:
           x86-linux-musl,
           x86_64-linux-gnu,
           x86_64-linux-musl,
+          wasm32-wasi
 
           # TODO
           # aarch64-macos,

@@ -22,12 +22,16 @@ pub fn TCP(comptime xev: type) type {
         pub fn init(addr: std.net.Address) !Self {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
+            // On io_uring we don't use non-blocking sockets because we may
+            // just get EAGAIN over and over from completions.
+            const flags = flags: {
+                var flags: u32 = os.SOCK.STREAM | os.SOCK.CLOEXEC;
+                if (xev.backend != .io_uring) flags |= os.SOCK.NONBLOCK;
+                break :flags flags;
+            };
+
             return .{
-                .socket = try os.socket(
-                    addr.any.family,
-                    os.SOCK.NONBLOCK | os.SOCK.STREAM | os.SOCK.CLOEXEC,
-                    0,
-                ),
+                .socket = try os.socket(addr.any.family, flags, 0),
             };
         }
 
