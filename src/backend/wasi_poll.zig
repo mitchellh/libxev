@@ -2,12 +2,12 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const wasi = std.os.wasi;
-const IntrusiveQueue = @import("../queue.zig").IntrusiveQueue;
+const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
 
 pub const Loop = struct {
-    const TimerHeap = heap.IntrusiveHeap(Timer, void, Timer.less);
+    const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
     const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
     const WakeupType = if (threaded) std.atomic.Atomic(bool) else bool;
     const wakeup_init = if (threaded) .{ .value = false } else false;
@@ -17,10 +17,10 @@ pub const Loop = struct {
     active: usize = 0,
 
     /// Our queue of submissions that we want to enqueue on the next tick.
-    submissions: IntrusiveQueue(Completion) = .{},
+    submissions: queue.Intrusive(Completion) = .{},
 
     /// Our list of async waiters.
-    asyncs: IntrusiveQueue(Completion) = .{},
+    asyncs: queue.Intrusive(Completion) = .{},
 
     /// Batch of subscriptions to send to poll.
     batch: Batch = .{},
@@ -766,7 +766,7 @@ const Timer = struct {
     next: std.os.wasi.timestamp_t,
 
     /// Internal heap fields.
-    heap: heap.IntrusiveHeapField(Timer) = .{},
+    heap: heap.IntrusiveField(Timer) = .{},
 
     /// We point back to completion for now. When issue[1] is fixed,
     /// we can juse use that from our heap fields.
