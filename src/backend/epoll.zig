@@ -619,7 +619,8 @@ pub const Completion = struct {
         /// multiple times before a loop tick and handle the state properly.
         state: State = .dead,
 
-        /// Schedule this onto the threadpool rather than epoll.
+        /// Schedule this onto the threadpool rather than epoll. Not all
+        /// operations support this.
         threadpool: bool = false,
 
         /// Set to true to dup the file descriptor for the operation prior
