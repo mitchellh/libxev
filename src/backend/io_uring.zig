@@ -142,7 +142,7 @@ pub const Loop = struct {
         comptime cb: xev.Callback,
     ) void {
         // Get the timestamp of the absolute time that we'll execute this timer.
-        const next_ts: std.os.timespec = .{
+        const next_ts: std.os.linux.kernel_timespec = .{
             .tv_sec = self.now.tv_sec,
             // TODO: overflow handling
             .tv_nsec = self.now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
