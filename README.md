@@ -44,3 +44,76 @@ watcher (such as UDP sockets), then the functionality related to that
 abstraction is not compiled into your final binary at all. This lets libxev
 support optional "nice-to-have" functionality that may be considered
 "bloat" in some cases, but the end user doesn't have to pay for it.
+
+**Dependency-free.** libxev has no dependencies other than the built-in
+OS APIs at runtime. The C library depends on libc. This makes it very
+easy to cross-compile.
+
+## Documentation
+
+🚧 Documentation is a work-in-progress. 🚧
+
+Currently, documentation is available in three forms: **man pages**,
+**examples**, and **code comments.** In the future, I plan on writing detailed
+guides and API documentation in website form, but that isn't currently
+available.
+
+## Man Pages
+
+The man pages are relatively detailed! `xev(7)` will
+give you a good overview of the entire library. `xev-zig(7)` and
+`xev-c(7)` will provide overviews of the Zig and C API, respectively.
+From there, API-specifc man pages such as `xev_loop_init(3)` are
+available. This is the best documentation currently.
+
+There are multiple ways to browse the man pages. The most immediately friendly
+is to just browse the raw man page sources in the `docs/` directory in
+your web browser. The man page source is a _markdown-like_ syntax so it
+renders _okay_ in your browser via GitHub.
+
+Another approach is to run `zig build -Dman-pages` and the man pages
+will be available in `zig-out`. This requires
+[scdoc](https://git.sr.ht/~sircmpwn/scdoc)
+to be installed (this is available in most package managers).
+Once you've built the man pages, you can render them by path:
+
+```
+$ man zig-out/share/man/man7/xev.7
+```
+
+And the final approach is to install libxev via your favorite package
+manager (if and when available), which should hopefully put your man pages
+into your man path, so you can just do `man 7 xev`.
+
+## Examples
+
+There are examples available in the `examples/` folder. The examples are
+available in both C and Zig, and you can tell which one is which using
+the file extension.
+
+To build an example, use the following:
+
+```
+$ zig build -Dexample=_basic.zig
+...
+$ zig-out/bin/example-basic
+...
+```
+
+The `-Dexample` value should be the filename including the extension.
+
+## Code Comments
+
+The Zig code is well commented. If you're comfortable reading code comments
+you can find a lot of insight within them. The source is in the `src/`
+directory.
+
+# Build
+
+Build requires the installation of the latest [Zig nightly](https://ziglang.org/download/).
+**libxev has no other build dependencies.**
+
+Once installed, `zig build install` on its own will build the full library and output
+a [FHS-compatible](https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard)
+directory in `zig-out`. You can customize the output directory with the
+`--prefix` flag.
