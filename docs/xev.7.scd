@@ -134,6 +134,11 @@ A loop can be run in multiple _run modes_:
   most common run mode and is usually used to start up the "main" loop
   of a program.
 
+An event loop has to be allocated to a stable memory address (stable
+pointer) _once you have called `run`_ once. Prior to calling run, you
+can copy the loop value. However, once the loop has run any times
+(even a no wait run once), the loop pointer must remain stable.
+
 ## COMPLETIONS
 
 The `xev.Completion` (Zig) and `xev_completion` (C) types represent a
