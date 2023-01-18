@@ -35,12 +35,18 @@ pub fn build(b: *std.build.Builder) !void {
         "Build and install a single benchmark",
     );
 
+    const test_install = b.option(
+        bool,
+        "install-tests",
+        "Install the test binaries into zig-out",
+    ) orelse false;
+
     // We always build our test exe as part of `zig build` so that
     // we can easily run it manually without digging through the cache.
     const test_exe = b.addTestExe("xev-test", "src/main.zig");
     test_exe.setBuildMode(mode);
     test_exe.setTarget(target);
-    test_exe.install();
+    if (test_install) test_exe.install();
 
     // zig build test test binary and runner.
     const tests_run = b.addTestSource(pkg.source);
@@ -69,7 +75,7 @@ pub fn build(b: *std.build.Builder) !void {
         static_binding_test.addIncludePath("include");
         static_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" });
         static_binding_test.linkLibrary(static_lib);
-        static_binding_test.install();
+        if (test_install) static_binding_test.install();
 
         const static_binding_test_run = static_binding_test.run();
         test_step.dependOn(&static_binding_test_run.step);
