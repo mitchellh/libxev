@@ -329,6 +329,16 @@ pub const Loop = struct {
                     }
                 }
             },
+
+            .send => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
+            .recv => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
         };
 
         switch (action) {
@@ -418,6 +428,24 @@ pub const Completion = struct {
                 .data = 0,
                 .udata = @ptrToInt(self),
             },
+
+            .send => |v| .{
+                .ident = @intCast(usize, v.fd),
+                .filter = os.system.EVFILT_WRITE,
+                .flags = os.system.EV_ADD | os.system.EV_ENABLE,
+                .fflags = 0,
+                .data = 0,
+                .udata = @ptrToInt(self),
+            },
+
+            .recv => |v| .{
+                .ident = @intCast(usize, v.fd),
+                .filter = os.system.EVFILT_READ,
+                .flags = os.system.EV_ADD | os.system.EV_ENABLE,
+                .fflags = 0,
+                .data = 0,
+                .udata = @ptrToInt(self),
+            },
         };
     }
 
@@ -426,7 +454,7 @@ pub const Completion = struct {
     fn perform(self: *Completion) Result {
         return switch (self.op) {
             .accept => |*op| .{
-                .accept = if (std.os.accept(
+                .accept = if (os.accept(
                     op.socket,
                     &op.addr,
                     &op.addr_size,
@@ -438,7 +466,28 @@ pub const Completion = struct {
             },
 
             .connect => |*op| .{
-                .connect = if (std.os.getsockoptError(op.socket)) {} else |err| err,
+                .connect = if (os.getsockoptError(op.socket)) {} else |err| err,
+            },
+
+            .send => |*op| .{
+                .send = switch (op.buffer) {
+                    .slice => |v| os.send(op.fd, v, 0),
+                    .array => |*v| os.send(op.fd, v.array[0..v.len], 0),
+                },
+            },
+
+            .recv => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| os.recv(op.fd, v, 0),
+                    .array => |*v| os.recv(op.fd, v, 0),
+                };
+
+                break :res .{
+                    .recv = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
             },
         };
     }
@@ -451,6 +500,8 @@ pub const Completion = struct {
         return switch (c.op) {
             .accept => .{ .accept = err },
             .connect => .{ .connect = err },
+            .send => .{ .send = err },
+            .recv => .{ .recv = err },
         };
     }
 };
@@ -460,8 +511,8 @@ pub const OperationType = enum {
     connect,
     // read,
     // write,
-    // send,
-    // recv,
+    send,
+    recv,
     // sendmsg,
     // recvmsg,
     // close,
@@ -486,11 +537,23 @@ pub const Operation = union(OperationType) {
         socket: os.socket_t,
         addr: std.net.Address,
     },
+
+    send: struct {
+        fd: os.fd_t,
+        buffer: WriteBuffer,
+    },
+
+    recv: struct {
+        fd: os.fd_t,
+        buffer: ReadBuffer,
+    },
 };
 
 pub const Result = union(OperationType) {
     accept: AcceptError!os.socket_t,
     connect: ConnectError!void,
+    send: WriteError!usize,
+    recv: ReadError!usize,
 };
 
 pub const AcceptError = os.KEventError || os.AcceptError || error{
@@ -499,6 +562,58 @@ pub const AcceptError = os.KEventError || os.AcceptError || error{
 
 pub const ConnectError = os.KEventError || os.ConnectError || error{
     Unknown,
+};
+
+pub const ReadError = os.KEventError ||
+    os.ReadError ||
+    os.RecvFromError ||
+    error{
+    EOF,
+    Unknown,
+};
+
+pub const WriteError = os.KEventError ||
+    os.WriteError ||
+    os.SendError ||
+    os.SendMsgError ||
+    error{
+    Unknown,
+};
+
+/// ReadBuffer are the various options for reading.
+pub const ReadBuffer = union(enum) {
+    /// Read into this slice.
+    slice: []u8,
+
+    /// Read into this array, just set this to undefined and it will
+    /// be populated up to the size of the array. This is an option because
+    /// the other union members force a specific size anyways so this lets us
+    /// use the other size in the union to support small reads without worrying
+    /// about buffer allocation.
+    ///
+    /// To know the size read you have to use the return value of the
+    /// read operations (i.e. recv).
+    ///
+    /// Note that the union at the time of this writing could accomodate a
+    /// much larger fixed size array here but we want to retain flexiblity
+    /// for future fields.
+    array: [32]u8,
+
+    // TODO: future will have vectors
+};
+
+/// WriteBuffer are the various options for writing.
+pub const WriteBuffer = union(enum) {
+    /// Write from this buffer.
+    slice: []const u8,
+
+    /// Write from this array. See ReadBuffer.array for why we support this.
+    array: struct {
+        array: [32]u8,
+        len: usize,
+    },
+
+    // TODO: future will have vectors
 };
 
 /// Timer that is inserted into the heap.
@@ -525,7 +640,7 @@ const Timer = struct {
 };
 
 comptime {
-    if (@sizeOf(Completion) != 168) {
+    if (@sizeOf(Completion) != 184) {
         @compileLog(@sizeOf(Completion));
         unreachable;
     }
@@ -665,64 +780,64 @@ test "kqueue: socket accept/connect/send/recv/close" {
     try testing.expect(server_conn > 0);
     try testing.expect(connected);
 
-    // // Send
-    // var c_send: xev.Completion = .{
-    //     .op = .{
-    //         .send = .{
-    //             .fd = client_conn,
-    //             .buffer = .{ .slice = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 } },
-    //         },
-    //     },
-    //
-    //     .callback = (struct {
-    //         fn callback(
-    //             ud: ?*anyopaque,
-    //             l: *xev.Loop,
-    //             c: *xev.Completion,
-    //             r: xev.Result,
-    //         ) xev.CallbackAction {
-    //             _ = l;
-    //             _ = c;
-    //             _ = r.send catch unreachable;
-    //             _ = ud;
-    //             return .disarm;
-    //         }
-    //     }).callback,
-    // };
-    // loop.add(&c_send);
-    //
-    // // Receive
-    // var recv_buf: [128]u8 = undefined;
-    // var recv_len: usize = 0;
-    // var c_recv: xev.Completion = .{
-    //     .op = .{
-    //         .recv = .{
-    //             .fd = server_conn,
-    //             .buffer = .{ .slice = &recv_buf },
-    //         },
-    //     },
-    //
-    //     .userdata = &recv_len,
-    //     .callback = (struct {
-    //         fn callback(
-    //             ud: ?*anyopaque,
-    //             l: *xev.Loop,
-    //             c: *xev.Completion,
-    //             r: xev.Result,
-    //         ) xev.CallbackAction {
-    //             _ = l;
-    //             _ = c;
-    //             const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
-    //             ptr.* = r.recv catch unreachable;
-    //             return .disarm;
-    //         }
-    //     }).callback,
-    // };
-    // loop.add(&c_recv);
-    //
-    // // Wait for the send/receive
-    // try loop.run(.until_done);
-    // try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
+    // Send
+    var c_send: xev.Completion = .{
+        .op = .{
+            .send = .{
+                .fd = client_conn,
+                .buffer = .{ .slice = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 } },
+            },
+        },
+
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.send catch unreachable;
+                _ = ud;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_send);
+
+    // Receive
+    var recv_buf: [128]u8 = undefined;
+    var recv_len: usize = 0;
+    var c_recv: xev.Completion = .{
+        .op = .{
+            .recv = .{
+                .fd = server_conn,
+                .buffer = .{ .slice = &recv_buf },
+            },
+        },
+
+        .userdata = &recv_len,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                ptr.* = r.recv catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_recv);
+
+    // Wait for the send/receive
+    try loop.run(.until_done);
+    try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
     //
     // // Shutdown
     // var shutdown = false;
