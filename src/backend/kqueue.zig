@@ -10,6 +10,8 @@ const main = @import("../main.zig");
 const xev = main.Kqueue;
 const ThreadPool = main.ThreadPool;
 
+const log = std.log.scoped(.libxev_kqueue);
+
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
 
@@ -25,9 +27,15 @@ pub const Loop = struct {
     /// pending.
     submissions: queue.Intrusive(Completion) = .{},
 
+    /// The queue of cancellation requests. These will point to the
+    /// completion that we need to cancel. We don't queue the exact completion
+    /// to cancel because it may be in another queue.
+    cancellations: queue.Intrusive(Completion) = .{},
+
     /// Our queue of completed completions where the callback hasn't been
     /// called yet, but the "result" field should be set on every completion.
     /// This is used to delay completion callbacks until the next tick.
+    /// Values in the completion queue must not be in the kqueue.
     completions: queue.Intrusive(Completion) = .{},
 
     /// Heap of timers. We use heaps instead of the EVFILT_TIMER because
@@ -61,6 +69,13 @@ pub const Loop = struct {
     /// the loop is run (`run`, `tick`) or an explicit submission request
     /// is made (`submit`).
     pub fn add(self: *Loop, completion: *Completion) void {
+        // If this is a cancellation, we special case it and add it to
+        // a separate queue so we can handle them first.
+        if (completion.op == .cancel) {
+            assert(!self.start(completion, undefined));
+            return;
+        }
+
         // We just add the completion to the queue. Failures can happen
         // at submission or tick time.
         completion.flags.state = .adding;
@@ -90,12 +105,33 @@ pub const Loop = struct {
 
         while (true) {
             queue_pop: while (queued.pop()) |c| {
-                if (self.start(c, &events[events_len])) {
-                    events_len += 1;
+                switch (c.flags.state) {
+                    // If we're adding then we start the event.
+                    .adding => if (self.start(c, &events[events_len])) {
+                        events_len += 1;
+                        if (events_len >= events.len) break :queue_pop;
+                    },
 
-                    // If we fill the changelist then we need to stop
-                    // so that we can perform a submission.
-                    if (events_len >= events.len) break :queue_pop;
+                    // If we're deleting then we create a deletion event.
+                    .deleting => if (c.kevent()) |ev| {
+                        events[events_len] = ev;
+                        events[events_len].flags = os.system.EV_DELETE;
+                        events_len += 1;
+                        if (events_len >= events.len) break :queue_pop;
+                    },
+
+                    // This is set if the completion was canceled while in the
+                    // submission queue. This is a special case where we still
+                    // want to call the callback to tell it it was canceled.
+                    .dead => {
+                        //TODO
+                    },
+
+                    // Shouldn't happen if our logic is all correct.
+                    .active => log.err(
+                        "invalid state in submission queue state={}",
+                        .{c.flags.state},
+                    ),
                 }
             }
 
@@ -117,23 +153,57 @@ pub const Loop = struct {
             for (events[0..completed]) |ev| {
                 const c = @intToPtr(*Completion, @intCast(usize, ev.udata));
 
-                // If EV_ERROR is set, then submission failed for this
-                // completion. We get the syscall errorcode from data and
-                // store it.
-                if (ev.flags & os.system.EV_ERROR != 0) {
-                    c.result = c.syscall_result(@intCast(i32, ev.data));
-
-                    // We reset the state so that we know that it never
-                    // registered with kevent.
-                    c.flags.state = .adding;
+                // We handle deletions separately.
+                if (ev.flags & os.system.EV_DELETE != 0) {
+                    c.result = c.syscall_result(-1 * @intCast(i32, @enumToInt(os.system.E.CANCELED)));
+                    c.flags.state = .dead;
                 } else {
-                    // No error, means that this completion is ready to work.
-                    c.result = c.perform();
+                    // If EV_ERROR is set, then submission failed for this
+                    // completion. We get the syscall errorcode from data and
+                    // store it.
+                    if (ev.flags & os.system.EV_ERROR != 0) {
+                        c.result = c.syscall_result(@intCast(i32, ev.data));
+
+                        // We reset the state so that we know that it never
+                        // registered with kevent.
+                        c.flags.state = .adding;
+                    } else {
+                        // No error, means that this completion is ready to work.
+                        c.result = c.perform();
+                    }
                 }
 
                 assert(c.result != null);
                 self.completions.push(c);
             }
+        }
+    }
+
+    /// Process the cancellations queue. This doesn't call any callbacks
+    /// or perform any syscalls. This just shuffles state around and sets
+    /// things up for cancellation to occur.
+    fn process_cancellations(self: *Loop) void {
+        while (self.cancellations.pop()) |c| {
+            const target = c.op.cancel.c;
+            switch (target.flags.state) {
+                // If the target is dead already we do nothing.
+                .dead => {},
+
+                // If the targeting is in the process of being removed
+                // from the kqueue we do nothing because its already done.
+                .deleting => {},
+
+                // If they are in the submission queue, mark them as dead
+                // so they will never be submitted.
+                .adding => target.flags.state = .dead,
+
+                // If it is active we need to schedule the deletion.
+                .active => self.stop(target),
+            }
+
+            // We completed the cancellation.
+            c.result = .{ .cancel = {} };
+            self.completions.push(c);
         }
     }
 
@@ -158,6 +228,12 @@ pub const Loop = struct {
         var changes: usize = 0;
 
         var wait_rem = @intCast(usize, wait);
+
+        // Handle all of our cancellations first because we may be able
+        // to stop submissions from even happening if its still queued.
+        // Plus, cancellations sometimes add more to the submission queue
+        // (to remove from kqueue)
+        self.process_cancellations();
 
         // TODO(mitchellh): an optimization in the future is for the last
         // batch of submissions to return the changelist, because we can
@@ -265,14 +341,12 @@ pub const Loop = struct {
                     events[0..events.len],
                     if (timeout) |*t| t else null,
                 ) catch |err| switch (err) {
-                    // If we get ENOENT, it means that one of the changes
-                    // we were trying to delete no longer exists. Not a
-                    // problem, we just retry without the changes since
-                    // the rest should've gone through.
-                    error.EventNotFound => {
-                        changes = 0;
-                        continue;
-                    },
+                    // This should never happen because we always have
+                    // space in our event list. If I'm reading the BSD source
+                    // right (and Apple does something similar...) then ENOENT
+                    // is always put into the eventlist if there is space:
+                    // https://github.com/freebsd/freebsd-src/blob/5a4a83fd0e67a0d7787d2f3e09ef0e5552a1ffb6/sys/kern/kern_event.c#L1668
+                    error.EventNotFound => unreachable,
 
                     // Any other error is fatal
                     else => return err,
@@ -284,6 +358,11 @@ pub const Loop = struct {
 
             // Go through the completed events and queue them.
             for (events[0..completed]) |ev| {
+                // Ignore any successful deletions. This can only happen
+                // from disarms below and in that case we already processed
+                // their callback.
+                if (ev.flags & os.system.EV_DELETE != 0) continue;
+
                 // This can only be set during changelist processing so
                 // that means that this event was never actually active.
                 // Therefore, we only decrement the waiters by 1 if we
@@ -375,11 +454,19 @@ pub const Loop = struct {
             // We are a timer,
             timer: void,
 
+            // We are a cancellation
+            cancel: void,
+
             /// We have a result code from making a system call now.
             result: i32,
         };
 
         const action: StartAction = switch (c.op) {
+            .cancel => action: {
+                // Queue the cancel
+                break :action .{ .cancel = {} };
+            },
+
             .accept => action: {
                 ev.* = c.kevent().?;
                 break :action .{ .kevent = {} };
@@ -459,6 +546,15 @@ pub const Loop = struct {
                 return action == .kevent;
             },
 
+            .cancel => {
+                // We are considered an active completion.
+                self.active += 1;
+                c.flags.state = .active;
+
+                self.cancellations.push(c);
+                return false;
+            },
+
             // A result is immediately available. Queue the completion to
             // be invoked.
             .result => |result| {
@@ -467,6 +563,44 @@ pub const Loop = struct {
 
                 return false;
             },
+        }
+    }
+
+    fn stop(self: *Loop, c: *Completion) void {
+        assert(c.flags.state == .active);
+
+        // If there is a result already, then we're already in the
+        // completion queue and we can be done. Items in the completion
+        // queue can NOT be in the kqueue too.
+        if (c.result != null) return;
+
+        // If this completion has a kevent associated with it, then
+        // we must remove the kevent. We remove the kevent by adding it
+        // to the submission queue (because its the same syscall) but
+        // setting the state to deleting.
+        if (c.kevent() != null) {
+            c.flags.state = .deleting;
+            self.submissions.push(c);
+            return;
+        }
+
+        // If we have no kevent then we inspect some other ops for
+        // special behavior.
+        switch (c.op) {
+            .timer => |*v| {
+                // Remove from the heap so it never fires...
+                self.timers.remove(v);
+
+                // Add to our completions so we trigger the callback.
+                c.result = .{ .timer = .cancel };
+                self.completions.push(c);
+
+                // Note the timers state purposely remains ACTIVE so that
+                // when we process the completion we decrement the
+                // active count.
+            },
+
+            else => {},
         }
     }
 };
@@ -516,6 +650,7 @@ pub const Completion = struct {
     /// "connect" requires you to initiate the connection first.
     fn kevent(self: *Completion) ?os.Kevent {
         return switch (self.op) {
+            .cancel,
             .close,
             .timer,
             .shutdown,
@@ -563,6 +698,7 @@ pub const Completion = struct {
     /// perform the full blocking operation for the completion.
     fn perform(self: *Completion) Result {
         return switch (self.op) {
+            .cancel,
             .close,
             .timer,
             .shutdown,
@@ -662,6 +798,19 @@ pub const Completion = struct {
                     else => |err| os.unexpectedErrno(err),
                 },
             },
+
+            .cancel => .{
+                .cancel = switch (errno) {
+                    .SUCCESS => {},
+
+                    // Syscall errors should not be possible since cancel
+                    // doesn't run any syscalls.
+                    else => |err| {
+                        os.unexpectedErrno(err) catch {};
+                        unreachable;
+                    },
+                },
+            },
         };
     }
 };
@@ -678,7 +827,7 @@ pub const OperationType = enum {
     close,
     shutdown,
     timer,
-    // cancel,
+    cancel,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -718,6 +867,10 @@ pub const Operation = union(OperationType) {
     },
 
     timer: Timer,
+
+    cancel: struct {
+        c: *Completion,
+    },
 };
 
 pub const Result = union(OperationType) {
@@ -728,7 +881,10 @@ pub const Result = union(OperationType) {
     recv: ReadError!usize,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
+    cancel: CancelError!void,
 };
+
+pub const CancelError = error{};
 
 pub const AcceptError = os.KEventError || os.AcceptError || error{
     Unexpected,
@@ -889,6 +1045,128 @@ test "kqueue: timer" {
     while (!called) try loop.run(.no_wait);
     try testing.expect(called);
     try testing.expect(!called2);
+}
+
+test "kqueue: timer cancellation" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            ptr.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick and verify we're not called.
+    try loop.run(.no_wait);
+    try testing.expect(trigger == null);
+
+    // Cancel the timer
+    var called = false;
+    var c_cancel: xev.Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c1,
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
+    try testing.expect(trigger.? == .cancel);
+}
+
+test "kqueue: canceling a completed operation" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 1, &trigger, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            ptr.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick and verify we're not called.
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+
+    // Cancel the timer
+    var called = false;
+    var c_cancel: xev.Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c1,
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    // Tick
+    try loop.run(.until_done);
+    try testing.expect(called);
+    try testing.expect(trigger.? == .expiration);
 }
 
 test "kqueue: socket accept/connect/send/recv/close" {
