@@ -18,7 +18,9 @@ pub fn UDP(comptime xev: type) type {
         => {},
 
         // Not supported
-        .kqueue, .wasi_poll => return struct {},
+        .wasi_poll => return struct {},
+
+        .kqueue => @compileError("TODO"),
     }
 
     return struct {
