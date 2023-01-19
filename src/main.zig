@@ -73,27 +73,27 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const Loop = T.Loop;
         pub const Completion = T.Completion;
         pub const Result = T.Result;
-        // pub const ReadBuffer = T.ReadBuffer;
-        // pub const WriteBuffer = T.WriteBuffer;
+        pub const ReadBuffer = T.ReadBuffer;
+        pub const WriteBuffer = T.WriteBuffer;
         pub const Options = loop.Options;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
         //
         // // Error types
-        // pub const AcceptError = T.AcceptError;
-        // pub const CancelError = T.CancelError;
-        // pub const CloseError = T.CloseError;
-        // pub const ConnectError = T.ConnectError;
-        // pub const ShutdownError = T.ShutdownError;
-        // pub const WriteError = T.WriteError;
-        // pub const ReadError = T.ReadError;
+        pub const AcceptError = T.AcceptError;
+        pub const CancelError = T.CancelError;
+        pub const CloseError = T.CloseError;
+        pub const ConnectError = T.ConnectError;
+        pub const ShutdownError = T.ShutdownError;
+        pub const WriteError = T.WriteError;
+        pub const ReadError = T.ReadError;
 
         /// The high-level helper interfaces that make it easier to perform
         /// common tasks. These may not work with all possible Loop implementations.
         // pub const Async = @import("watcher/async.zig").Async(Self);
-        // pub const TCP = @import("watcher/tcp.zig").TCP(Self);
+        pub const TCP = @import("watcher/tcp.zig").TCP(Self);
         // pub const UDP = @import("watcher/udp.zig").UDP(Self);
-        // pub const Timer = @import("watcher/timer.zig").Timer(Self);
+        pub const Timer = @import("watcher/timer.zig").Timer(Self);
         // pub const File = @import("watcher/file.zig").File(Self);
 
         /// The callback of the main Loop operations. Higher level interfaces may

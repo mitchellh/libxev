@@ -15,7 +15,7 @@ pub fn Async(comptime xev: type) type {
         .wasi_poll => AsyncLoopState(xev),
 
         // TODO
-        .kqueue => struct {},
+        .kqueue => @compileError("TODO"),
     };
 }
 

@@ -123,9 +123,7 @@ pub const Loop = struct {
                     // This is set if the completion was canceled while in the
                     // submission queue. This is a special case where we still
                     // want to call the callback to tell it it was canceled.
-                    .dead => {
-                        //TODO
-                    },
+                    .dead => self.stop(c),
 
                     // Shouldn't happen if our logic is all correct.
                     .active => log.err(
@@ -567,29 +565,31 @@ pub const Loop = struct {
     }
 
     fn stop(self: *Loop, c: *Completion) void {
-        assert(c.flags.state == .active);
+        if (c.flags.state == .active) {
+            // If there is a result already, then we're already in the
+            // completion queue and we can be done. Items in the completion
+            // queue can NOT be in the kqueue too.
+            if (c.result != null) return;
 
-        // If there is a result already, then we're already in the
-        // completion queue and we can be done. Items in the completion
-        // queue can NOT be in the kqueue too.
-        if (c.result != null) return;
-
-        // If this completion has a kevent associated with it, then
-        // we must remove the kevent. We remove the kevent by adding it
-        // to the submission queue (because its the same syscall) but
-        // setting the state to deleting.
-        if (c.kevent() != null) {
-            c.flags.state = .deleting;
-            self.submissions.push(c);
-            return;
+            // If this completion has a kevent associated with it, then
+            // we must remove the kevent. We remove the kevent by adding it
+            // to the submission queue (because its the same syscall) but
+            // setting the state to deleting.
+            if (c.kevent() != null) {
+                c.flags.state = .deleting;
+                self.submissions.push(c);
+                return;
+            }
         }
 
-        // If we have no kevent then we inspect some other ops for
-        // special behavior.
+        // Inspect other operations. WARNING: the state can be ANYTHING
+        // here so per op be sure to check the state flag.
         switch (c.op) {
             .timer => |*v| {
-                // Remove from the heap so it never fires...
-                self.timers.remove(v);
+                if (c.flags.state == .active) {
+                    // Remove from the heap so it never fires...
+                    self.timers.remove(v);
+                }
 
                 // Add to our completions so we trigger the callback.
                 c.result = .{ .timer = .cancel };
