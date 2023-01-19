@@ -113,11 +113,9 @@ pub const Loop = struct {
         std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.now) catch {};
     }
 
-    /// Add a timer to the loop. The timer will initially execute in "next_ms"
-    /// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
-    /// zero then the timer is oneshot. If "next_ms" is zero then the timer will
-    /// invoke immediately (the callback will be called immediately -- as part
-    /// of this function call -- to avoid any additional system calls).
+    /// Add a timer to the loop. The timer will execute in "next_ms". This
+    /// is oneshot: the timer will not repeat. To repeat a timer, either
+    /// schedule another in your callback or return rearm from the callback.
     pub fn timer(
         self: *Loop,
         c: *Completion,

@@ -201,6 +201,37 @@ pub const Loop = struct {
             changes > 0)
         {
             self.update_now();
+            const now_timer: Timer = .{ .next = self.now };
+
+            // Run our expired timers
+            while (self.timers.peek()) |t| {
+                if (!Timer.less({}, t, &now_timer)) break;
+
+                // Remove the timer
+                assert(self.timers.deleteMin().? == t);
+
+                // Mark completion as done
+                const c = t.c;
+                c.flags.state = .dead;
+
+                // We mark it as inactive here because if we rearm below
+                // the start() function will reincrement this.
+                self.active -= 1;
+
+                // Lower our remaining count since we have processed something.
+                wait_rem -|= 1;
+
+                // Invoke
+                const action = c.callback(c.userdata, self, c, .{ .timer = .expiration });
+                switch (action) {
+                    .disarm => {},
+
+                    // We use undefined as the second param because timers
+                    // never set a kevent, and we assert false for the same
+                    // reason.
+                    .rearm => assert(!self.start(c, undefined)),
+                }
+            }
 
             // Determine our next timeout based on the timers
             const timeout: ?os.timespec = timeout: {
@@ -211,7 +242,16 @@ pub const Loop = struct {
                 const t = self.timers.peek() orelse break :timeout null;
 
                 // Determine the time in milliseconds.
-                break :timeout t.next;
+                const ms_now = @intCast(u64, self.now.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, self.now.tv_nsec) / std.time.ns_per_ms;
+                const ms_next = @intCast(u64, t.next.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, t.next.tv_nsec) / std.time.ns_per_ms;
+                const ms = ms_next -| ms_now;
+
+                break :timeout .{
+                    .tv_sec = @intCast(isize, ms / std.time.ms_per_s),
+                    .tv_nsec = @intCast(isize, ms % std.time.ms_per_s),
+                };
             };
 
             // Wait for changes. Note that we ALWAYS attempt to get completions
@@ -279,12 +319,45 @@ pub const Loop = struct {
                     .rearm => {},
                 }
             }
+
+            // If we ran through the loop once we break if we don't care.
+            if (wait == 0) break;
         }
     }
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
         os.clock_gettime(os.CLOCK.MONOTONIC, &self.now) catch {};
+    }
+
+    /// Add a timer to the loop. The timer will execute in "next_ms". This
+    /// is oneshot: the timer will not repeat. To repeat a timer, either
+    /// schedule another in your callback or return rearm from the callback.
+    pub fn timer(
+        self: *Loop,
+        c: *Completion,
+        next_ms: u64,
+        userdata: ?*anyopaque,
+        comptime cb: xev.Callback,
+    ) void {
+        // Get the timestamp of the absolute time that we'll execute this timer.
+        const next_ts: std.os.timespec = .{
+            .tv_sec = self.now.tv_sec,
+            // TODO: overflow handling
+            .tv_nsec = self.now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+        };
+
+        c.* = .{
+            .op = .{
+                .timer = .{
+                    .next = next_ts,
+                },
+            },
+            .userdata = userdata,
+            .callback = cb,
+        };
+
+        self.add(c);
     }
 
     fn done(self: *Loop) bool {
@@ -298,6 +371,9 @@ pub const Loop = struct {
         const StartAction = union(enum) {
             /// We have set the kevent out parameter
             kevent: void,
+
+            // We are a timer,
+            timer: void,
 
             /// We have a result code from making a system call now.
             result: i32,
@@ -354,19 +430,33 @@ pub const Loop = struct {
                 std.os.close(v.fd);
                 break :action .{ .result = 0 };
             },
+
+            .timer => |*v| action: {
+                // Point back to completion since we need this. In the future
+                // we want to use @fieldParentPtr but https://github.com/ziglang/zig/issues/6611
+                v.c = c;
+
+                // Insert the timer into our heap.
+                self.timers.insert(v);
+
+                // We always run timers
+                break :action .{ .timer = {} };
+            },
         };
 
         switch (action) {
-            // The completion wants to be added to the kevent list and
-            // the ev parameter has been set.
-            .kevent => {
+            .kevent,
+            .timer,
+            => {
                 // Increase our active count so we now wait for this. We
                 // assume it'll successfully queue. If it doesn't we handle
                 // that later (see submit)
                 self.active += 1;
                 c.flags.state = .active;
 
-                return true;
+                // We only return true if this is a kevent, since other
+                // actions can come in here.
+                return action == .kevent;
             },
 
             // A result is immediately available. Queue the completion to
@@ -427,6 +517,7 @@ pub const Completion = struct {
     fn kevent(self: *Completion) ?os.Kevent {
         return switch (self.op) {
             .close,
+            .timer,
             .shutdown,
             => null,
 
@@ -473,6 +564,7 @@ pub const Completion = struct {
     fn perform(self: *Completion) Result {
         return switch (self.op) {
             .close,
+            .timer,
             .shutdown,
             => unreachable,
 
@@ -562,6 +654,14 @@ pub const Completion = struct {
                     else => |err| os.unexpectedErrno(err),
                 },
             },
+
+            .timer => .{
+                .timer = switch (errno) {
+                    // Success is impossible because timers don't execute syscalls.
+                    .SUCCESS => unreachable,
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
         };
     }
 };
@@ -577,7 +677,7 @@ pub const OperationType = enum {
     // recvmsg,
     close,
     shutdown,
-    // timer,
+    timer,
     // cancel,
 };
 
@@ -616,6 +716,8 @@ pub const Operation = union(OperationType) {
     close: struct {
         fd: std.os.fd_t,
     },
+
+    timer: Timer,
 };
 
 pub const Result = union(OperationType) {
@@ -625,6 +727,7 @@ pub const Result = union(OperationType) {
     send: WriteError!usize,
     recv: ReadError!usize,
     shutdown: ShutdownError!void,
+    timer: TimerError!TimerTrigger,
 };
 
 pub const AcceptError = os.KEventError || os.AcceptError || error{
@@ -657,6 +760,21 @@ pub const ShutdownError = os.ShutdownError || error{
 
 pub const CloseError = error{
     Unexpected,
+};
+
+pub const TimerError = error{
+    Unexpected,
+};
+
+pub const TimerTrigger = enum {
+    /// Unused with epoll
+    request,
+
+    /// Timer expired.
+    expiration,
+
+    /// Timer was canceled.
+    cancel,
 };
 
 /// ReadBuffer are the various options for reading.
@@ -725,53 +843,53 @@ comptime {
     }
 }
 
-// test "kqueue: timer" {
-//     const testing = std.testing;
-//
-//     var loop = try Loop.init(.{});
-//     defer loop.deinit();
-//
-//     // Add the timer
-//     var called = false;
-//     var c1: xev.Completion = undefined;
-//     loop.timer(&c1, 1, &called, (struct {
-//         fn callback(
-//             ud: ?*anyopaque,
-//             l: *xev.Loop,
-//             _: *xev.Completion,
-//             r: xev.Result,
-//         ) xev.CallbackAction {
-//             _ = l;
-//             _ = r;
-//             const b = @ptrCast(*bool, ud.?);
-//             b.* = true;
-//             return .disarm;
-//         }
-//     }).callback);
-//
-//     // Add another timer
-//     var called2 = false;
-//     var c2: xev.Completion = undefined;
-//     loop.timer(&c2, 100_000, &called2, (struct {
-//         fn callback(
-//             ud: ?*anyopaque,
-//             l: *xev.Loop,
-//             _: *xev.Completion,
-//             r: xev.Result,
-//         ) xev.CallbackAction {
-//             _ = l;
-//             _ = r;
-//             const b = @ptrCast(*bool, ud.?);
-//             b.* = true;
-//             return .disarm;
-//         }
-//     }).callback);
-//
-//     // Tick
-//     while (!called) try loop.run(.no_wait);
-//     try testing.expect(called);
-//     try testing.expect(!called2);
-// }
+test "kqueue: timer" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c1: xev.Completion = undefined;
+    loop.timer(&c1, 1, &called, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Add another timer
+    var called2 = false;
+    var c2: xev.Completion = undefined;
+    loop.timer(&c2, 100_000, &called2, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick
+    while (!called) try loop.run(.no_wait);
+    try testing.expect(called);
+    try testing.expect(!called2);
+}
 
 test "kqueue: socket accept/connect/send/recv/close" {
     const mem = std.mem;
