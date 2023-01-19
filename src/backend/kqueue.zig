@@ -121,7 +121,7 @@ pub const Loop = struct {
                 // completion. We get the syscall errorcode from data and
                 // store it.
                 if (ev.flags & os.system.EV_ERROR != 0) {
-                    c.result = c.err_result(@intCast(i32, ev.data));
+                    c.result = c.syscall_result(@intCast(i32, ev.data));
 
                     // We reset the state so that we know that it never
                     // registered with kevent.
@@ -339,6 +339,16 @@ pub const Loop = struct {
                 ev.* = c.kevent().?;
                 break :action .{ .kevent = {} };
             },
+
+            .shutdown => |v| action: {
+                const result = os.system.shutdown(v.socket, switch (v.how) {
+                    .recv => os.SHUT.RD,
+                    .send => os.SHUT.WR,
+                    .both => os.SHUT.RDWR,
+                });
+
+                break :action .{ .result = result };
+            },
         };
 
         switch (action) {
@@ -357,7 +367,7 @@ pub const Loop = struct {
             // A result is immediately available. Queue the completion to
             // be invoked.
             .result => |result| {
-                c.result = c.err_result(result);
+                c.result = c.syscall_result(result);
                 self.completions.push(c);
 
                 return false;
@@ -411,6 +421,8 @@ pub const Completion = struct {
     /// "connect" requires you to initiate the connection first.
     fn kevent(self: *Completion) ?os.Kevent {
         return switch (self.op) {
+            .shutdown => null,
+
             .accept => |v| .{
                 .ident = @intCast(usize, v.socket),
                 .filter = os.system.EVFILT_READ,
@@ -453,6 +465,8 @@ pub const Completion = struct {
     /// perform the full blocking operation for the completion.
     fn perform(self: *Completion) Result {
         return switch (self.op) {
+            .shutdown => unreachable,
+
             .accept => |*op| .{
                 .accept = if (os.accept(
                     op.socket,
@@ -495,13 +509,43 @@ pub const Completion = struct {
     /// Returns the error result for the given result code. This is called
     /// in the situation that kqueue fails to enqueue the completion or
     /// a raw syscall fails.
-    fn err_result(c: *Completion, r: i32) Result {
-        const err = os.unexpectedErrno(os.errno(r));
+    fn syscall_result(c: *Completion, r: i32) Result {
+        const errno = os.errno(r);
         return switch (c.op) {
-            .accept => .{ .accept = err },
-            .connect => .{ .connect = err },
-            .send => .{ .send = err },
-            .recv => .{ .recv = err },
+            .accept => .{
+                .accept = switch (errno) {
+                    .SUCCESS => r,
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .connect => .{
+                .connect = switch (errno) {
+                    .SUCCESS => {},
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .send => .{
+                .send = switch (errno) {
+                    .SUCCESS => @intCast(usize, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .recv => .{
+                .recv = switch (errno) {
+                    .SUCCESS => if (r == 0) error.EOF else @intCast(usize, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .shutdown => .{
+                .shutdown = switch (errno) {
+                    .SUCCESS => {},
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
         };
     }
 };
@@ -516,7 +560,7 @@ pub const OperationType = enum {
     // sendmsg,
     // recvmsg,
     // close,
-    // shutdown,
+    shutdown,
     // timer,
     // cancel,
 };
@@ -547,6 +591,11 @@ pub const Operation = union(OperationType) {
         fd: os.fd_t,
         buffer: ReadBuffer,
     },
+
+    shutdown: struct {
+        socket: std.os.socket_t,
+        how: std.os.ShutdownHow = .both,
+    },
 };
 
 pub const Result = union(OperationType) {
@@ -554,6 +603,7 @@ pub const Result = union(OperationType) {
     connect: ConnectError!void,
     send: WriteError!usize,
     recv: ReadError!usize,
+    shutdown: ShutdownError!void,
 };
 
 pub const AcceptError = os.KEventError || os.AcceptError || error{
@@ -577,6 +627,10 @@ pub const WriteError = os.KEventError ||
     os.SendError ||
     os.SendMsgError ||
     error{
+    Unknown,
+};
+
+pub const ShutdownError = os.ShutdownError || error{
     Unknown,
 };
 
@@ -838,70 +892,70 @@ test "kqueue: socket accept/connect/send/recv/close" {
     // Wait for the send/receive
     try loop.run(.until_done);
     try testing.expectEqualSlices(u8, c_send.op.send.buffer.slice, recv_buf[0..recv_len]);
-    //
-    // // Shutdown
-    // var shutdown = false;
-    // var c_client_shutdown: xev.Completion = .{
-    //     .op = .{
-    //         .shutdown = .{
-    //             .socket = client_conn,
-    //         },
-    //     },
-    //
-    //     .userdata = &shutdown,
-    //     .callback = (struct {
-    //         fn callback(
-    //             ud: ?*anyopaque,
-    //             l: *xev.Loop,
-    //             c: *xev.Completion,
-    //             r: xev.Result,
-    //         ) xev.CallbackAction {
-    //             _ = l;
-    //             _ = c;
-    //             _ = r.shutdown catch unreachable;
-    //             const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
-    //             ptr.* = true;
-    //             return .disarm;
-    //         }
-    //     }).callback,
-    // };
-    // loop.add(&c_client_shutdown);
-    // try loop.run(.until_done);
-    // try testing.expect(shutdown);
-    //
-    // // Read should be EOF
-    // var eof: ?bool = null;
-    // c_recv = .{
-    //     .op = .{
-    //         .recv = .{
-    //             .fd = server_conn,
-    //             .buffer = .{ .slice = &recv_buf },
-    //         },
-    //     },
-    //
-    //     .userdata = &eof,
-    //     .callback = (struct {
-    //         fn callback(
-    //             ud: ?*anyopaque,
-    //             l: *xev.Loop,
-    //             c: *xev.Completion,
-    //             r: xev.Result,
-    //         ) xev.CallbackAction {
-    //             _ = l;
-    //             _ = c;
-    //             const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
-    //             ptr.* = if (r.recv) |_| false else |err| switch (err) {
-    //                 error.EOF => true,
-    //                 else => false,
-    //             };
-    //             return .disarm;
-    //         }
-    //     }).callback,
-    // };
-    // loop.add(&c_recv);
-    //
-    // try loop.run(.until_done);
-    // try testing.expect(eof.? == true);
+
+    // Shutdown
+    var shutdown = false;
+    var c_client_shutdown: xev.Completion = .{
+        .op = .{
+            .shutdown = .{
+                .socket = client_conn,
+            },
+        },
+
+        .userdata = &shutdown,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.shutdown catch unreachable;
+                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_client_shutdown);
+    try loop.run(.until_done);
+    try testing.expect(shutdown);
+
+    // Read should be EOF
+    var eof: ?bool = null;
+    c_recv = .{
+        .op = .{
+            .recv = .{
+                .fd = server_conn,
+                .buffer = .{ .slice = &recv_buf },
+            },
+        },
+
+        .userdata = &eof,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                ptr.* = if (r.recv) |_| false else |err| switch (err) {
+                    error.EOF => true,
+                    else => false,
+                };
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_recv);
+
+    try loop.run(.until_done);
+    try testing.expect(eof.? == true);
     //
     // // Close
     // var c_client_close: xev.Completion = .{
