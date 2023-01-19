@@ -13,6 +13,9 @@ pub fn Async(comptime xev: type) type {
 
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev),
+
+        // TODO
+        .kqueue => struct {},
     };
 }
 

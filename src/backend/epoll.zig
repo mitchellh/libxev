@@ -890,6 +890,7 @@ pub const Operation = union(OperationType) {
         c: *Completion = undefined,
 
         fn less(_: void, a: *const Timer, b: *const Timer) bool {
+            // TODO: overflow
             const ts_a = a.next;
             const ts_b = b.next;
             const ns_a = @intCast(u64, ts_a.tv_sec) * std.time.ns_per_s + @intCast(u64, ts_a.tv_nsec);

@@ -154,6 +154,8 @@ pub fn File(comptime xev: type) type {
 
                         // Epoll we must run on a threadpool
                         .epoll => c.flags.threadpool = true,
+
+                        .kqueue => @panic("TODO"),
                     }
 
                     loop.add(c);
@@ -214,6 +216,8 @@ pub fn File(comptime xev: type) type {
 
                         // Epoll we must run on a threadpool
                         .epoll => c.flags.threadpool = true,
+
+                        .kqueue => @panic("TODO"),
                     }
 
                     loop.add(c);

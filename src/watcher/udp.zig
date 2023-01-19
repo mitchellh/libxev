@@ -18,7 +18,7 @@ pub fn UDP(comptime xev: type) type {
         => {},
 
         // Not supported
-        .wasi_poll => return struct {},
+        .kqueue, .wasi_poll => return struct {},
     }
 
     return struct {
@@ -169,7 +169,11 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .wasi_poll => {},
+                .io_uring,
+                .kqueue,
+                .wasi_poll,
+                => {},
+
                 .epoll => c.flags.dup = true,
             }
 
@@ -274,7 +278,11 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .wasi_poll => {},
+                .io_uring,
+                .kqueue,
+                .wasi_poll,
+                => {},
+
                 .epoll => c.flags.dup = true,
             }
 

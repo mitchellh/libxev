@@ -10,7 +10,9 @@ const xev = @import("main.zig");
 /// apply to.
 pub const Options = struct {
     /// The number of queued completions that can be in flight before
-    /// requiring interaction with the kernel. This only applies to io_uring.
+    /// requiring interaction with the kernel.
+    ///
+    /// Backends: io_uring
     entries: u32 = 256,
 
     /// A thread pool to use for blocking operations. If the backend doesn't
@@ -19,6 +21,8 @@ pub const Options = struct {
     /// on a thread and no thread pool is provided, the operations will simply
     /// fail. Unless you're trying to really optimize for space, it is
     /// recommended you provide a thread pool.
+    ///
+    /// Backends: epoll, kqueue
     thread_pool: ?*xev.ThreadPool = null,
 };
 

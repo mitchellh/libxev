@@ -13,6 +13,7 @@ pub usingnamespace xev;
 /// don't use any interface it will NOT be compiled (yay!).
 pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
 pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
+pub const Kqueue = Xev(.kqueue, @import("backend/kqueue.zig"));
 pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
 
 /// Generic thread pool implementation.
@@ -22,12 +23,14 @@ pub const ThreadPool = @import("ThreadPool.zig");
 pub const Backend = enum {
     io_uring,
     epoll,
+    kqueue,
     wasi_poll,
 
     /// Returns a recommend default backend from inspecting the system.
     pub fn default() Backend {
         return @as(?Backend, switch (builtin.os.tag) {
             .linux => .io_uring,
+            .macos => .kqueue,
             .wasi => .wasi_poll,
             else => null,
         }) orelse {
@@ -41,6 +44,7 @@ pub const Backend = enum {
         return switch (self) {
             .io_uring => IO_Uring,
             .epoll => Epoll,
+            .kqueue => Kqueue,
             .wasi_poll => WasiPoll,
         };
     }
@@ -69,28 +73,28 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const Loop = T.Loop;
         pub const Completion = T.Completion;
         pub const Result = T.Result;
-        pub const ReadBuffer = T.ReadBuffer;
-        pub const WriteBuffer = T.WriteBuffer;
+        // pub const ReadBuffer = T.ReadBuffer;
+        // pub const WriteBuffer = T.WriteBuffer;
         pub const Options = loop.Options;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
-
-        // Error types
-        pub const AcceptError = T.AcceptError;
-        pub const CancelError = T.CancelError;
-        pub const CloseError = T.CloseError;
-        pub const ConnectError = T.ConnectError;
-        pub const ShutdownError = T.ShutdownError;
-        pub const WriteError = T.WriteError;
-        pub const ReadError = T.ReadError;
+        //
+        // // Error types
+        // pub const AcceptError = T.AcceptError;
+        // pub const CancelError = T.CancelError;
+        // pub const CloseError = T.CloseError;
+        // pub const ConnectError = T.ConnectError;
+        // pub const ShutdownError = T.ShutdownError;
+        // pub const WriteError = T.WriteError;
+        // pub const ReadError = T.ReadError;
 
         /// The high-level helper interfaces that make it easier to perform
         /// common tasks. These may not work with all possible Loop implementations.
-        pub const Async = @import("watcher/async.zig").Async(Self);
-        pub const TCP = @import("watcher/tcp.zig").TCP(Self);
-        pub const UDP = @import("watcher/udp.zig").UDP(Self);
-        pub const Timer = @import("watcher/timer.zig").Timer(Self);
-        pub const File = @import("watcher/file.zig").File(Self);
+        // pub const Async = @import("watcher/async.zig").Async(Self);
+        // pub const TCP = @import("watcher/tcp.zig").TCP(Self);
+        // pub const UDP = @import("watcher/udp.zig").UDP(Self);
+        // pub const Timer = @import("watcher/timer.zig").Timer(Self);
+        // pub const File = @import("watcher/file.zig").File(Self);
 
         /// The callback of the main Loop operations. Higher level interfaces may
         /// use a different callback mechanism.
@@ -118,7 +122,7 @@ test {
     _ = ThreadPool;
 
     // Test the C API
-    if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
+    //if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
 
     // OS-specific tests
     switch (builtin.os.tag) {
