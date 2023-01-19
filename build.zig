@@ -60,7 +60,7 @@ pub fn build(b: *std.build.Builder) !void {
     _ = try benchTargets(b, target, mode, bench_install, bench_name);
 
     // Static C lib
-    if (target.getOsTag() != .wasi and target.getOsTag() != .macos) {
+    if (target.getOsTag() != .wasi) {
         const static_lib = b.addStaticLibrary("xev", "src/c_api.zig");
         static_lib.setBuildMode(mode);
         static_lib.setTarget(target);
