@@ -739,8 +739,8 @@ pub const Completion = struct {
 
             .sendto => |*op| .{
                 .sendto = switch (op.buffer) {
-                    .slice => |v| os.sendto(op.fd, v, 0, &op.addr, @sizeOf(os.sockaddr)),
-                    .array => |*v| os.sendto(op.fd, v.array[0..v.len], 0, &op.addr, @sizeOf(os.sockaddr)),
+                    .slice => |v| os.sendto(op.fd, v, 0, &op.addr.any, op.addr.getOsSockLen()),
+                    .array => |*v| os.sendto(op.fd, v.array[0..v.len], 0, &op.addr.any, op.addr.getOsSockLen()),
                 },
             },
 
@@ -905,7 +905,7 @@ pub const Operation = union(OperationType) {
     sendto: struct {
         fd: os.fd_t,
         buffer: WriteBuffer,
-        addr: os.sockaddr = undefined,
+        addr: std.net.Address,
     },
 
     recvfrom: struct {
@@ -1054,7 +1054,7 @@ const Timer = struct {
 };
 
 comptime {
-    if (@sizeOf(Completion) != 184) {
+    if (@sizeOf(Completion) != 240) {
         @compileLog(@sizeOf(Completion));
         unreachable;
     }

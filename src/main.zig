@@ -92,7 +92,7 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         /// common tasks. These may not work with all possible Loop implementations.
         // pub const Async = @import("watcher/async.zig").Async(Self);
         pub const TCP = @import("watcher/tcp.zig").TCP(Self);
-        // pub const UDP = @import("watcher/udp.zig").UDP(Self);
+        pub const UDP = @import("watcher/udp.zig").UDP(Self);
         pub const Timer = @import("watcher/timer.zig").Timer(Self);
         // pub const File = @import("watcher/file.zig").File(Self);
 
