@@ -501,6 +501,16 @@ pub const Loop = struct {
                 break :action .{ .kevent = {} };
             },
 
+            .sendto => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
+            .recvfrom => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
             .shutdown => |v| action: {
                 const result = os.system.shutdown(v.socket, switch (v.how) {
                     .recv => os.SHUT.RD,
@@ -674,7 +684,7 @@ pub const Completion = struct {
                 .udata = @ptrToInt(self),
             },
 
-            .send => |v| .{
+            inline .send, .sendto => |v| .{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
@@ -683,7 +693,7 @@ pub const Completion = struct {
                 .udata = @ptrToInt(self),
             },
 
-            .recv => |v| .{
+            inline .recv, .recvfrom => |v| .{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
@@ -727,6 +737,13 @@ pub const Completion = struct {
                 },
             },
 
+            .sendto => |*op| .{
+                .sendto = switch (op.buffer) {
+                    .slice => |v| os.sendto(op.fd, v, 0, &op.addr, @sizeOf(os.sockaddr)),
+                    .array => |*v| os.sendto(op.fd, v.array[0..v.len], 0, &op.addr, @sizeOf(os.sockaddr)),
+                },
+            },
+
             .recv => |*op| res: {
                 const n_ = switch (op.buffer) {
                     .slice => |v| os.recv(op.fd, v, 0),
@@ -735,6 +752,20 @@ pub const Completion = struct {
 
                 break :res .{
                     .recv = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
+            },
+
+            .recvfrom => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| os.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
+                    .array => |*v| os.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
+                };
+
+                break :res .{
+                    .recvfrom = if (n_) |n|
                         if (n == 0) error.EOF else n
                     else |err|
                         err,
@@ -773,6 +804,20 @@ pub const Completion = struct {
             .recv => .{
                 .recv = switch (errno) {
                     .SUCCESS => if (r == 0) error.EOF else @intCast(usize, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .sendto => .{
+                .sendto = switch (errno) {
+                    .SUCCESS => @intCast(usize, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .recvfrom => .{
+                .recvfrom = switch (errno) {
+                    .SUCCESS => @intCast(usize, r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -822,8 +867,8 @@ pub const OperationType = enum {
     // write,
     send,
     recv,
-    // sendmsg,
-    // recvmsg,
+    sendto,
+    recvfrom,
     close,
     shutdown,
     timer,
@@ -857,6 +902,19 @@ pub const Operation = union(OperationType) {
         buffer: ReadBuffer,
     },
 
+    sendto: struct {
+        fd: os.fd_t,
+        buffer: WriteBuffer,
+        addr: os.sockaddr = undefined,
+    },
+
+    recvfrom: struct {
+        fd: os.fd_t,
+        buffer: ReadBuffer,
+        addr: os.sockaddr = undefined,
+        addr_size: os.socklen_t = @sizeOf(os.sockaddr),
+    },
+
     shutdown: struct {
         socket: std.os.socket_t,
         how: std.os.ShutdownHow = .both,
@@ -879,6 +937,8 @@ pub const Result = union(OperationType) {
     close: CloseError!void,
     send: WriteError!usize,
     recv: ReadError!usize,
+    sendto: WriteError!usize,
+    recvfrom: ReadError!usize,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
     cancel: CancelError!void,
@@ -906,6 +966,7 @@ pub const WriteError = os.KEventError ||
     os.WriteError ||
     os.SendError ||
     os.SendMsgError ||
+    os.SendToError ||
     error{
     Unexpected,
 };

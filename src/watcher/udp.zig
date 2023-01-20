@@ -15,12 +15,11 @@ pub fn UDP(comptime xev: type) type {
         // Supported
         .io_uring,
         .epoll,
+        .kqueue,
         => {},
 
         // Not supported
         .wasi_poll => return struct {},
-
-        .kqueue => @compileError("TODO"),
     }
 
     return struct {
