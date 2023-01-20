@@ -902,6 +902,9 @@ pub const Operation = union(OperationType) {
         buffer: ReadBuffer,
     },
 
+    // Note: this is making our Completion quite large. We can follow
+    // the pattern of io_uring and require another user-provided pointer
+    // here for state to move all this stuff out to a pointer.
     sendto: struct {
         fd: os.fd_t,
         buffer: WriteBuffer,
