@@ -1,6 +1,7 @@
 //! Backend to use kqueue. This is currently only tested on macOS but
 //! support for BSDs is planned (if it doesn't already work).
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
 const queue = @import("../queue.zig");
@@ -51,8 +52,12 @@ pub const Loop = struct {
     pub fn init(options: xev.Options) !Loop {
         _ = options;
 
+        // This creates a new kqueue fd
+        const fd = try os.kqueue();
+        errdefer os.close(fd);
+
         var res: Loop = .{
-            .kqueue_fd = try os.kqueue(),
+            .kqueue_fd = fd,
             .now = undefined,
         };
         res.update_now();
@@ -92,7 +97,7 @@ pub const Loop = struct {
     /// but the kqueue API doesn't provide that level of clarity.
     pub fn submit(self: *Loop) !void {
         // We try to submit as many events at once as we can.
-        var events: [256]os.Kevent = undefined;
+        var events: [256]Kevent = undefined;
         var events_len: usize = 0;
 
         // Submit all the submissions. We copy the submission queue so that
@@ -139,7 +144,7 @@ pub const Loop = struct {
 
             // Zero timeout so that kevent returns immediately.
             var timeout = std.mem.zeroes(os.timespec);
-            const completed = try os.kevent(
+            const completed = try kevent_syscall(
                 self.kqueue_fd,
                 events[0..events_len],
                 events[0..events_len],
@@ -219,7 +224,7 @@ pub const Loop = struct {
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
         // The list of events, used as both a changelist and eventlist.
-        var events: [256]os.Kevent = undefined;
+        var events: [256]Kevent = undefined;
 
         // The number of events in the events array to submit as changes
         // on repeat ticks. Used mostly for efficient disarm.
@@ -333,7 +338,7 @@ pub const Loop = struct {
             // to make a syscall to submit changes, we might as well also check
             // for done events too.
             const completed = completed: while (true) {
-                break :completed os.kevent(
+                break :completed kevent_syscall(
                     self.kqueue_fd,
                     events[0..changes],
                     events[0..events.len],
@@ -444,7 +449,7 @@ pub const Loop = struct {
 
     /// Start the completion. This returns true if the Kevent was set
     /// and should be queued.
-    fn start(self: *Loop, c: *Completion, ev: *os.Kevent) bool {
+    fn start(self: *Loop, c: *Completion, ev: *Kevent) bool {
         const StartAction = union(enum) {
             /// We have set the kevent out parameter
             kevent: void,
@@ -507,6 +512,11 @@ pub const Loop = struct {
             },
 
             .recvfrom => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
+            .machport => action: {
                 ev.* = c.kevent().?;
                 break :action .{ .kevent = {} };
             },
@@ -658,7 +668,7 @@ pub const Completion = struct {
     /// Returns a kevent for this completion, if any. Note that the
     /// kevent isn't immediately useful for all event types. For example,
     /// "connect" requires you to initiate the connection first.
-    fn kevent(self: *Completion) ?os.Kevent {
+    fn kevent(self: *Completion) ?Kevent {
         return switch (self.op) {
             .cancel,
             .close,
@@ -666,41 +676,64 @@ pub const Completion = struct {
             .shutdown,
             => null,
 
-            .accept => |v| .{
+            .accept => |v| kevent_init(.{
                 .ident = @intCast(usize, v.socket),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @ptrToInt(self),
-            },
+            }),
 
-            .connect => |v| .{
+            .connect => |v| kevent_init(.{
                 .ident = @intCast(usize, v.socket),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @ptrToInt(self),
+            }),
+
+            .machport => kevent: {
+                // We can't use |*v| above because it crahses the Zig
+                // compiler (as of 0.11.0-dev.1413). We can retry another time.
+                const v = &self.op.machport;
+                const slice: []u8 = switch (v.buffer) {
+                    .slice => |slice| slice,
+                    .array => |*arr| arr,
+                };
+
+                // The kevent below waits for a machport to have a message
+                // available AND automatically reads the message into the
+                // buffer since MACH_RCV_MSG is set.
+                break :kevent .{
+                    .ident = @intCast(usize, v.port),
+                    .filter = os.system.EVFILT_MACHPORT,
+                    .flags = os.system.EV_ADD | os.system.EV_ENABLE | os.system.EV_CLEAR,
+                    .fflags = os.system.MACH_RCV_MSG,
+                    .data = 0,
+                    .udata = @ptrToInt(self),
+                    .ext = .{ @ptrToInt(slice.ptr), slice.len },
+                };
             },
 
-            inline .send, .sendto => |v| .{
+            inline .send, .sendto => |v| kevent_init(.{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @ptrToInt(self),
-            },
+            }),
 
-            inline .recv, .recvfrom => |v| .{
+            inline .recv, .recvfrom => |v| kevent_init(.{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @ptrToInt(self),
-            },
+            }),
         };
     }
 
@@ -771,6 +804,13 @@ pub const Completion = struct {
                         err,
                 };
             },
+
+            // Our machport operation ALWAYS has MACH_RCV set so there
+            // is no operation to perform. kqueue automatically reads in
+            // the mach message into the read buffer.
+            .machport => .{
+                .machport = {},
+            },
         };
     }
 
@@ -818,6 +858,13 @@ pub const Completion = struct {
             .recvfrom => .{
                 .recvfrom = switch (errno) {
                     .SUCCESS => @intCast(usize, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .machport => .{
+                .machport = switch (errno) {
+                    .SUCCESS => {},
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -873,6 +920,7 @@ pub const OperationType = enum {
     shutdown,
     timer,
     cancel,
+    machport,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -918,6 +966,11 @@ pub const Operation = union(OperationType) {
         addr_size: os.socklen_t = @sizeOf(os.sockaddr),
     },
 
+    machport: struct {
+        port: os.system.mach_port_name_t,
+        buffer: ReadBuffer,
+    },
+
     shutdown: struct {
         socket: std.os.socket_t,
         how: std.os.ShutdownHow = .both,
@@ -942,6 +995,7 @@ pub const Result = union(OperationType) {
     recv: ReadError!usize,
     sendto: WriteError!usize,
     recvfrom: ReadError!usize,
+    machport: MachPortError!void,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
     cancel: CancelError!void,
@@ -971,6 +1025,10 @@ pub const WriteError = os.KEventError ||
     os.SendMsgError ||
     os.SendToError ||
     error{
+    Unexpected,
+};
+
+pub const MachPortError = os.KEventError || error{
     Unexpected,
 };
 
@@ -1055,6 +1113,71 @@ const Timer = struct {
         return ns_a < ns_b;
     }
 };
+
+/// Kevent is either kevent_s or kevent64_s depending on the target platform.
+/// This lets us support both Mac and non-Mac platforms.
+const Kevent = switch (builtin.os.tag) {
+    .macos => os.system.kevent64_s,
+    else => @compileError("kqueue not supported yet for target OS"),
+};
+
+/// kevent calls either kevent or kevent64 depending on the
+/// target platform.
+fn kevent_syscall(
+    kq: i32,
+    changelist: []const Kevent,
+    eventlist: []Kevent,
+    timeout: ?*const os.timespec,
+) os.KEventError!usize {
+    // Normaly Kevent? Just use the normal os.kevent call.
+    if (Kevent == os.Kevent) return try os.kevent(
+        kq,
+        changelist,
+        eventlist,
+        timeout,
+    );
+
+    // Otherwise, we have to call the kevent64 variant.
+    while (true) {
+        const rc = os.system.kevent64(
+            kq,
+            changelist.ptr,
+            std.math.cast(c_int, changelist.len) orelse return error.Overflow,
+            eventlist.ptr,
+            std.math.cast(c_int, eventlist.len) orelse return error.Overflow,
+            0,
+            timeout,
+        );
+        switch (os.errno(rc)) {
+            .SUCCESS => return @intCast(usize, rc),
+            .ACCES => return error.AccessDenied,
+            .FAULT => unreachable,
+            .BADF => unreachable, // Always a race condition.
+            .INTR => continue,
+            .INVAL => unreachable,
+            .NOENT => return error.EventNotFound,
+            .NOMEM => return error.SystemResources,
+            .SRCH => return error.ProcessNotFound,
+            else => unreachable,
+        }
+    }
+}
+
+/// kevent_init initializes a Kevent from an os.Kevent. This is used when
+/// the "ext" fields are zero.
+inline fn kevent_init(ev: os.Kevent) Kevent {
+    if (Kevent == os.Kevent) return ev;
+
+    return .{
+        .ident = ev.ident,
+        .filter = ev.filter,
+        .flags = ev.flags,
+        .fflags = ev.fflags,
+        .data = ev.data,
+        .udata = ev.udata,
+        .ext = .{ 0, 0 },
+    };
+}
 
 comptime {
     if (@sizeOf(Completion) != 240) {
@@ -1499,4 +1622,84 @@ test "kqueue: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     try testing.expect(ln == 0);
     try testing.expect(client_conn == 0);
+}
+
+test "kqueue: mach port" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Allocate the port
+    const mach_self = os.system.mach_task_self();
+    var mach_port: os.system.mach_port_name_t = undefined;
+    try testing.expectEqual(
+        os.system.KernE.SUCCESS,
+        os.system.getKernError(os.system.mach_port_allocate(
+            mach_self,
+            @enumToInt(os.system.MACH_PORT_RIGHT.RECEIVE),
+            &mach_port,
+        )),
+    );
+    defer _ = os.system.mach_port_deallocate(mach_self, mach_port);
+
+    // Add the waiter
+    var called = false;
+    var c_wait: xev.Completion = .{
+        .op = .{
+            .machport = .{
+                .port = mach_port,
+                .buffer = .{ .array = undefined },
+            },
+        },
+
+        .userdata = &called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.machport catch unreachable;
+                const b = @ptrCast(*bool, ud.?);
+                b.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_wait);
+
+    // Tick so we submit... should not call since we never sent.
+    try loop.run(.no_wait);
+    try testing.expect(!called);
+
+    // Send a message to the port
+    var msg: os.system.mach_msg_header_t = .{
+        .msgh_bits = @enumToInt(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+        .msgh_size = @sizeOf(os.system.mach_msg_header_t),
+        .msgh_remote_port = mach_port,
+        .msgh_local_port = os.system.MACH_PORT_NULL,
+        .msgh_voucher_port = undefined,
+        .msgh_id = undefined,
+    };
+    try testing.expectEqual(os.system.MachMsgE.SUCCESS, os.system.getMachMsgError(
+        os.system.mach_msg(
+            &msg,
+            os.system.MACH_SEND_MSG,
+            msg.msgh_size,
+            0,
+            os.system.MACH_PORT_NULL,
+            os.system.MACH_MSG_TIMEOUT_NONE,
+            os.system.MACH_PORT_NULL,
+        ),
+    ));
+
+    // We should receive now!
+    try loop.run(.until_done);
+    try testing.expect(called);
 }
