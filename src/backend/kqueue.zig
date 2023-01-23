@@ -187,7 +187,7 @@ pub const Loop = struct {
             const completed = try kevent_syscall(
                 self.kqueue_fd,
                 events[0..events_len],
-                events[0..0],
+                events[0..events.len],
                 &timeout,
             );
             events_len = 0;
@@ -321,26 +321,36 @@ pub const Loop = struct {
 
         // Process the completions we already have completed.
         while (self.completions.pop()) |c| {
+            // disarm_ev is the Kevent to use for disarming if the
+            // completion wants to disarm. We have to calculate this up
+            // front because c can be reused in callback.
+            const disarm_ev: ?Kevent = ev: {
+                // If we're not active then we were never part of the kqueue.
+                // If we are part of a threadpool we also never were part
+                // of the kqueue.
+                if (c.flags.state != .active or
+                    c.flags.threadpool) break :ev null;
+
+                break :ev c.kevent();
+            };
+
+            // Decrease our waiters because we are definitely processing one.
+            wait_rem -|= 1;
+
             // Completion queue items MUST have a result set.
             const action = c.callback(c.userdata, self, c, c.result.?);
             switch (action) {
                 // If we're active we have to schedule a delete. Otherwise
                 // we do nothing because we were never part of the kqueue.
-                .disarm => if (c.flags.state == .active) {
-                    // If we are part of a threadpool we never schedule
-                    // a delete because we don't put anything in the threadpool
-                    // in the kqueue.
-                    if (!c.flags.threadpool) {
-                        if (c.kevent()) |ev| {
-                            events[changes] = ev;
-                            events[changes].flags = os.system.EV_DELETE;
-                            events[changes].udata = 0;
-                            changes += 1;
-                            assert(changes <= events.len);
-                        }
+                .disarm => {
+                    if (disarm_ev) |ev| {
+                        events[changes] = ev;
+                        events[changes].flags = os.system.EV_DELETE;
+                        events[changes].udata = 0;
+                        changes += 1;
+                        assert(changes <= events.len);
                     }
 
-                    wait_rem -|= 1;
                     self.active -= 1;
                 },
 
