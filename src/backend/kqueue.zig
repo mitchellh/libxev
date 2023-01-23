@@ -1702,4 +1702,12 @@ test "kqueue: mach port" {
     // We should receive now!
     try loop.run(.until_done);
     try testing.expect(called);
+
+    // We should not receive again
+    called = false;
+    loop.add(&c_wait);
+
+    // Tick so we submit... should not call since we never sent.
+    try loop.run(.no_wait);
+    try testing.expect(!called);
 }
