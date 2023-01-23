@@ -334,6 +334,10 @@ pub const Loop = struct {
                 break :ev c.kevent();
             };
 
+            // We store whether this completion was active so we can decrement
+            // the active count later
+            const c_active = c.flags.state == .active;
+
             // Decrease our waiters because we are definitely processing one.
             wait_rem -|= 1;
 
@@ -351,7 +355,7 @@ pub const Loop = struct {
                         assert(changes <= events.len);
                     }
 
-                    self.active -= 1;
+                    if (c_active) self.active -= 1;
                 },
 
                 // Only resubmit if we aren't already active (in the queue)
@@ -511,8 +515,11 @@ pub const Loop = struct {
                         self.active -= 1;
                     },
 
-                    // We rearm by default with kqueue so we just let it be.
-                    .rearm => {},
+                    // We rearm by default with kqueue so we just have to make
+                    // sure that the state is correct.
+                    .rearm => {
+                        c.flags.state = .active;
+                    },
                 }
             }
 
