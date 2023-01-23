@@ -4,7 +4,9 @@ const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
 
-pub const log_level: std.log.Level = .info;
+pub const std_options = struct {
+    pub const log_level: std.log.Level = .info;
+};
 
 // Tune-ables
 pub const NUM_PINGS = 1000 * 1000;
@@ -14,7 +16,14 @@ pub fn main() !void {
 }
 
 pub fn run(comptime thread_count: comptime_int) !void {
-    var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
+    var thread_pool = xev.ThreadPool.init(.{});
+    defer thread_pool.deinit();
+    defer thread_pool.shutdown();
+
+    var loop = try xev.Loop.init(.{
+        .entries = std.math.pow(u13, 2, 12),
+        .thread_pool = &thread_pool,
+    });
     defer loop.deinit();
 
     // Create our async

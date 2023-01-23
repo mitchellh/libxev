@@ -4,10 +4,19 @@ const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
 
-pub const log_level: std.log.Level = .info;
+pub const std_options = struct {
+    pub const log_level: std.log.Level = .info;
+};
 
 pub fn main() !void {
-    var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
+    var thread_pool = xev.ThreadPool.init(.{});
+    defer thread_pool.deinit();
+    defer thread_pool.shutdown();
+
+    var loop = try xev.Loop.init(.{
+        .entries = std.math.pow(u13, 2, 12),
+        .thread_pool = &thread_pool,
+    });
     defer loop.deinit();
 
     const GPA = std.heap.GeneralPurposeAllocator(.{});
@@ -15,7 +24,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    var server_loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
+    var server_loop = try xev.Loop.init(.{
+        .entries = std.math.pow(u13, 2, 12),
+        .thread_pool = &thread_pool,
+    });
     defer server_loop.deinit();
 
     var server = try Server.init(alloc, &server_loop);
@@ -26,7 +38,10 @@ pub fn main() !void {
     const server_thr = try std.Thread.spawn(.{}, Server.threadMain, .{&server});
 
     // Start our client
-    var client_loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
+    var client_loop = try xev.Loop.init(.{
+        .entries = std.math.pow(u13, 2, 12),
+        .thread_pool = &thread_pool,
+    });
     defer client_loop.deinit();
 
     var client = try Client.init(alloc, &client_loop);

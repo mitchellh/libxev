@@ -4,14 +4,23 @@ const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
 
-pub const log_level: std.log.Level = .info;
+pub const std_options = struct {
+    pub const log_level: std.log.Level = .info;
+};
 
 pub fn main() !void {
     try run(1);
 }
 
 pub fn run(comptime count: comptime_int) !void {
-    var loop = try xev.Loop.init(std.math.pow(u13, 2, 12));
+    var thread_pool = xev.ThreadPool.init(.{});
+    defer thread_pool.deinit();
+    defer thread_pool.shutdown();
+
+    var loop = try xev.Loop.init(.{
+        .entries = std.math.pow(u13, 2, 12),
+        .thread_pool = &thread_pool,
+    });
     defer loop.deinit();
 
     const addr = try std.net.Address.parseIp4("127.0.0.1", 3131);
