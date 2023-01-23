@@ -15,6 +15,7 @@ const log = std.log.scoped(.libxev_kqueue);
 
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
+    const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);
 
     /// The fd of the kqueue.
     kqueue_fd: os.fd_t,
@@ -44,20 +45,29 @@ pub const Loop = struct {
     /// timers.
     timers: TimerHeap = .{ .context = {} },
 
+    /// The thread pool to use for blocking operations that kqueue can't do.
+    thread_pool: ?*ThreadPool,
+
+    /// The MPSC queue for completed completions from the thread pool.
+    thread_pool_completions: TaskCompletionQueue,
+
     /// Cached time
     now: os.timespec,
+
+    /// True once it is initialized.
+    init: bool = false,
 
     /// Initialize a new kqueue-backed event loop. See the Options docs
     /// for what options matter for kqueue.
     pub fn init(options: xev.Options) !Loop {
-        _ = options;
-
         // This creates a new kqueue fd
         const fd = try os.kqueue();
         errdefer os.close(fd);
 
         var res: Loop = .{
             .kqueue_fd = fd,
+            .thread_pool = options.thread_pool,
+            .thread_pool_completions = undefined,
             .now = undefined,
         };
         res.update_now();
@@ -223,6 +233,14 @@ pub const Loop = struct {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
+        // Initialize
+        if (!self.init) {
+            self.init = true;
+            if (self.thread_pool != null) {
+                self.thread_pool_completions.init();
+            }
+        }
+
         // The list of events, used as both a changelist and eventlist.
         var events: [256]Kevent = undefined;
 
@@ -242,6 +260,15 @@ pub const Loop = struct {
         // batch of submissions to return the changelist, because we can
         // reuse that for the kevent call later...
         try self.submit();
+
+        // Migrate our completions from the thread pool MPSC queue to our
+        // completion queue.
+        // TODO: unify the queues
+        // if (self.thread_pool != null) {
+        //     while (self.thread_pool_completions.pop()) |c| {
+        //         self.completions.push(c);
+        //     }
+        // }
 
         // Process the completions we already have completed.
         while (self.completions.pop()) |c| {
@@ -310,6 +337,16 @@ pub const Loop = struct {
                     // reason.
                     .rearm => assert(!self.start(c, undefined)),
                 }
+            }
+
+            // Migrate our completions from the thread pool MPSC queue to our
+            // completion queue.
+            // TODO: unify the queues
+            if (self.thread_pool != null) {
+                while (self.thread_pool_completions.pop()) |c| {
+                    self.completions.push(c);
+                }
+                break;
             }
 
             // Determine our next timeout based on the timers
@@ -460,11 +497,16 @@ pub const Loop = struct {
             // We are a cancellation
             cancel: void,
 
+            // We want to run on the threadpool
+            threadpool: void,
+
             /// We have a result code from making a system call now.
             result: i32,
         };
 
-        const action: StartAction = switch (c.op) {
+        const action: StartAction = if (c.flags.threadpool) .{
+            .threadpool = {},
+        } else switch (c.op) {
             .cancel => action: {
                 // Queue the cancel
                 break :action .{ .cancel = {} };
@@ -494,6 +536,16 @@ pub const Loop = struct {
                         else => break :action .{ .result = result },
                     }
                 }
+            },
+
+            .write => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
+            .read => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
             },
 
             .send => action: {
@@ -573,6 +625,34 @@ pub const Loop = struct {
                 return false;
             },
 
+            .threadpool => {
+                // We need a thread pool otherwise we set an error on
+                // our result and queue the completion.
+                const pool = self.thread_pool orelse {
+                    // We use EPERM as a way to note there is no thread
+                    // pool. We can change this in the future if there is
+                    // a better choice.
+                    if (true) @panic("YO");
+                    c.result = c.syscall_result(@enumToInt(os.E.PERM));
+                    self.completions.push(c);
+                    return false;
+                };
+
+                // Setup our completion state so that the thread can
+                // communicate back to our main thread.
+                c.task_completions = &self.thread_pool_completions;
+                c.task = .{ .callback = thread_perform };
+
+                // We need to mark this completion as active before we schedule.
+                self.active += 1;
+                c.flags.state = .active;
+
+                // Schedule it, from this point forward its not safe to touch c.
+                pool.schedule(ThreadPool.Batch.from(&c.task));
+
+                return false;
+            },
+
             // A result is immediately available. Queue the completion to
             // be invoked.
             .result => |result| {
@@ -623,6 +703,18 @@ pub const Loop = struct {
             else => {},
         }
     }
+
+    /// This is the main callback for the threadpool to perform work
+    /// on completions for the loop.
+    fn thread_perform(t: *ThreadPool.Task) void {
+        const c = @fieldParentPtr(Completion, "task", t);
+
+        // Do our task
+        c.result = c.perform();
+
+        // Add to our completion queue
+        c.task_completions.push(c);
+    }
 };
 
 /// A completion is a request to perform some work with the loop.
@@ -649,7 +741,19 @@ pub const Completion = struct {
         /// we're active, adding, deleting, etc. This lets us add and delete
         /// multiple times before a loop tick and handle the state properly.
         state: State = .dead,
+
+        /// Set this to true to schedule this operation on the thread pool.
+        /// This can be set by anyone. If the operation is scheduled on
+        /// the thread pool then it will NOT be registered with kqueue even
+        /// if it is supported.
+        threadpool: bool = false,
     } = .{},
+
+    /// If scheduled on a thread pool, this will be set. This is NOT a
+    /// reliable way to get access to the loop and shouldn't be used
+    /// except internally.
+    task: ThreadPool.Task = undefined,
+    task_completions: *Loop.TaskCompletionQueue = undefined,
 
     const State = enum(u3) {
         /// completion is not part of any loop
@@ -717,7 +821,7 @@ pub const Completion = struct {
                 };
             },
 
-            inline .send, .sendto => |v| kevent_init(.{
+            inline .write, .send, .sendto => |v| kevent_init(.{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
@@ -726,7 +830,7 @@ pub const Completion = struct {
                 .udata = @ptrToInt(self),
             }),
 
-            inline .recv, .recvfrom => |v| kevent_init(.{
+            inline .read, .recv, .recvfrom => |v| kevent_init(.{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
@@ -763,6 +867,13 @@ pub const Completion = struct {
                 .connect = if (os.getsockoptError(op.socket)) {} else |err| err,
             },
 
+            .write => |*op| .{
+                .write = switch (op.buffer) {
+                    .slice => |v| os.write(op.fd, v),
+                    .array => |*v| os.write(op.fd, v.array[0..v.len]),
+                },
+            },
+
             .send => |*op| .{
                 .send = switch (op.buffer) {
                     .slice => |v| os.send(op.fd, v, 0),
@@ -775,6 +886,20 @@ pub const Completion = struct {
                     .slice => |v| os.sendto(op.fd, v, 0, &op.addr.any, op.addr.getOsSockLen()),
                     .array => |*v| os.sendto(op.fd, v.array[0..v.len], 0, &op.addr.any, op.addr.getOsSockLen()),
                 },
+            },
+
+            .read => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| os.read(op.fd, v),
+                    .array => |*v| os.read(op.fd, v),
+                };
+
+                break :res .{
+                    .read = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
             },
 
             .recv => |*op| res: {
@@ -830,6 +955,20 @@ pub const Completion = struct {
             .connect => .{
                 .connect = switch (errno) {
                     .SUCCESS => {},
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .write => .{
+                .write = switch (errno) {
+                    .SUCCESS => @intCast(usize, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .read => .{
+                .read = switch (errno) {
+                    .SUCCESS => if (r == 0) error.EOF else @intCast(usize, r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -910,8 +1049,8 @@ pub const Completion = struct {
 pub const OperationType = enum {
     accept,
     connect,
-    // read,
-    // write,
+    read,
+    write,
     send,
     recv,
     sendto,
@@ -966,6 +1105,16 @@ pub const Operation = union(OperationType) {
         addr_size: os.socklen_t = @sizeOf(os.sockaddr),
     },
 
+    write: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+    },
+
+    read: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+    },
+
     machport: struct {
         port: os.system.mach_port_name_t,
         buffer: ReadBuffer,
@@ -995,6 +1144,8 @@ pub const Result = union(OperationType) {
     recv: ReadError!usize,
     sendto: WriteError!usize,
     recvfrom: ReadError!usize,
+    write: WriteError!usize,
+    read: ReadError!usize,
     machport: MachPortError!void,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
@@ -1180,7 +1331,7 @@ inline fn kevent_init(ev: os.Kevent) Kevent {
 }
 
 comptime {
-    if (@sizeOf(Completion) != 240) {
+    if (@sizeOf(Completion) != 264) {
         @compileLog(@sizeOf(Completion));
         unreachable;
     }
@@ -1622,6 +1773,98 @@ test "kqueue: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     try testing.expect(ln == 0);
     try testing.expect(client_conn == 0);
+}
+
+test "kqueue: file IO on thread pool" {
+    const testing = std.testing;
+
+    var tpool = main.ThreadPool.init(.{});
+    defer tpool.deinit();
+    defer tpool.shutdown();
+    var loop = try Loop.init(.{ .thread_pool = &tpool });
+    defer loop.deinit();
+
+    // Create our file
+    const path = "test_watcher_file";
+    const f = try std.fs.cwd().createFile(path, .{
+        .read = true,
+        .truncate = true,
+    });
+    defer f.close();
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    // Perform a write and then a read
+    var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
+    var c_write: xev.Completion = .{
+        .op = .{
+            .write = .{
+                .fd = f.handle,
+                .buffer = .{ .slice = &write_buf },
+            },
+        },
+
+        .flags = .{ .threadpool = true },
+
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = ud;
+                _ = l;
+                _ = c;
+                _ = r.write catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_write);
+
+    // Wait for the write
+    try loop.run(.until_done);
+
+    // Make sure the data is on disk
+    try f.sync();
+
+    const f2 = try std.fs.cwd().openFile(path, .{});
+    defer f2.close();
+
+    // Read
+    var read_buf: [128]u8 = undefined;
+    var read_len: usize = 0;
+    var c_read: xev.Completion = .{
+        .op = .{
+            .read = .{
+                .fd = f2.handle,
+                .buffer = .{ .slice = &read_buf },
+            },
+        },
+
+        .flags = .{ .threadpool = true },
+
+        .userdata = &read_len,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                ptr.* = r.read catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_read);
+
+    // Wait for the send/receive
+    try loop.run(.until_done);
+    try testing.expectEqualSlices(u8, &write_buf, read_buf[0..read_len]);
 }
 
 test "kqueue: mach port" {
