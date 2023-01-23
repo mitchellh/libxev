@@ -152,8 +152,13 @@ pub const Loop = struct {
                         if (events_len >= events.len) break :queue_pop;
                     },
 
-                    // If we're deleting then we create a deletion event.
+                    // If we're deleting then we create a deletion event and
+                    // queue the completion to notify cancellation.
                     .deleting => if (c.kevent()) |ev| {
+                        c.result = c.syscall_result(-1 * @intCast(i32, @enumToInt(os.system.E.CANCELED)));
+                        c.flags.state = .dead;
+                        self.completions.push(c);
+
                         events[events_len] = ev;
                         events[events_len].flags = os.system.EV_DELETE;
                         events_len += 1;
@@ -182,33 +187,33 @@ pub const Loop = struct {
             const completed = try kevent_syscall(
                 self.kqueue_fd,
                 events[0..events_len],
-                events[0..events_len],
+                events[0..0],
                 &timeout,
             );
             events_len = 0;
 
             // Go through the completed events and queue them.
+            // NOTE: we currently never process completions (we set
+            // event list to zero length) because it was leading to
+            // memory corruption we need to investigate.
             for (events[0..completed]) |ev| {
                 const c = @intToPtr(*Completion, @intCast(usize, ev.udata));
 
                 // We handle deletions separately.
-                if (ev.flags & os.system.EV_DELETE != 0) {
-                    c.result = c.syscall_result(-1 * @intCast(i32, @enumToInt(os.system.E.CANCELED)));
-                    c.flags.state = .dead;
-                } else {
-                    // If EV_ERROR is set, then submission failed for this
-                    // completion. We get the syscall errorcode from data and
-                    // store it.
-                    if (ev.flags & os.system.EV_ERROR != 0) {
-                        c.result = c.syscall_result(@intCast(i32, ev.data));
+                if (ev.flags & os.system.EV_DELETE != 0) continue;
 
-                        // We reset the state so that we know that it never
-                        // registered with kevent.
-                        c.flags.state = .adding;
-                    } else {
-                        // No error, means that this completion is ready to work.
-                        c.result = c.perform();
-                    }
+                // If EV_ERROR is set, then submission failed for this
+                // completion. We get the syscall errorcode from data and
+                // store it.
+                if (ev.flags & os.system.EV_ERROR != 0) {
+                    c.result = c.syscall_result(@intCast(i32, ev.data));
+
+                    // We reset the state so that we know that it never
+                    // registered with kevent.
+                    c.flags.state = .adding;
+                } else {
+                    // No error, means that this completion is ready to work.
+                    c.result = c.perform();
                 }
 
                 assert(c.result != null);
@@ -329,6 +334,7 @@ pub const Loop = struct {
                         if (c.kevent()) |ev| {
                             events[changes] = ev;
                             events[changes].flags = os.system.EV_DELETE;
+                            events[changes].udata = 0;
                             changes += 1;
                             assert(changes <= events.len);
                         }
@@ -454,6 +460,10 @@ pub const Loop = struct {
 
             // Go through the completed events and queue them.
             for (events[0..completed]) |ev| {
+                // Zero udata values are internal events that we do nothing
+                // on such as the mach port wakeup.
+                if (ev.udata == 0) continue;
+
                 // Ignore any successful deletions. This can only happen
                 // from disarms below and in that case we already processed
                 // their callback.
@@ -470,10 +480,6 @@ pub const Loop = struct {
                 }
                 wait_rem -|= 1;
 
-                // Zero udata values are internal events that we do nothing
-                // on such as the mach port wakeup.
-                if (ev.udata == 0) continue;
-
                 const c = @intToPtr(*Completion, @intCast(usize, ev.udata));
 
                 // c is ready to be reused rigt away if we're dearming
@@ -488,6 +494,7 @@ pub const Loop = struct {
                         // on the next tick.
                         events[changes] = ev;
                         events[changes].flags = os.system.EV_DELETE;
+                        events[changes].udata = 0;
                         changes += 1;
                         assert(changes <= events.len);
 
@@ -942,7 +949,10 @@ pub const Completion = struct {
             .close,
             .timer,
             .shutdown,
-            => unreachable,
+            => {
+                log.warn("perform op={s}", .{@tagName(self.op)});
+                unreachable;
+            },
 
             .accept => |*op| .{
                 .accept = if (os.accept(
