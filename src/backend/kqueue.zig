@@ -261,15 +261,6 @@ pub const Loop = struct {
         // reuse that for the kevent call later...
         try self.submit();
 
-        // Migrate our completions from the thread pool MPSC queue to our
-        // completion queue.
-        // TODO: unify the queues
-        // if (self.thread_pool != null) {
-        //     while (self.thread_pool_completions.pop()) |c| {
-        //         self.completions.push(c);
-        //     }
-        // }
-
         // Process the completions we already have completed.
         while (self.completions.pop()) |c| {
             // Completion queue items MUST have a result set.
@@ -278,11 +269,16 @@ pub const Loop = struct {
                 // If we're active we have to schedule a delete. Otherwise
                 // we do nothing because we were never part of the kqueue.
                 .disarm => if (c.flags.state == .active) {
-                    if (c.kevent()) |ev| {
-                        events[changes] = ev;
-                        events[changes].flags = os.system.EV_DELETE;
-                        changes += 1;
-                        assert(changes <= events.len);
+                    // If we are part of a threadpool we never schedule
+                    // a delete because we don't put anything in the threadpool
+                    // in the kqueue.
+                    if (!c.flags.threadpool) {
+                        if (c.kevent()) |ev| {
+                            events[changes] = ev;
+                            events[changes].flags = os.system.EV_DELETE;
+                            changes += 1;
+                            assert(changes <= events.len);
+                        }
                     }
 
                     wait_rem -|= 1;
@@ -346,6 +342,11 @@ pub const Loop = struct {
                 while (self.thread_pool_completions.pop()) |c| {
                     self.completions.push(c);
                 }
+
+                // TODO: we only break here to force the tick to run again
+                // so that we can process thread pool completions. We should
+                // actually move completion handling within the while loop
+                // so that we don't have to do this.
                 break;
             }
 
@@ -626,13 +627,18 @@ pub const Loop = struct {
             },
 
             .threadpool => {
+                // We need to mark this completion as active no matter
+                // what happens below so that we mark is inactive with
+                // completion handling.
+                self.active += 1;
+                c.flags.state = .active;
+
                 // We need a thread pool otherwise we set an error on
                 // our result and queue the completion.
                 const pool = self.thread_pool orelse {
                     // We use EPERM as a way to note there is no thread
                     // pool. We can change this in the future if there is
                     // a better choice.
-                    if (true) @panic("YO");
                     c.result = c.syscall_result(@enumToInt(os.E.PERM));
                     self.completions.push(c);
                     return false;
@@ -642,10 +648,6 @@ pub const Loop = struct {
                 // communicate back to our main thread.
                 c.task_completions = &self.thread_pool_completions;
                 c.task = .{ .callback = thread_perform };
-
-                // We need to mark this completion as active before we schedule.
-                self.active += 1;
-                c.flags.state = .active;
 
                 // Schedule it, from this point forward its not safe to touch c.
                 pool.schedule(ThreadPool.Batch.from(&c.task));
