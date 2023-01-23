@@ -325,7 +325,11 @@ fn AsyncMachPort(comptime xev: type) type {
                 ),
             )) {
                 .SUCCESS => {},
-                else => error.MachMsgFailed,
+                else => return error.MachMsgFailed,
+
+                // This is okay because it means that there was no more buffer
+                // space meaning that the port will wake up.
+                .SEND_NO_BUFFER => {},
             };
         }
 
