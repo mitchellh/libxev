@@ -20,6 +20,13 @@ pub const Loop = struct {
     /// The fd of the kqueue.
     kqueue_fd: os.fd_t,
 
+    /// The mach port that this kqueue always has a filter for. Writing
+    /// an empty message to this port can be used to wake up the loop
+    /// at any time. Waking up the loop via this port won't trigger any
+    /// particular completion, it just forces tick to cycle.
+    mach_port: os.system.mach_port_name_t,
+    mach_port_buffer: [32]u8 = undefined,
+
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
     active: usize = 0,
@@ -64,8 +71,22 @@ pub const Loop = struct {
         const fd = try os.kqueue();
         errdefer os.close(fd);
 
+        // Create our mach port that we use for wakeups.
+        const mach_self = os.system.mach_task_self();
+        var mach_port: os.system.mach_port_name_t = undefined;
+        switch (os.system.getKernError(os.system.mach_port_allocate(
+            mach_self,
+            @enumToInt(os.system.MACH_PORT_RIGHT.RECEIVE),
+            &mach_port,
+        ))) {
+            .SUCCESS => {}, // Success
+            else => return error.MachPortAllocFailed,
+        }
+        errdefer _ = os.system.mach_port_deallocate(mach_self, mach_port);
+
         var res: Loop = .{
             .kqueue_fd = fd,
+            .mach_port = mach_port,
             .thread_pool = options.thread_pool,
             .thread_pool_completions = undefined,
             .now = undefined,
@@ -78,6 +99,10 @@ pub const Loop = struct {
     /// were unprocessed are lost -- their callbacks will never be called.
     pub fn deinit(self: *Loop) void {
         os.close(self.kqueue_fd);
+        _ = os.system.mach_port_deallocate(
+            os.system.mach_task_self(),
+            self.mach_port,
+        );
     }
 
     /// Add a completion to the loop. The completion is not started until
@@ -236,9 +261,37 @@ pub const Loop = struct {
         // Initialize
         if (!self.init) {
             self.init = true;
+
             if (self.thread_pool != null) {
                 self.thread_pool_completions.init();
             }
+
+            // Add our event so that we wake up when our mach port receives an
+            // event. We have to add here because we need a stable self pointer.
+            const events = [_]Kevent{.{
+                .ident = @intCast(usize, self.mach_port),
+                .filter = os.system.EVFILT_MACHPORT,
+                .flags = os.system.EV_ADD | os.system.EV_ENABLE | os.system.EV_CLEAR,
+                .fflags = os.system.MACH_RCV_MSG,
+                .data = 0,
+                .udata = 0,
+                .ext = .{
+                    @ptrToInt(&self.mach_port_buffer),
+                    self.mach_port_buffer.len,
+                },
+            }};
+            const n = kevent_syscall(
+                self.kqueue_fd,
+                &events,
+                events[0..0],
+                null,
+            ) catch |err| {
+                // We reset initialization because we can't do anything
+                // safely unless we get this mach port registered!
+                self.init = false;
+                return err;
+            };
+            assert(n == 0);
         }
 
         // The list of events, used as both a changelist and eventlist.
@@ -342,7 +395,9 @@ pub const Loop = struct {
                 while (self.thread_pool_completions.pop()) |c| {
                     self.completions.push(c);
                 }
+            }
 
+            if (!self.completions.empty()) {
                 // TODO: we only break here to force the tick to run again
                 // so that we can process thread pool completions. We should
                 // actually move completion handling within the while loop
@@ -414,6 +469,10 @@ pub const Loop = struct {
                     continue;
                 }
                 wait_rem -|= 1;
+
+                // Zero udata values are internal events that we do nothing
+                // on such as the mach port wakeup.
+                if (ev.udata == 0) continue;
 
                 const c = @intToPtr(*Completion, @intCast(usize, ev.udata));
 
@@ -646,7 +705,7 @@ pub const Loop = struct {
 
                 // Setup our completion state so that the thread can
                 // communicate back to our main thread.
-                c.task_completions = &self.thread_pool_completions;
+                c.task_loop = self;
                 c.task = .{ .callback = thread_perform };
 
                 // Schedule it, from this point forward its not safe to touch c.
@@ -715,7 +774,39 @@ pub const Loop = struct {
         c.result = c.perform();
 
         // Add to our completion queue
-        c.task_completions.push(c);
+        c.task_loop.thread_pool_completions.push(c);
+
+        // Wake up our main loop
+        c.task_loop.wakeup() catch {};
+    }
+
+    /// Sends an empty message to this loop's mach port so that it wakes
+    /// up if it is blocking on kevent().
+    fn wakeup(self: *Loop) !void {
+        // This constructs an empty mach message. It has no data.
+        var msg: os.system.mach_msg_header_t = .{
+            .msgh_bits = @enumToInt(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+            .msgh_size = @sizeOf(os.system.mach_msg_header_t),
+            .msgh_remote_port = self.mach_port,
+            .msgh_local_port = os.system.MACH_PORT_NULL,
+            .msgh_voucher_port = undefined,
+            .msgh_id = undefined,
+        };
+
+        return switch (os.system.getMachMsgError(
+            os.system.mach_msg(
+                &msg,
+                os.system.MACH_SEND_MSG,
+                msg.msgh_size,
+                0,
+                os.system.MACH_PORT_NULL,
+                os.system.MACH_MSG_TIMEOUT_NONE,
+                os.system.MACH_PORT_NULL,
+            ),
+        )) {
+            .SUCCESS => {},
+            else => error.MachMsgFailed,
+        };
     }
 };
 
@@ -755,7 +846,7 @@ pub const Completion = struct {
     /// reliable way to get access to the loop and shouldn't be used
     /// except internally.
     task: ThreadPool.Task = undefined,
-    task_completions: *Loop.TaskCompletionQueue = undefined,
+    task_loop: *Loop = undefined,
 
     const State = enum(u3) {
         /// completion is not part of any loop
