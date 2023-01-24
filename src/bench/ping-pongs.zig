@@ -169,8 +169,7 @@ const Client = struct {
         }
 
         // Read again
-        socket.read(l, c, .{ .slice = buf.slice }, Client, self, readCallback);
-        return .disarm;
+        return .rearm;
     }
 
     fn shutdownCallback(
@@ -295,16 +294,14 @@ const Server = struct {
             },
         };
 
-        const data = buf.slice[0..n];
-
         // Echo it back
         const c_echo = self.completion_pool.create() catch unreachable;
-        socket.write(loop, c_echo, .{ .slice = data }, Server, self, writeCallback);
+        const buf_write = self.buffer_pool.create() catch unreachable;
+        std.mem.copy(u8, buf_write, buf.slice[0..n]);
+        socket.write(loop, c_echo, .{ .slice = buf_write[0..n] }, Server, self, writeCallback);
 
         // Read again
-        const buf_read = self.buffer_pool.create() catch unreachable;
-        socket.read(loop, c, .{ .slice = buf_read }, Server, self, readCallback);
-        return .disarm;
+        return .rearm;
     }
 
     fn writeCallback(
