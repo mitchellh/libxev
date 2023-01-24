@@ -8,14 +8,17 @@ const main = @import("../main.zig");
 const xev = main.Epoll;
 const ThreadPool = main.ThreadPool;
 
+/// Epoll backend.
+///
+/// WARNING: this backend is a bit of a mess. It is missing features and in
+/// general is in much poorer quality than all of the other backends. It
+/// isn't meant to really be used yet. We should remodel this in the style of
+/// the kqueue backend.
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Operation.Timer, void, Operation.Timer.less);
     const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);
 
     fd: std.os.fd_t,
-
-    /// True once it is initialized.
-    init: bool = false,
 
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
@@ -41,6 +44,18 @@ pub const Loop = struct {
 
     /// Cached time
     now: std.os.timespec,
+
+    /// Some internal fields we can pack for better space.
+    flags: packed struct {
+        /// True once it is initialized.
+        init: bool = false,
+
+        /// Whether we're in a run or not (to prevent nested runs).
+        in_run: bool = false,
+
+        /// Whether our loop is in a stopped state or not.
+        stopped: bool = false,
+    } = .{},
 
     pub fn init(options: xev.Options) !Loop {
         var res: Loop = .{
@@ -68,8 +83,20 @@ pub const Loop = struct {
     }
 
     fn done(self: *Loop) bool {
-        return self.active == 0 and
-            self.submissions.empty();
+        return self.flags.stopped or (self.active == 0 and
+            self.submissions.empty());
+    }
+
+    /// Stop the loop. This can only be called from the main thread.
+    /// This will stop the loop forever. Future ticks will do nothing.
+    ///
+    /// This does NOT stop any completions that are queued to be executed
+    /// in the thread pool. If you are using a thread pool, completions
+    /// are not safe to recover until the thread pool is shut down. If
+    /// you're not using a thread pool, all completions are safe to
+    /// read/write once any outstanding `run` or `tick` calls are returned.
+    pub fn stop(self: *Loop) void {
+        self.flags.stopped = true;
     }
 
     /// Add a completion to the loop.
@@ -146,9 +173,17 @@ pub const Loop = struct {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
+        // If we're stopped then the loop is fully over.
+        if (self.flags.stopped) return;
+
+        // We can't nest runs.
+        if (self.flags.in_run) return error.NestedRunsNotAllowed;
+        self.flags.in_run = true;
+        defer self.flags.in_run = false;
+
         // Initialize
-        if (!self.init) {
-            self.init = true;
+        if (!self.flags.init) {
+            self.flags.init = true;
             if (self.thread_pool != null) {
                 self.thread_pool_completions.init();
             }
@@ -169,7 +204,7 @@ pub const Loop = struct {
         // Handle all deletions so we don't wait for them.
         while (self.deletions.pop()) |c| {
             if (c.flags.state != .deleting) continue;
-            self.stop(c);
+            self.stop_completion(c);
         }
 
         // If we have no active handles then we return no matter what.
@@ -337,7 +372,7 @@ pub const Loop = struct {
                 // means we're complete already.
                 if (completion.flags.state == .adding) {
                     if (v.c.op == .cancel) @panic("cannot cancel a cancellation");
-                    self.stop(v.c);
+                    self.stop_completion(v.c);
                 }
 
                 // We always run timers
@@ -548,7 +583,7 @@ pub const Loop = struct {
         self.active += 1;
     }
 
-    fn stop(self: *Loop, completion: *Completion) void {
+    fn stop_completion(self: *Loop, completion: *Completion) void {
         // Delete. This should never fail.
         if (completion.fd()) |fd| {
             std.os.epoll_ctl(
@@ -997,6 +1032,35 @@ test "Completion size" {
 
     // Just so we are aware when we change the size
     try testing.expectEqual(@as(usize, 200), @sizeOf(Completion));
+}
+
+test "epoll: stop" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 1_000_000, &called, (struct {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick
+    try loop.run(.no_wait);
+    try testing.expect(!called);
+
+    // Stop
+    loop.stop();
+    try loop.run(.until_done);
+    try testing.expect(!called);
 }
 
 test "epoll: timer" {

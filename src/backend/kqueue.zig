@@ -61,8 +61,17 @@ pub const Loop = struct {
     /// Cached time
     now: os.timespec,
 
-    /// True once it is initialized.
-    init: bool = false,
+    /// Some internal fields we can pack for better space.
+    flags: packed struct {
+        /// True once it is initialized.
+        init: bool = false,
+
+        /// Whether we're in a run or not (to prevent nested runs).
+        in_run: bool = false,
+
+        /// Whether our loop is in a stopped state or not.
+        stopped: bool = false,
+    } = .{},
 
     /// Initialize a new kqueue-backed event loop. See the Options docs
     /// for what options matter for kqueue.
@@ -103,6 +112,18 @@ pub const Loop = struct {
             os.system.mach_task_self(),
             self.mach_port,
         );
+    }
+
+    /// Stop the loop. This can only be called from the main thread.
+    /// This will stop the loop forever. Future ticks will do nothing.
+    ///
+    /// This does NOT stop any completions that are queued to be executed
+    /// in the thread pool. If you are using a thread pool, completions
+    /// are not safe to recover until the thread pool is shut down. If
+    /// you're not using a thread pool, all completions are safe to
+    /// read/write once any outstanding `run` or `tick` calls are returned.
+    pub fn stop(self: *Loop) void {
+        self.flags.stopped = true;
     }
 
     /// Add a completion to the loop. The completion is not started until
@@ -168,7 +189,7 @@ pub const Loop = struct {
                     // This is set if the completion was canceled while in the
                     // submission queue. This is a special case where we still
                     // want to call the callback to tell it it was canceled.
-                    .dead => self.stop(c),
+                    .dead => self.stop_completion(c),
 
                     // Shouldn't happen if our logic is all correct.
                     .active => log.err(
@@ -241,7 +262,7 @@ pub const Loop = struct {
                 .adding => target.flags.state = .dead,
 
                 // If it is active we need to schedule the deletion.
-                .active => self.stop(target),
+                .active => self.stop_completion(target),
             }
 
             // We completed the cancellation.
@@ -263,9 +284,17 @@ pub const Loop = struct {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
+        // If we're stopped then the loop is fully over.
+        if (self.flags.stopped) return;
+
+        // We can't nest runs.
+        if (self.flags.in_run) return error.NestedRunsNotAllowed;
+        self.flags.in_run = true;
+        defer self.flags.in_run = false;
+
         // Initialize
-        if (!self.init) {
-            self.init = true;
+        if (!self.flags.init) {
+            self.flags.init = true;
 
             if (self.thread_pool != null) {
                 self.thread_pool_completions.init();
@@ -293,7 +322,7 @@ pub const Loop = struct {
             ) catch |err| {
                 // We reset initialization because we can't do anything
                 // safely unless we get this mach port registered!
-                self.init = false;
+                self.flags.init = false;
                 return err;
             };
             assert(n == 0);
@@ -557,9 +586,9 @@ pub const Loop = struct {
     }
 
     fn done(self: *Loop) bool {
-        return self.active == 0 and
+        return self.flags.stopped or (self.active == 0 and
             self.submissions.empty() and
-            self.completions.empty();
+            self.completions.empty());
     }
 
     /// Start the completion. This returns true if the Kevent was set
@@ -743,7 +772,7 @@ pub const Loop = struct {
         }
     }
 
-    fn stop(self: *Loop, c: *Completion) void {
+    fn stop_completion(self: *Loop, c: *Completion) void {
         if (c.flags.state == .active) {
             // If there is a result already, then we're already in the
             // completion queue and we can be done. Items in the completion
@@ -1450,6 +1479,35 @@ comptime {
         @compileLog(@sizeOf(Completion));
         unreachable;
     }
+}
+
+test "kqueue: stop" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 1_000_000, &called, (struct {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick
+    try loop.run(.no_wait);
+    try testing.expect(!called);
+
+    // Stop
+    loop.stop();
+    try loop.run(.until_done);
+    try testing.expect(!called);
 }
 
 test "kqueue: timer" {

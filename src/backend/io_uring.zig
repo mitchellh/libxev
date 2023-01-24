@@ -20,6 +20,14 @@ pub const Loop = struct {
     /// Cached time
     now: std.os.timespec = undefined,
 
+    flags: packed struct {
+        /// Whether the loop is stopped or not.
+        stopped: bool = false,
+
+        /// Whether we're in a run or not (to prevent nested runs).
+        in_run: bool = false,
+    } = .{},
+
     /// Initialize the event loop. "entries" is the maximum number of
     /// submissions that can be queued at one time. The number of completions
     /// always matches the number of entries so the memory allocated will be
@@ -52,10 +60,18 @@ pub const Loop = struct {
         }
     }
 
+    /// Stop the loop. This can only be called from the main thread.
+    /// This will stop the loop forever. Future ticks will do nothing.
+    /// All completions are safe to read/write once any outstanding
+    /// `run` or `tick` calls are returned.
+    pub fn stop(self: *Loop) void {
+        self.flags.stopped = true;
+    }
+
     fn done(self: *Loop) bool {
-        return self.active == 0 and
+        return self.flags.stopped or (self.active == 0 and
             self.submissions.empty() and
-            self.completions.empty();
+            self.completions.empty());
     }
 
     /// Update the cached time.
@@ -68,6 +84,14 @@ pub const Loop = struct {
     pub fn tick(self: *Loop, wait: u32) !void {
         // TODO: make configurable
         const busy_wait = 0;
+
+        // If we're stopped then the loop is fully over.
+        if (self.flags.stopped) return;
+
+        // We can't nest runs.
+        if (self.flags.in_run) return error.NestedRunsNotAllowed;
+        self.flags.in_run = true;
+        defer self.flags.in_run = false;
 
         // If we have no queued submissions then we do the wait as part
         // of the submit call, because then we can do exactly once syscall
@@ -819,6 +843,35 @@ test "io_uring: timer" {
     while (!called) try loop.run(.no_wait);
     try testing.expect(called);
     try testing.expect(!called2);
+}
+
+test "io_uring: stop" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Add the timer
+    var called = false;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 1_000_000, &called, (struct {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    // Tick
+    try loop.run(.no_wait);
+    try testing.expect(!called);
+
+    // Stop
+    loop.stop();
+    try loop.run(.until_done);
+    try testing.expect(!called);
 }
 
 test "io_uring: timer remove" {

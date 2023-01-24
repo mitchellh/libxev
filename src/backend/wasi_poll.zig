@@ -33,6 +33,15 @@ pub const Loop = struct {
     /// bool because we know we're single threaded.
     wakeup: WakeupType = wakeup_init,
 
+    /// Some internal fields we can pack for better space.
+    flags: packed struct {
+        /// Whether we're in a run or not (to prevent nested runs).
+        in_run: bool = false,
+
+        /// Whether our loop is in a stopped state or not.
+        stopped: bool = false,
+    } = .{},
+
     pub fn init(options: xev.Options) !Loop {
         _ = options;
         return .{};
@@ -51,6 +60,18 @@ pub const Loop = struct {
         }
     }
 
+    /// Stop the loop. This can only be called from the main thread.
+    /// This will stop the loop forever. Future ticks will do nothing.
+    ///
+    /// This does NOT stop any completions that are queued to be executed
+    /// in the thread pool. If you are using a thread pool, completions
+    /// are not safe to recover until the thread pool is shut down. If
+    /// you're not using a thread pool, all completions are safe to
+    /// read/write once any outstanding `run` or `tick` calls are returned.
+    pub fn stop(self: *Loop) void {
+        self.flags.stopped = true;
+    }
+
     /// Add a completion to the loop. This doesn't DO anything except queue
     /// the completion. Any configuration errors will be exposed via the
     /// callback on the next loop tick.
@@ -60,8 +81,8 @@ pub const Loop = struct {
     }
 
     fn done(self: *Loop) bool {
-        return self.active == 0 and
-            self.submissions.empty();
+        return self.flags.stopped or (self.active == 0 and
+            self.submissions.empty());
     }
 
     /// Wake up the event loop and force a tick. This only works if there
@@ -90,6 +111,14 @@ pub const Loop = struct {
     /// Tick through the event loop once, waiting for at least "wait" completions
     /// to be processed by the loop itself.
     pub fn tick(self: *Loop, wait: u32) !void {
+        // If we're stopped then the loop is fully over.
+        if (self.flags.stopped) return;
+
+        // We can't nest runs.
+        if (self.flags.in_run) return error.NestedRunsNotAllowed;
+        self.flags.in_run = true;
+        defer self.flags.in_run = false;
+
         // Submit all the submissions. We copy the submission queue so that
         // any resubmits don't cause an infinite loop.
         var queued = self.submissions;
@@ -269,7 +298,7 @@ pub const Loop = struct {
                 // we're in the dead state it means we ran already.
                 if (completion.flags.state == .adding) {
                     if (v.c.op == .cancel) break :res .{ .cancel = CancelError.InvalidOp };
-                    self.stop(v.c);
+                    self.stop_completion(v.c);
                 }
 
                 // We always run timers
@@ -372,7 +401,7 @@ pub const Loop = struct {
         self.active += 1;
     }
 
-    fn stop(self: *Loop, completion: *Completion) void {
+    fn stop_completion(self: *Loop, completion: *Completion) void {
         const rearm: bool = switch (completion.op) {
             .timer => |*v| timer: {
                 const c = v.c;

@@ -138,7 +138,8 @@ A loop can be run in multiple _run modes_:
   completions in the event loop. This can potentially run forever as
   completion callbacks rearm or register new completions. This is the
   most common run mode and is usually used to start up the "main" loop
-  of a program.
+  of a program. The loop can be stopped from the main thread using the
+  `stop` API call.
 
 An event loop has to be allocated to a stable memory address (stable
 pointer) _once you have called `run`_ once. Prior to calling run, you
