@@ -122,7 +122,7 @@ test {
     _ = ThreadPool;
 
     // Test the C API
-    //if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
+    if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
 
     // OS-specific tests
     switch (builtin.os.tag) {
