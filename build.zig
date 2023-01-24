@@ -23,16 +23,22 @@ pub fn build(b: *std.build.Builder) !void {
         else => return err,
     };
 
-    const bench_install = b.option(
-        bool,
-        "bench",
-        "Install the benchmark binaries to zig-out/bench",
-    ) orelse false;
-
     const bench_name = b.option(
         []const u8,
         "bench-name",
         "Build and install a single benchmark",
+    );
+
+    const bench_install = b.option(
+        bool,
+        "bench",
+        "Install the benchmark binaries to zig-out/bench",
+    ) orelse (bench_name != null);
+
+    const example_name = b.option(
+        []const u8,
+        "example-name",
+        "Build and install a single example",
     );
 
     const test_install = b.option(
@@ -56,11 +62,8 @@ pub fn build(b: *std.build.Builder) !void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests_run.step);
 
-    // Benchmarks
-    _ = try benchTargets(b, target, mode, bench_install, bench_name);
-
     // Static C lib
-    if (target.getOsTag() != .wasi) {
+    const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi) lib: {
         const static_lib = b.addStaticLibrary("xev", "src/c_api.zig");
         static_lib.setBuildMode(mode);
         static_lib.setTarget(target);
@@ -80,32 +83,34 @@ pub fn build(b: *std.build.Builder) !void {
         const static_binding_test_run = static_binding_test.run();
         test_step.dependOn(&static_binding_test_run.step);
 
-        // Dynamic C lib. We only build this if this is the native target so we
-        // can link to libxml2 on our native system.
-        if (target.isNative()) {
-            const dynamic_lib_name = if (target.isWindows())
-                "xev.dll"
-            else
-                "xev";
+        break :lib static_lib;
+    } else null;
 
-            const dynamic_lib = b.addSharedLibrary(dynamic_lib_name, "src/c_api.zig", .unversioned);
-            dynamic_lib.setBuildMode(mode);
-            dynamic_lib.setTarget(target);
-            dynamic_lib.install();
-            b.default_step.dependOn(&dynamic_lib.step);
+    // Dynamic C lib. We only build this if this is the native target so we
+    // can link to libxml2 on our native system.
+    if (target.isNative()) {
+        const dynamic_lib_name = if (target.isWindows())
+            "xev.dll"
+        else
+            "xev";
 
-            const dynamic_binding_test = b.addExecutable("dynamic-binding-test", null);
-            dynamic_binding_test.setBuildMode(mode);
-            dynamic_binding_test.setTarget(target);
-            dynamic_binding_test.linkLibC();
-            dynamic_binding_test.addIncludePath("include");
-            dynamic_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
-            dynamic_binding_test.linkLibrary(dynamic_lib);
-            if (test_install) dynamic_binding_test.install();
+        const dynamic_lib = b.addSharedLibrary(dynamic_lib_name, "src/c_api.zig", .unversioned);
+        dynamic_lib.setBuildMode(mode);
+        dynamic_lib.setTarget(target);
+        dynamic_lib.install();
+        b.default_step.dependOn(&dynamic_lib.step);
 
-            const dynamic_binding_test_run = dynamic_binding_test.run();
-            test_step.dependOn(&dynamic_binding_test_run.step);
-        }
+        const dynamic_binding_test = b.addExecutable("dynamic-binding-test", null);
+        dynamic_binding_test.setBuildMode(mode);
+        dynamic_binding_test.setTarget(target);
+        dynamic_binding_test.linkLibC();
+        dynamic_binding_test.addIncludePath("include");
+        dynamic_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
+        dynamic_binding_test.linkLibrary(dynamic_lib);
+        if (test_install) dynamic_binding_test.install();
+
+        const dynamic_binding_test_run = dynamic_binding_test.run();
+        test_step.dependOn(&dynamic_binding_test_run.step);
     }
 
     // C Headers
@@ -116,6 +121,13 @@ pub fn build(b: *std.build.Builder) !void {
     );
     b.getInstallStep().dependOn(&c_header.step);
 
+    // Benchmarks
+    _ = try benchTargets(b, target, mode, bench_install, bench_name);
+
+    // Examples
+    _ = try exampleTargets(b, target, mode, static_c_lib, example_name != null, example_name);
+
+    // Man pages
     if (man_pages) {
         const scdoc_step = ScdocStep.create(b);
         try scdoc_step.install();
@@ -170,6 +182,66 @@ fn benchTargets(
     }
 
     return map;
+}
+
+fn exampleTargets(
+    b: *std.build.Builder,
+    target: std.zig.CrossTarget,
+    mode: std.builtin.Mode,
+    c_lib_: ?*std.build.LibExeObjStep,
+    install: bool,
+    install_name: ?[]const u8,
+) !void {
+    // Open the directory
+    const c_dir_path = (comptime thisDir()) ++ "/examples";
+    var c_dir = try std.fs.openIterableDirAbsolute(c_dir_path, .{});
+    defer c_dir.close();
+
+    // Go through and add each as a step
+    var c_dir_it = c_dir.iterate();
+    while (try c_dir_it.next()) |entry| {
+        // Get the index of the last '.' so we can strip the extension.
+        const index = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
+        if (index == 0) continue;
+
+        // If we have specified a specific name, only install that one.
+        if (install_name) |n| {
+            if (!std.mem.eql(u8, n, entry.name)) continue;
+        }
+
+        // Name of the app and full path to the entrypoint.
+        const name = entry.name[0..index];
+        const path = try std.fs.path.join(b.allocator, &[_][]const u8{
+            c_dir_path,
+            entry.name,
+        });
+
+        const is_zig = std.mem.eql(u8, entry.name[index + 1 ..], "zig");
+        if (is_zig) {
+            const c_exe = b.addExecutable(name, path);
+            c_exe.setTarget(target);
+            c_exe.setBuildMode(mode);
+            c_exe.addPackage(pkg);
+            c_exe.setOutputDir("zig-out/bench");
+            if (install) c_exe.install();
+        } else {
+            const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
+            const c_exe = b.addExecutable(name, null);
+            c_exe.setTarget(target);
+            c_exe.setBuildMode(mode);
+            c_exe.linkLibC();
+            c_exe.addIncludePath("include");
+            c_exe.addCSourceFile(path, &[_][]const u8{
+                "-Wall",
+                "-Wextra",
+                "-pedantic",
+                "-std=c99",
+                "-D_POSIX_C_SOURCE=199309L",
+            });
+            c_exe.linkLibrary(c_lib);
+            if (install) c_exe.install();
+        }
+    }
 }
 
 /// Path to the directory with the build.zig.

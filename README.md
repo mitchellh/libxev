@@ -115,13 +115,13 @@ the file extension.
 To build an example, use the following:
 
 ```
-$ zig build -Dexample=_basic.zig
+$ zig build -Dexample-name=_basic.zig
 ...
 $ zig-out/bin/example-basic
 ...
 ```
 
-The `-Dexample` value should be the filename including the extension.
+The `-Dexample-name` value should be the filename including the extension.
 
 ### Code Comments
 
