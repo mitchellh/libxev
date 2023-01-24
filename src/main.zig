@@ -15,6 +15,7 @@ pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
 pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
 pub const Kqueue = Xev(.kqueue, @import("backend/kqueue.zig"));
 pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
+pub const WasmExtern = Xev(.wasm_extern, @import("backend/wasm_extern.zig"));
 
 /// Generic thread pool implementation.
 pub const ThreadPool = @import("ThreadPool.zig");
@@ -25,6 +26,7 @@ pub const Backend = enum {
     epoll,
     kqueue,
     wasi_poll,
+    wasm_extern,
 
     /// Returns a recommend default backend from inspecting the system.
     pub fn default() Backend {
@@ -32,6 +34,10 @@ pub const Backend = enum {
             .linux => .io_uring,
             .macos => .kqueue,
             .wasi => .wasi_poll,
+            .freestanding => switch (builtin.cpu.arch) {
+                .wasm32 => .wasm_extern,
+                else => null,
+            },
             else => null,
         }) orelse {
             @compileLog(builtin.os);
@@ -46,6 +52,7 @@ pub const Backend = enum {
             .epoll => Epoll,
             .kqueue => Kqueue,
             .wasi_poll => WasiPoll,
+            .wasm_extern => WasmExtern,
         };
     }
 };
@@ -73,13 +80,13 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const Loop = T.Loop;
         pub const Completion = T.Completion;
         pub const Result = T.Result;
-        pub const ReadBuffer = T.ReadBuffer;
-        pub const WriteBuffer = T.WriteBuffer;
         pub const Options = loop.Options;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
-        //
-        // // Error types
+        pub const ReadBuffer = T.ReadBuffer;
+        pub const WriteBuffer = T.WriteBuffer;
+
+        // Error types
         pub const AcceptError = T.AcceptError;
         pub const CancelError = T.CancelError;
         pub const CloseError = T.CloseError;
@@ -122,7 +129,7 @@ test {
     _ = ThreadPool;
 
     // Test the C API
-    if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
+    if (builtin.cpu.arch != .wasm32) _ = @import("c_api.zig");
 
     // OS-specific tests
     switch (builtin.os.tag) {

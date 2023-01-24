@@ -21,7 +21,9 @@ pub fn UDP(comptime xev: type) type {
         .kqueue => UDPSendto(xev),
 
         // Noop
-        .wasi_poll => struct {},
+        .wasi_poll,
+        .wasm_extern,
+        => struct {},
     };
 }
 

@@ -16,6 +16,9 @@ pub fn Async(comptime xev: type) type {
 
         // Supported, uses mach ports
         .kqueue => AsyncMachPort(xev),
+
+        // Unsupported
+        .wasm_extern => struct {},
     };
 }
 
