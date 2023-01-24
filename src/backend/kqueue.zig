@@ -319,50 +319,6 @@ pub const Loop = struct {
         // reuse that for the kevent call later...
         try self.submit();
 
-        // Process the completions we already have completed.
-        while (self.completions.pop()) |c| {
-            // disarm_ev is the Kevent to use for disarming if the
-            // completion wants to disarm. We have to calculate this up
-            // front because c can be reused in callback.
-            const disarm_ev: ?Kevent = ev: {
-                // If we're not active then we were never part of the kqueue.
-                // If we are part of a threadpool we also never were part
-                // of the kqueue.
-                if (c.flags.state != .active or
-                    c.flags.threadpool) break :ev null;
-
-                break :ev c.kevent();
-            };
-
-            // We store whether this completion was active so we can decrement
-            // the active count later
-            const c_active = c.flags.state == .active;
-
-            // Decrease our waiters because we are definitely processing one.
-            wait_rem -|= 1;
-
-            // Completion queue items MUST have a result set.
-            const action = c.callback(c.userdata, self, c, c.result.?);
-            switch (action) {
-                // If we're active we have to schedule a delete. Otherwise
-                // we do nothing because we were never part of the kqueue.
-                .disarm => {
-                    if (disarm_ev) |ev| {
-                        events[changes] = ev;
-                        events[changes].flags = os.system.EV_DELETE;
-                        events[changes].udata = 0;
-                        changes += 1;
-                        assert(changes <= events.len);
-                    }
-
-                    if (c_active) self.active -= 1;
-                },
-
-                // Only resubmit if we aren't already active (in the queue)
-                .rearm => if (c.flags.state != .active) self.submissions.push(c),
-            }
-        }
-
         // Explaining the loop condition: we want to loop only if we have
         // active handles (because it means we have something to do)
         // and we have stuff we want to wait for still (wait_rem > 0) or
@@ -373,7 +329,8 @@ pub const Loop = struct {
         // changes are only ever deletions currently, so we just process
         // those until we have no more.
         while ((self.active > 0 and (wait == 0 or wait_rem > 0)) or
-            changes > 0)
+            changes > 0 or
+            !self.completions.empty())
         {
             self.update_now();
             const now_timer: Timer = .{ .next = self.now };
@@ -417,12 +374,48 @@ pub const Loop = struct {
                 }
             }
 
-            if (!self.completions.empty()) {
-                // TODO: we only break here to force the tick to run again
-                // so that we can process thread pool completions. We should
-                // actually move completion handling within the while loop
-                // so that we don't have to do this.
-                break;
+            // Process the completions we already have completed.
+            while (self.completions.pop()) |c| {
+                // disarm_ev is the Kevent to use for disarming if the
+                // completion wants to disarm. We have to calculate this up
+                // front because c can be reused in callback.
+                const disarm_ev: ?Kevent = ev: {
+                    // If we're not active then we were never part of the kqueue.
+                    // If we are part of a threadpool we also never were part
+                    // of the kqueue.
+                    if (c.flags.state != .active or
+                        c.flags.threadpool) break :ev null;
+
+                    break :ev c.kevent();
+                };
+
+                // We store whether this completion was active so we can decrement
+                // the active count later
+                const c_active = c.flags.state == .active;
+
+                // Decrease our waiters because we are definitely processing one.
+                wait_rem -|= 1;
+
+                // Completion queue items MUST have a result set.
+                const action = c.callback(c.userdata, self, c, c.result.?);
+                switch (action) {
+                    // If we're active we have to schedule a delete. Otherwise
+                    // we do nothing because we were never part of the kqueue.
+                    .disarm => {
+                        if (disarm_ev) |ev| {
+                            events[changes] = ev;
+                            events[changes].flags = os.system.EV_DELETE;
+                            events[changes].udata = 0;
+                            changes += 1;
+                            assert(changes <= events.len);
+                        }
+
+                        if (c_active) self.active -= 1;
+                    },
+
+                    // Only resubmit if we aren't already active (in the queue)
+                    .rearm => if (c.flags.state != .active) self.submissions.push(c),
+                }
             }
 
             // Determine our next timeout based on the timers
