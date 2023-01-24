@@ -277,7 +277,7 @@ int main(void) {
 }
 ```
 
-# EXAMPLE (Zig)
+# EXAMPLE (ZIG)
 
 The example below shows how the Zig API can be used to initialize an event
 loop and run a 5 second timer. To learn more about the Zig API, see
@@ -296,19 +296,19 @@ pub fn main() !void {
     // Initialize a completion and a watcher. A completion is the actual
     // thing a loop does for us, and a watcher is a high-level structure
     // to help make it easier to use completions.
-	var c: xev.Completion = undefined;
+    var c: xev.Completion = undefined;
 
     // In this case, we initialize a timer watcher.
-	const w = try xev.Timer.init();
-	defer w.deinit();
+    const w = try xev.Timer.init();
+    defer w.deinit();
 
     // Configure the timer to run in 5s. This requires the completion that
     // we actually configure to become a timer, and the loop that the
     // completion should be registered with.
-	w.run(&loop, &c, 5000, void, null, &timerCallback);
+    w.run(&loop, &c, 5000, void, null, &timerCallback);
 
     // Run the loop until there are no more completions.
-	try loop.run(.until_done);
+    try loop.run(.until_done);
 }
 
 fn timerCallback(
