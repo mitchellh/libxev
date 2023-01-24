@@ -40,6 +40,7 @@
       in rec {
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = with pkgs; [
+            mandoc
             scdoc
             zigpkgs.master
 
