@@ -16,6 +16,7 @@ optimization.
 
 **Cross-platform.** Linux (`io_uring` and `epoll`), macOS (`kqueue`),
 WebAssembly + WASI (`poll_oneoff`, threaded and non-threaded runtimes).
+(Windows support is planned and coming soon)
 
 **[Proactor API](https://en.wikipedia.org/wiki/Proactor_pattern).** Work
 is submitted to the libxev event loop and the caller is notified of
