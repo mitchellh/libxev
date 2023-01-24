@@ -11,16 +11,241 @@ const os = std.os;
 /// if you have specific needs or want to push for the most optimal performance,
 /// use the platform-specific Loop directly.
 pub fn UDP(comptime xev: type) type {
-    switch (xev.backend) {
-        // Supported
+    return switch (xev.backend) {
+        // Supported, uses sendmsg/recvmsg exclusively
         .io_uring,
         .epoll,
-        => {},
+        => UDPSendMsg(xev),
 
-        // Not supported
-        .wasi_poll => return struct {},
-    }
+        // Supported, uses sendto/recvfrom
+        .kqueue => UDPSendto(xev),
 
+        // Noop
+        .wasi_poll => struct {},
+    };
+}
+
+/// UDP implementation that uses sendto/recvfrom.
+fn UDPSendto(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        socket: os.socket_t,
+
+        /// See UDPSendMsg.State
+        pub const State = struct {
+            userdata: ?*anyopaque,
+        };
+
+        /// Initialize a new UDP with the family from the given address. Only
+        /// the family is used, the actual address has no impact on the created
+        /// resource.
+        pub fn init(addr: std.net.Address) !Self {
+            return .{
+                .socket = try os.socket(
+                    addr.any.family,
+                    os.SOCK.NONBLOCK | os.SOCK.DGRAM | os.SOCK.CLOEXEC,
+                    0,
+                ),
+            };
+        }
+
+        /// Initialize a UDP socket from a file descriptor.
+        pub fn initFd(fd: os.socket_t) Self {
+            return .{
+                .socket = fd,
+            };
+        }
+
+        /// Bind the address to the socket.
+        pub fn bind(self: Self, addr: std.net.Address) !void {
+            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try os.bind(self.socket, &addr.any, addr.getOsSockLen());
+        }
+
+        /// Read from the socket. This performs a single read. The callback must
+        /// requeue the read if additional reads want to be performed. Additional
+        /// reads simultaneously can be queued by calling this multiple times. Note
+        /// that depending on the backend, the reads can happen out of order.
+        ///
+        /// TODO(mitchellh): a way to receive the remote addr
+        pub fn read(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            s: *State,
+            buf: xev.ReadBuffer,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: *State,
+                s: Self,
+                b: xev.ReadBuffer,
+                r: ReadError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            s.* = .{
+                .userdata = userdata,
+            };
+
+            switch (buf) {
+                inline .slice, .array => {
+                    c.* = .{
+                        .op = .{
+                            .recvfrom = .{
+                                .fd = self.socket,
+                                .buffer = buf,
+                            },
+                        },
+                        .userdata = s,
+                        .callback = (struct {
+                            fn callback(
+                                ud: ?*anyopaque,
+                                l_inner: *xev.Loop,
+                                c_inner: *xev.Completion,
+                                r: xev.Result,
+                            ) xev.CallbackAction {
+                                const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                                return @call(.always_inline, cb, .{
+                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                                    l_inner,
+                                    c_inner,
+                                    s_inner,
+                                    initFd(c_inner.op.recvfrom.fd),
+                                    c_inner.op.recvfrom.buffer,
+                                    if (r.recvfrom) |v| v else |err| err,
+                                });
+                            }
+                        }).callback,
+                    };
+
+                    loop.add(c);
+                },
+            }
+        }
+
+        /// Write to the socket. This performs a single write. Additional writes
+        /// can be queued by calling this multiple times. Note that depending on the
+        /// backend, writes can happen out of order.
+        pub fn write(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            s: *State,
+            addr: std.net.Address,
+            buf: xev.WriteBuffer,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: *State,
+                s: Self,
+                b: xev.WriteBuffer,
+                r: WriteError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            s.* = .{
+                .userdata = userdata,
+            };
+
+            switch (buf) {
+                inline .slice, .array => {
+                    c.* = .{
+                        .op = .{
+                            .sendto = .{
+                                .fd = self.socket,
+                                .buffer = buf,
+                                .addr = addr,
+                            },
+                        },
+                        .userdata = s,
+                        .callback = (struct {
+                            fn callback(
+                                ud: ?*anyopaque,
+                                l_inner: *xev.Loop,
+                                c_inner: *xev.Completion,
+                                r: xev.Result,
+                            ) xev.CallbackAction {
+                                const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                                return @call(.always_inline, cb, .{
+                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                                    l_inner,
+                                    c_inner,
+                                    s_inner,
+                                    initFd(c_inner.op.sendto.fd),
+                                    c_inner.op.sendto.buffer,
+                                    if (r.sendto) |v| v else |err| err,
+                                });
+                            }
+                        }).callback,
+                    };
+
+                    loop.add(c);
+                },
+            }
+        }
+
+        /// Close the socket.
+        pub fn close(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                r: CloseError!void,
+            ) xev.CallbackAction,
+        ) void {
+            c.* = .{
+                .op = .{
+                    .close = .{
+                        .fd = self.socket,
+                    },
+                },
+
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            l_inner,
+                            c_inner,
+                            initFd(c_inner.op.close.fd),
+                            if (r.close) |_| {} else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+
+            loop.add(c);
+        }
+
+        pub const CloseError = xev.CloseError;
+        pub const ReadError = xev.ReadError;
+        pub const WriteError = xev.WriteError;
+
+        /// Common tests
+        pub usingnamespace UDPTests(xev, Self);
+    };
+}
+
+/// UDP implementation that uses sendmsg/recvmsg
+fn UDPSendMsg(comptime xev: type) type {
     return struct {
         const Self = @This();
 
@@ -53,12 +278,16 @@ pub fn UDP(comptime xev: type) type {
         /// the family is used, the actual address has no impact on the created
         /// resource.
         pub fn init(addr: std.net.Address) !Self {
+            // On io_uring we don't use non-blocking sockets because we may
+            // just get EAGAIN over and over from completions.
+            const flags = flags: {
+                var flags: u32 = os.SOCK.DGRAM | os.SOCK.CLOEXEC;
+                if (xev.backend != .io_uring) flags |= os.SOCK.NONBLOCK;
+                break :flags flags;
+            };
+
             return .{
-                .socket = try os.socket(
-                    addr.any.family,
-                    os.SOCK.NONBLOCK | os.SOCK.DGRAM | os.SOCK.CLOEXEC,
-                    0,
-                ),
+                .socket = try os.socket(addr.any.family, flags, 0),
             };
         }
 
@@ -169,7 +398,11 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .wasi_poll => {},
+                .io_uring,
+                .kqueue,
+                .wasi_poll,
+                => {},
+
                 .epoll => c.flags.dup = true,
             }
 
@@ -274,7 +507,11 @@ pub fn UDP(comptime xev: type) type {
 
             // If we're dup-ing, then we ask the backend to manage the fd.
             switch (xev.backend) {
-                .io_uring, .wasi_poll => {},
+                .io_uring,
+                .kqueue,
+                .wasi_poll,
+                => {},
+
                 .epoll => c.flags.dup = true,
             }
 
@@ -329,6 +566,13 @@ pub fn UDP(comptime xev: type) type {
         pub const ReadError = xev.ReadError;
         pub const WriteError = xev.WriteError;
 
+        /// Common tests
+        pub usingnamespace UDPTests(xev, Self);
+    };
+}
+
+fn UDPTests(comptime xev: type, comptime Impl: type) type {
+    return struct {
         test "UDP: read/write" {
             const testing = std.testing;
 
@@ -336,13 +580,13 @@ pub fn UDP(comptime xev: type) type {
             defer loop.deinit();
 
             const address = try std.net.Address.parseIp4("127.0.0.1", 3131);
-            const server = try Self.init(address);
-            const client = try Self.init(address);
+            const server = try Impl.init(address);
+            const client = try Impl.init(address);
 
             // Bind and recv
             try server.bind(address);
             var c_read: xev.Completion = undefined;
-            var s_read: State = undefined;
+            var s_read: Impl.State = undefined;
             var recv_buf: [128]u8 = undefined;
             var recv_len: usize = 0;
             server.read(&loop, &c_read, &s_read, .{ .slice = &recv_buf }, usize, &recv_len, (struct {
@@ -350,10 +594,10 @@ pub fn UDP(comptime xev: type) type {
                     ud: ?*usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: *State,
-                    _: Self,
+                    _: *Impl.State,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -363,16 +607,16 @@ pub fn UDP(comptime xev: type) type {
             // Send
             var send_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
             var c_write: xev.Completion = undefined;
-            var s_write: State = undefined;
+            var s_write: Impl.State = undefined;
             client.write(&loop, &c_write, &s_write, address, .{ .slice = &send_buf }, void, null, (struct {
                 fn callback(
                     _: ?*void,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: *State,
-                    _: Self,
+                    _: *Impl.State,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: WriteError!usize,
+                    r: Impl.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -390,8 +634,8 @@ pub fn UDP(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: CloseError!void,
+                    _: Impl,
+                    r: Impl.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -402,8 +646,8 @@ pub fn UDP(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: CloseError!void,
+                    _: Impl,
+                    r: Impl.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;

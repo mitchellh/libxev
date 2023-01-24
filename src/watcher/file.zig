@@ -153,7 +153,9 @@ pub fn File(comptime xev: type) type {
                         .io_uring, .wasi_poll => {},
 
                         // Epoll we must run on a threadpool
-                        .epoll => c.flags.threadpool = true,
+                        inline .epoll,
+                        .kqueue,
+                        => c.flags.threadpool = true,
                     }
 
                     loop.add(c);
@@ -213,7 +215,9 @@ pub fn File(comptime xev: type) type {
                         .io_uring, .wasi_poll => {},
 
                         // Epoll we must run on a threadpool
-                        .epoll => c.flags.threadpool = true,
+                        inline .epoll,
+                        .kqueue,
+                        => c.flags.threadpool = true,
                     }
 
                     loop.add(c);

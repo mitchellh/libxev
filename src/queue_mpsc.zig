@@ -57,6 +57,7 @@ pub fn Intrusive(comptime T: type) type {
 
             if (next_) |next| {
                 @atomicStore(*T, &self.tail, next, .Release);
+                tail.next = null;
                 return tail;
             }
 
@@ -67,6 +68,7 @@ pub fn Intrusive(comptime T: type) type {
             next_ = @atomicLoad(?*T, &tail.next, .Acquire);
             if (next_) |next| {
                 @atomicStore(*T, &self.tail, next, .Unordered);
+                tail.next = null;
                 return tail;
             }
 

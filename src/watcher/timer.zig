@@ -121,6 +121,7 @@ pub fn Timer(comptime xev: type) type {
                 },
 
                 .epoll,
+                .kqueue,
                 .wasi_poll,
                 => .{
                     .op = .{

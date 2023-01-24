@@ -13,6 +13,9 @@ pub fn Async(comptime xev: type) type {
 
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev),
+
+        // Supported, uses mach ports
+        .kqueue => AsyncMachPort(xev),
     };
 }
 
@@ -186,6 +189,150 @@ fn AsyncEventFd(comptime xev: type) type {
             _ = os.write(self.fd, &val) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return err,
+            };
+        }
+
+        /// Common tests
+        pub usingnamespace AsyncTests(xev, Self);
+    };
+}
+
+/// Async implementation using mach ports (Darwin).
+///
+/// This allocates a mach port per async request and sends to that mach
+/// port to wake up the loop and trigger the completion.
+fn AsyncMachPort(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The error that can come in the wait callback.
+        pub const WaitError = xev.Sys.MachPortError;
+
+        /// The mach port
+        port: os.system.mach_port_name_t,
+
+        /// Completion associated with this async.
+        c: *xev.Completion,
+
+        /// Create a new async. An async can be assigned to exactly one loop
+        /// to be woken up. The completion must be allocated in advance.
+        pub fn init(c: *xev.Completion) !Self {
+            const mach_self = os.system.mach_task_self();
+
+            // Allocate the port
+            var mach_port: os.system.mach_port_name_t = undefined;
+            switch (os.system.getKernError(os.system.mach_port_allocate(
+                mach_self,
+                @enumToInt(os.system.MACH_PORT_RIGHT.RECEIVE),
+                &mach_port,
+            ))) {
+                .SUCCESS => {}, // Success
+                else => return error.MachPortAllocFailed,
+            }
+            errdefer _ = os.system.mach_port_deallocate(mach_self, mach_port);
+
+            return .{
+                .port = mach_port,
+                .c = c,
+            };
+        }
+
+        /// Clean up the async. This will forcibly deinitialize any resources
+        /// and may result in erroneous wait callbacks to be fired.
+        pub fn deinit(self: *Self) void {
+            _ = os.system.mach_port_deallocate(
+                os.system.mach_task_self(),
+                self.port,
+            );
+        }
+
+        /// Wait for a message on this async. Note that async messages may be
+        /// coalesced (or they may not be) so you should not expect a 1:1 mapping
+        /// between send and wait.
+        ///
+        /// Just like the rest of libxev, the wait must be re-queued if you want
+        /// to continue to be notified of async events.
+        ///
+        /// You should NOT register an async with multiple loops (the same loop
+        /// is fine -- but unnecessary). The behavior when waiting on multiple
+        /// loops is undefined.
+        pub fn wait(
+            self: Self,
+            loop: *xev.Loop,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!void,
+            ) xev.CallbackAction,
+        ) void {
+            self.c.* = .{
+                .op = .{
+                    .machport = .{
+                        .port = self.port,
+                        .buffer = .{ .array = undefined },
+                    },
+                },
+
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            l_inner,
+                            c_inner,
+                            if (r.machport) |_| {} else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+
+            loop.add(self.c);
+        }
+
+        /// Notify a loop to wake up synchronously. This should never block forever
+        /// (it will always EVENTUALLY succeed regardless of if the loop is currently
+        /// ticking or not).
+        pub fn notify(self: Self, loop: *xev.Loop) !void {
+            _ = loop;
+
+            // This constructs an empty mach message. It has no data.
+            var msg: os.system.mach_msg_header_t = .{
+                .msgh_bits = @enumToInt(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+                .msgh_size = @sizeOf(os.system.mach_msg_header_t),
+                .msgh_remote_port = self.port,
+                .msgh_local_port = os.system.MACH_PORT_NULL,
+                .msgh_voucher_port = undefined,
+                .msgh_id = undefined,
+            };
+
+            return switch (os.system.getMachMsgError(
+                os.system.mach_msg(
+                    &msg,
+                    os.system.MACH_SEND_MSG,
+                    msg.msgh_size,
+                    0,
+                    os.system.MACH_PORT_NULL,
+                    os.system.MACH_MSG_TIMEOUT_NONE,
+                    os.system.MACH_PORT_NULL,
+                ),
+            )) {
+                .SUCCESS => {},
+                else => |e| {
+                    std.log.warn("mach msg err={}", .{e});
+                    return error.MachMsgFailed;
+                },
+
+                // This is okay because it means that there was no more buffer
+                // space meaning that the port will wake up.
+                .SEND_NO_BUFFER => {},
             };
         }
 
