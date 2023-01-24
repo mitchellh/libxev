@@ -192,6 +192,9 @@ fn exampleTargets(
     install: bool,
     install_name: ?[]const u8,
 ) !void {
+    // Ignore if we're not installing
+    if (!install) return;
+
     // Open the directory
     const c_dir_path = (comptime thisDir()) ++ "/examples";
     var c_dir = try std.fs.openIterableDirAbsolute(c_dir_path, .{});
