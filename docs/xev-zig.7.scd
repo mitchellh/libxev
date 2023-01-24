@@ -48,3 +48,75 @@ The package is then available in your source code as "xev":
 
 const xev = @import("xev");
 ```
+
+# QUICK START
+
+## INITIALIZING A LOOP
+
+After importing xev, the first thing you'll need is an event loop:
+
+```
+var loop = try xev.Loop.init(.{});
+defer loop.deinit(); // or wherever your cleanup is
+```
+
+This initializes the resources associated with an event loop. An event loop
+_can be copied_ until the first `run` is called. Once `run` is called,
+the loop *must be at a stable memory location* (pointer won't change).
+
+## ADDING A COMPLETION
+
+An empty event loop does nothing. You must add one or more _completions_
+to request work to be done asynchronously. A completion is represented with
+the `xev.Completion` structure. A completion *must have a stable memory
+location when it is added to the loop* until the completion is finished.
+xev(7) talks more about completion lifetimes and memory allocation requirements.
+
+The example below adds a timer to the previously initialized event loop:
+
+```
+var c_timer: xev.Completion = undefined;
+const timer = try xev.Timer.init();
+timer.run(&loop, &c_timer, 5_000, void, null, timerCallback);
+```
+
+This uses the `xev.Timer` _high-level abstraction_. This is an abstraction
+that provides a common API on top of multiple operating system async APIs.
+You can also use the low-level API to manage completions with the loop directly,
+but these are not portable.
+
+**Important concept to notice:** The completion allocation is up to the
+program author. It can be stack allocated (such as in this case) or heap
+allocated. The pointer must remain stable until it is complete. This gives
+program authors substantial power over optimizing the performance of libxev.
+In fact, libxev doesn't perform _any_ dynamic memory allocation.
+
+## RUNNING THE LOOP
+
+An added completion is a request for future work. The work does not start
+until the completion is submitted. A completion is submitted only during
+an event loop tick. To tick the event loop, use the `run` method:
+
+```
+try loop.run(.until_done);
+```
+
+The enum value is an `xev.RunMode` described in xev(7). This call will run
+until the loop has no more active completions (`until_done`). At
+some point (in about 5 seconds), this will call the registered `timerCallback`.
+
+# SUGGEST A TOPIC
+
+There is still a lot of improvement to be made to the documentation. Please
+suggest any topics to cover at <https://github.com/mitchellh/libxev>.
+
+# SEE ALSO
+
+xev(7)
+
+<https://github.com/mitchellh/libxev>
+
+# AUTHORS
+
+Mitchell Hashimoto (xmitchx@gmail.com) and any open source contributors.
+See <https://github.com/mitchellh/libxev>.
