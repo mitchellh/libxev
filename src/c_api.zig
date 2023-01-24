@@ -2,9 +2,9 @@
 // the system libraries.
 //
 // WHERE IS THE DOCUMENTATION? Note that all the documentation for the C
-// interface is in the header file xev.h. The implementation for these various
-// functions also have some comments but they are tailored to the Zig API.
-// Still, the source code documentation can be helpful, too.
+// interface is in the man pages. The header file xev.h purposely has no
+// documentation so that its concise and easy to see the list of exported
+// functions.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -138,6 +138,6 @@ test "c-api sizes" {
     // THE MAGIC NUMBERS ARE KEPT IN SYNC WITH "include/xev.h"
     const testing = std.testing;
     try testing.expect(@sizeOf(xev.Loop) <= 512);
-    try testing.expect(@sizeOf(Completion) <= 256);
+    try testing.expect(@sizeOf(Completion) <= 320);
     try testing.expect(@sizeOf(xev.Timer) <= 256);
 }

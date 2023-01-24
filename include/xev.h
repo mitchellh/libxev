@@ -11,7 +11,7 @@ extern "C" {
  * byte sizes here. We choose some overly large values for now so that
  * we can retain ABI compatibility. */
 #define XEV_SIZEOF_LOOP 512
-#define XEV_SIZEOF_COMPLETION 256
+#define XEV_SIZEOF_COMPLETION 320
 #define XEV_SIZEOF_WATCHER 256
 
 /* There's a ton of preprocessor directives missing here for real cross-platform
