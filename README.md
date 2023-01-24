@@ -7,10 +7,11 @@ written in [Zig](https://ziglang.org/) but exports a C-compatible API (which
 further makes it compatible with any language out there that can communicate
 with C APIs).
 
-**Project Status:** Unstable, alpha-ish quality. The project has broad
-feature support across multiple platforms, but isn't well tested in real-world
-environments and there are lots of low-hanging fruit for performance
-optimization.
+**Project Status:** Unstable, alpha-ish quality. The feature list is quite
+good across multiple platforms, but there are plenty of missing features.
+The project hasn't been well tested in real-world environments and there
+are lots of low-hanging fruit for performance optimization. I'm not promising
+any API compatibility at this point, either.
 
 ## Features
 
