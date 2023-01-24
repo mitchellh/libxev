@@ -6,11 +6,11 @@ libxev - high-performance, cross-platform event loop
 
 # DESCRIPTION
 
-*libxev* is a cross-platform event loop. libxev provides a unified event loop
-abstraction for non-blocking IO, timers, signals, events, and more that
-works on macOS, Windows, Linux, and WebAssembly (browser and WASI). It is
-written in Zig but exports a C-compatible API (which makes it compatible with
-any language out there that can communicate with C APIs).
+*libxev* is a high-performance, cross-platform event loop. libxev provides a
+unified event loop abstraction for non-blocking IO, timers, signals, events,
+and more that works on macOS, Windows, Linux, and WebAssembly (browser and WASI).
+It is written in Zig but exports a C-compatible API (which makes it compatible
+with any language out there that can communicate with C APIs).
 
 This manual will focus on general libxev concepts. For details specific
 to the C API see xev-c(7) and for details specific to the Zig API see
@@ -18,7 +18,9 @@ xev-zig(7).
 
 # FEATURES
 
-*Cross-platform.* Linux (`io_uring` and `epoll`), TODO.
+*Cross-platform.* Linux (io_uring(7) and epoll(7)), macOS (kqueue(2)),
+WebAssembly + WASI (poll_oneoff(2), threaded and non-threaded runtimes).
+(Windows support is planned and coming soon)
 
 *Proactor API.* Work is submitted to the libxev event loop and the caller
 is notified of work _completion_, as opposed to work _readiness_.
@@ -51,6 +53,10 @@ watcher (such as UDP sockets), then the functionality related to that
 abstraction is not compiled into your final binary at all. This lets libxev
 support optional "nice-to-have" functionality that may be considered
 "bloat" in some cases, but the end user doesn't have to pay for it.
+
+*Dependency-free.* libxev has no dependencies other than the built-in
+OS APIs at runtime. The C library depends on libc. This makes it very
+easy to cross-compile.
 
 # EVENT LOOP PROGRAMMING
 
@@ -146,7 +152,7 @@ single request to do some work, such as read or write a file, accept
 a network connection, sleep on a timer, etc.
 
 Completions do nothing until they are _added_ to an event loop (and
-even then, do noting until the next event loop tick). Completions must
+even then, do nothing until the next event loop tick). Completions must
 only be added to one event loop at a time. After a completion is dead
 (see states below), it can be used with another event loop or the memory
 can be reclaimed.
@@ -223,7 +229,8 @@ Some callback tips for common behaviors:
 # EXAMPLE (C)
 
 The example below shows how the C API can be used to initialize an event
-loop and run a 5 second timer.
+loop and run a 5 second timer. To learn more about the C API, see
+xev-c(7).
 
 ```
 #include <stddef.h>
@@ -269,6 +276,60 @@ int main(void) {
     return 0;
 }
 ```
+
+# EXAMPLE (Zig)
+
+The example below shows how the Zig API can be used to initialize an event
+loop and run a 5 second timer. To learn more about the Zig API, see
+xev-zig(7).
+
+```
+const xev = @import("xev");
+
+pub fn main() !void {
+    // Initialize the loop state. Notice we can use a stack-allocated
+    // value here. We can even pass around the loop by value! The loop
+    // will contain all of our "completions" (watches).
+    var loop = try xev.Loop.init(.{ .entries = 128 });
+    defer loop.deinit();
+
+    // Initialize a completion and a watcher. A completion is the actual
+    // thing a loop does for us, and a watcher is a high-level structure
+    // to help make it easier to use completions.
+	var c: xev.Completion = undefined;
+
+    // In this case, we initialize a timer watcher.
+	const w = try xev.Timer.init();
+	defer w.deinit();
+
+    // Configure the timer to run in 5s. This requires the completion that
+    // we actually configure to become a timer, and the loop that the
+    // completion should be registered with.
+	w.run(&loop, &c, 5000, void, null, &timerCallback);
+
+    // Run the loop until there are no more completions.
+	try loop.run(.until_done);
+}
+
+fn timerCallback(
+    userdata: ?*void,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    result: xev.Timer.RunError!void,
+) xev.CallbackAction {
+	_ = userdata;
+	_ = loop;
+	_ = c;
+    _ = result catch unreachable;
+    return .disarm;
+}
+```
+
+# SEE ALSO
+
+xev-c(7), xev-zig(7)
+
+<https://github.com/mitchellh/libxev>
 
 # AUTHORS
 
