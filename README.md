@@ -14,7 +14,7 @@ optimization.
 
 ## Features
 
-**Cross-platform.** Linux (`io_uring` and `epoll`), macOS (`kqueue`), 
+**Cross-platform.** Linux (`io_uring` and `epoll`), macOS (`kqueue`),
 WebAssembly + WASI (`poll_oneoff`, threaded and non-threaded runtimes).
 
 **[Proactor API](https://en.wikipedia.org/wiki/Proactor_pattern).** Work
@@ -57,13 +57,13 @@ easy to cross-compile.
 ## Performance
 
 There is plenty of room for performance improvements, and I want to be
-fully clear that I haven't done a lot of optimization work. Still, 
-performance is looking good. I've tried to port many of 
+fully clear that I haven't done a lot of optimization work. Still,
+performance is looking good. I've tried to port many of
 [libuv benchmarks](https://github.com/libuv/libuv) to use the libxev
-API. 
+API.
 
-I won't post specific benchmark results until I have a better 
-environment to run them in. As a _very broad generalization_, 
+I won't post specific benchmark results until I have a better
+environment to run them in. As a _very broad generalization_,
 you shouldn't notice a slowdown using libxev compared to other
 major event loops. This may differ on a feature-by-feature basis, and
 if you can show really poor performance in an issue I'm interested
@@ -137,3 +137,17 @@ Once installed, `zig build install` on its own will build the full library and o
 a [FHS-compatible](https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard)
 directory in `zig-out`. You can customize the output directory with the
 `--prefix` flag.
+
+## Tests
+
+libxev has a large and growing test suite. To run the tests for the current
+platform:
+
+```sh
+$ zig build test
+...
+```
+
+This will run all the tests for all the supported features for the current
+host platform. For example, on Linux this will run both the full io_uring
+and epoll test suite.
