@@ -325,7 +325,10 @@ fn AsyncMachPort(comptime xev: type) type {
                 ),
             )) {
                 .SUCCESS => {},
-                else => return error.MachMsgFailed,
+                else => |e| {
+                    std.log.warn("mach msg err={}", .{e});
+                    return error.MachMsgFailed;
+                },
 
                 // This is okay because it means that there was no more buffer
                 // space meaning that the port will wake up.

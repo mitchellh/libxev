@@ -276,7 +276,7 @@ pub const Loop = struct {
             const events = [_]Kevent{.{
                 .ident = @intCast(usize, self.mach_port),
                 .filter = os.system.EVFILT_MACHPORT,
-                .flags = os.system.EV_ADD | os.system.EV_ENABLE | os.system.EV_CLEAR,
+                .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = os.system.MACH_RCV_MSG,
                 .data = 0,
                 .udata = 0,
@@ -829,6 +829,7 @@ pub const Loop = struct {
             ),
         )) {
             .SUCCESS => {},
+            .SEND_NO_BUFFER => {}, // Buffer full, will wake up
             else => error.MachMsgFailed,
         };
     }
@@ -930,7 +931,7 @@ pub const Completion = struct {
                 break :kevent .{
                     .ident = @intCast(usize, v.port),
                     .filter = os.system.EVFILT_MACHPORT,
-                    .flags = os.system.EV_ADD | os.system.EV_ENABLE | os.system.EV_CLEAR,
+                    .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                     .fflags = os.system.MACH_RCV_MSG,
                     .data = 0,
                     .udata = @ptrToInt(self),
