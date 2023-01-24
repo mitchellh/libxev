@@ -121,6 +121,31 @@ pub fn build(b: *std.build.Builder) !void {
     );
     b.getInstallStep().dependOn(&c_header.step);
 
+    // pkg-config
+    {
+        const file = try std.fs.path.join(
+            b.allocator,
+            &[_][]const u8{ b.cache_root, "libxev.pc" },
+        );
+        const pkgconfig_file = try std.fs.cwd().createFile(file, .{});
+
+        const writer = pkgconfig_file.writer();
+        try writer.print(
+            \\prefix={s}
+            \\includedir=${{prefix}}/include
+            \\libdir=${{prefix}}/lib
+            \\
+            \\Name: libxev
+            \\URL: https://github.com/mitchellh/libxev
+            \\Description: High-performance, cross-platform event loop
+            \\Version: 0.1.0
+            \\Cflags: -I${{includedir}}
+            \\Libs: -L${{libdir}} -lxev
+        , .{b.install_prefix});
+        defer pkgconfig_file.close();
+
+        b.installFile(file, "share/pkgconfig/libxev.pc");
+    }
     // Benchmarks
     _ = try benchTargets(b, target, mode, bench_install, bench_name);
 
