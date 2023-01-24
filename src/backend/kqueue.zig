@@ -558,7 +558,8 @@ pub const Loop = struct {
 
     fn done(self: *Loop) bool {
         return self.active == 0 and
-            self.submissions.empty();
+            self.submissions.empty() and
+            self.completions.empty();
     }
 
     /// Start the completion. This returns true if the Kevent was set

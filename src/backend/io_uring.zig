@@ -54,7 +54,8 @@ pub const Loop = struct {
 
     fn done(self: *Loop) bool {
         return self.active == 0 and
-            self.submissions.empty();
+            self.submissions.empty() and
+            self.completions.empty();
     }
 
     /// Update the cached time.
@@ -95,8 +96,10 @@ pub const Loop = struct {
         // chosen on a test machine since its about the cost of the syscall
         // when it has to wait under load, and avoiding the context switch makes
         // up for the time.
-        var i: usize = 0;
-        while (self.ring.cq_ready() == 0 and i < busy_wait) : (i += 1) {}
+        if (busy_wait > 0) {
+            var i: usize = 0;
+            while (self.ring.cq_ready() == 0 and i < busy_wait) : (i += 1) {}
+        }
 
         // Sync our completions with the wait amount we specified. If we did
         // the submit_and_wait above then the wait number should be immediately
