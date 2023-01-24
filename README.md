@@ -7,10 +7,15 @@ written in [Zig](https://ziglang.org/) but exports a C-compatible API (which
 further makes it compatible with any language out there that can communicate
 with C APIs).
 
+**Project Status:** Unstable, alpha-ish quality. The project has broad
+feature support across multiple platforms, but isn't well tested in real-world
+environments and there are lots of low-hanging fruit for performance
+optimization.
+
 ## Features
 
-**Cross-platform.** Linux (`io_uring` and `epoll`), WebAssembly + WASI
-(`poll_oneoff`, threaded and non-threaded runtimes).
+**Cross-platform.** Linux (`io_uring` and `epoll`), macOS (`kqueue`), 
+WebAssembly + WASI (`poll_oneoff`, threaded and non-threaded runtimes).
 
 **[Proactor API](https://en.wikipedia.org/wiki/Proactor_pattern).** Work
 is submitted to the libxev event loop and the caller is notified of
@@ -49,6 +54,21 @@ support optional "nice-to-have" functionality that may be considered
 OS APIs at runtime. The C library depends on libc. This makes it very
 easy to cross-compile.
 
+## Performance
+
+There is plenty of room for performance improvements, and I want to be
+fully clear that I haven't done a lot of optimization work. Still, 
+performance is looking good. I've tried to port many of 
+[libuv benchmarks](https://github.com/libuv/libuv) to use the libxev
+API. 
+
+I won't post specific benchmark results until I have a better 
+environment to run them in. As a _very broad generalization_, 
+you shouldn't notice a slowdown using libxev compared to other
+major event loops. This may differ on a feature-by-feature basis, and
+if you can show really poor performance in an issue I'm interested
+in resolving it!
+
 ## Documentation
 
 🚧 Documentation is a work-in-progress. 🚧
@@ -58,7 +78,7 @@ Currently, documentation is available in three forms: **man pages**,
 guides and API documentation in website form, but that isn't currently
 available.
 
-## Man Pages
+### Man Pages
 
 The man pages are relatively detailed! `xev(7)` will
 give you a good overview of the entire library. `xev-zig(7)` and
@@ -85,7 +105,7 @@ And the final approach is to install libxev via your favorite package
 manager (if and when available), which should hopefully put your man pages
 into your man path, so you can just do `man 7 xev`.
 
-## Examples
+### Examples
 
 There are examples available in the `examples/` folder. The examples are
 available in both C and Zig, and you can tell which one is which using
@@ -102,7 +122,7 @@ $ zig-out/bin/example-basic
 
 The `-Dexample` value should be the filename including the extension.
 
-## Code Comments
+### Code Comments
 
 The Zig code is well commented. If you're comfortable reading code comments
 you can find a lot of insight within them. The source is in the `src/`
