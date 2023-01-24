@@ -56,7 +56,19 @@ support optional "nice-to-have" functionality that may be considered
 OS APIs at runtime. The C library depends on libc. This makes it very
 easy to cross-compile.
 
-## Performance
+### Roadmap
+
+There are plenty of missing features that I still want to add:
+
+  * Pipe high-level API
+  * Signal handlers
+  * Filesystem events
+  * Windows backend
+  * Freestanding WebAssembly support via an external event loop (i.e. the browser)
+
+And more...
+
+### Performance
 
 There is plenty of room for performance improvements, and I want to be
 fully clear that I haven't done a lot of optimization work. Still,
