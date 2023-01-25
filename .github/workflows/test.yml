@@ -16,8 +16,8 @@ jobs:
           wasm32-wasi
 
           # TODO
-          # aarch64-macos,
-          # x86_64-macos,
+          aarch64-macos,
+          x86_64-macos,
 
           # i386-windows,
           # x86_64-windows-gnu,
