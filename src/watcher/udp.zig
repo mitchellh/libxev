@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const os = std.os;
+const stream = @import("stream.zig");
 
 /// UDP client and server.
 ///
@@ -30,19 +31,25 @@ fn UDPSendto(comptime xev: type) type {
     return struct {
         const Self = @This();
 
-        socket: os.socket_t,
+        fd: os.socket_t,
 
         /// See UDPSendMsg.State
         pub const State = struct {
             userdata: ?*anyopaque,
         };
 
+        pub usingnamespace stream.Stream(xev, Self, .{
+            .close = true,
+            .read = .none,
+            .write = .none,
+        });
+
         /// Initialize a new UDP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
         /// resource.
         pub fn init(addr: std.net.Address) !Self {
             return .{
-                .socket = try os.socket(
+                .fd = try os.socket(
                     addr.any.family,
                     os.SOCK.NONBLOCK | os.SOCK.DGRAM | os.SOCK.CLOEXEC,
                     0,
@@ -53,15 +60,15 @@ fn UDPSendto(comptime xev: type) type {
         /// Initialize a UDP socket from a file descriptor.
         pub fn initFd(fd: os.socket_t) Self {
             return .{
-                .socket = fd,
+                .fd = fd,
             };
         }
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
-            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(self.socket, &addr.any, addr.getOsSockLen());
+            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try os.bind(self.fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Read from the socket. This performs a single read. The callback must
@@ -97,7 +104,7 @@ fn UDPSendto(comptime xev: type) type {
                     c.* = .{
                         .op = .{
                             .recvfrom = .{
-                                .fd = self.socket,
+                                .fd = self.fd,
                                 .buffer = buf,
                             },
                         },
@@ -159,7 +166,7 @@ fn UDPSendto(comptime xev: type) type {
                     c.* = .{
                         .op = .{
                             .sendto = .{
-                                .fd = self.socket,
+                                .fd = self.fd,
                                 .buffer = buf,
                                 .addr = addr,
                             },
@@ -191,51 +198,6 @@ fn UDPSendto(comptime xev: type) type {
             }
         }
 
-        /// Close the socket.
-        pub fn close(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                r: CloseError!void,
-            ) xev.CallbackAction,
-        ) void {
-            c.* = .{
-                .op = .{
-                    .close = .{
-                        .fd = self.socket,
-                    },
-                },
-
-                .userdata = userdata,
-                .callback = (struct {
-                    fn callback(
-                        ud: ?*anyopaque,
-                        l_inner: *xev.Loop,
-                        c_inner: *xev.Completion,
-                        r: xev.Result,
-                    ) xev.CallbackAction {
-                        return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                            l_inner,
-                            c_inner,
-                            initFd(c_inner.op.close.fd),
-                            if (r.close) |_| {} else |err| err,
-                        });
-                    }
-                }).callback,
-            };
-
-            loop.add(c);
-        }
-
-        pub const CloseError = xev.CloseError;
         pub const ReadError = xev.ReadError;
         pub const WriteError = xev.WriteError;
 
@@ -249,7 +211,7 @@ fn UDPSendMsg(comptime xev: type) type {
     return struct {
         const Self = @This();
 
-        socket: os.socket_t,
+        fd: os.socket_t,
 
         /// UDP requires some extra state to perform operations. The state is
         /// opaque. This isn't part of xev.Completion because it is relatively
@@ -274,6 +236,12 @@ fn UDPSendMsg(comptime xev: type) type {
             },
         };
 
+        pub usingnamespace stream.Stream(xev, Self, .{
+            .close = true,
+            .read = .none,
+            .write = .none,
+        });
+
         /// Initialize a new UDP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
         /// resource.
@@ -287,22 +255,22 @@ fn UDPSendMsg(comptime xev: type) type {
             };
 
             return .{
-                .socket = try os.socket(addr.any.family, flags, 0),
+                .fd = try os.socket(addr.any.family, flags, 0),
             };
         }
 
         /// Initialize a UDP socket from a file descriptor.
         pub fn initFd(fd: os.socket_t) Self {
             return .{
-                .socket = fd,
+                .fd = fd,
             };
         }
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
-            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(self.socket, &addr.any, addr.getOsSockLen());
+            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try os.bind(self.fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Read from the socket. This performs a single read. The callback must
@@ -369,7 +337,7 @@ fn UDPSendMsg(comptime xev: type) type {
             c.* = .{
                 .op = .{
                     .recvmsg = .{
-                        .fd = self.socket,
+                        .fd = self.fd,
                         .msghdr = &s.op.recv.msghdr,
                     },
                 },
@@ -478,7 +446,7 @@ fn UDPSendMsg(comptime xev: type) type {
             c.* = .{
                 .op = .{
                     .sendmsg = .{
-                        .fd = self.socket,
+                        .fd = self.fd,
                         .msghdr = &s.op.send.msghdr,
                     },
                 },
@@ -518,51 +486,6 @@ fn UDPSendMsg(comptime xev: type) type {
             loop.add(c);
         }
 
-        /// Close the socket.
-        pub fn close(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                r: CloseError!void,
-            ) xev.CallbackAction,
-        ) void {
-            c.* = .{
-                .op = .{
-                    .close = .{
-                        .fd = self.socket,
-                    },
-                },
-
-                .userdata = userdata,
-                .callback = (struct {
-                    fn callback(
-                        ud: ?*anyopaque,
-                        l_inner: *xev.Loop,
-                        c_inner: *xev.Completion,
-                        r: xev.Result,
-                    ) xev.CallbackAction {
-                        return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                            l_inner,
-                            c_inner,
-                            initFd(c_inner.op.close.fd),
-                            if (r.close) |_| {} else |err| err,
-                        });
-                    }
-                }).callback,
-            };
-
-            loop.add(c);
-        }
-
-        pub const CloseError = xev.CloseError;
         pub const ReadError = xev.ReadError;
         pub const WriteError = xev.WriteError;
 
