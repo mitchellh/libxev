@@ -17,8 +17,7 @@ over the C API. For example, all callbacks in the Zig API must be available
 at comptime because the callback call is always inlined -- this results in
 a noticable performance improvement over equivalent C consumption of libxev.
 
-The primary Zig API is visible in `src/main.zig` in the libxev source.
-The main file uses a somewhat convoluted `usingnamespace` to setup the
+The primary Zig API is visible in `src/main.zig` in the libxev source. The main file uses a somewhat convoluted `usingnamespace` to setup the
 API so it isn't immediately obvious, but the API is provided by the `Xev`
 function. For example, available consts are: `xev.Loop`, `xev.Completion`,
 etc.
@@ -104,6 +103,24 @@ try loop.run(.until_done);
 The enum value is an `xev.RunMode` described in xev(7). This call will run
 until the loop has no more active completions (`until_done`). At
 some point (in about 5 seconds), this will call the registered `timerCallback`.
+
+# MEMORY ALLOCATIONS
+
+You'll notice that none of the Zig APIs take an allocator as an argument.
+libxev does not perform any dynamic memory allocations. All memory must be
+provided by the caller. This section will outline specific memory management
+rules you should be aware of when using libxev.
+
+*xev.Loop.* This can be copied and moved until `submit`, `tick`, or `run`
+is called. Once any of those loop functions are called, the loop memory
+must remain at a stable address. It is not safe to copy, move, or reuse the
+memory that loop is occupying until `deinit` completes.
+
+*xev.Completion.* This can be copied and moved until the completion is
+added to a loop. A completion is often added to a loop with any function
+call on a high-level abstraction that takes a completion pointer as a function
+argument such as `xev.Timer.run`. The completion memory can be reclaimed
+only when the callback associated with it is fired or the loop is deinitialized.
 
 # SUGGEST A TOPIC
 
