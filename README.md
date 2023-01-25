@@ -15,6 +15,18 @@ any API compatibility at this point, either. If you want a production ready,
 high quality, generalized event loop implementation check out
 [libuv](https://libuv.org/), libev, etc.
 
+**Why a new event loop library?** A few reasons. One, I think Zig lacks
+a generalized event loop comparable to libuv in features ("generalized"
+being a key word here). Two, I wanted to build a library like this around
+the design patterns of [io_uring](https://unixism.net/loti/what_is_io_uring.html),
+even mimicking its style on top of other OS primitives (
+[credit to this awesome blog post](https://tigerbeetle.com/blog/a-friendly-abstraction-over-iouring-and-kqueue/)).
+Three, I wanted an event loop library that could build to WebAssembly
+(both WASI and freestanding) and that didn't really fit well
+into the goals of API style of existing libraries without bringing in
+something super heavy like Emscripten. The motivation for this library
+primarily though is scratching my own itch!
+
 ## Features
 
 **Cross-platform.** Linux (`io_uring` and `epoll`), macOS (`kqueue`),
