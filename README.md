@@ -11,7 +11,9 @@ with C APIs).
 good across multiple platforms, but there are plenty of missing features.
 The project hasn't been well tested in real-world environments and there
 are lots of low-hanging fruit for performance optimization. I'm not promising
-any API compatibility at this point, either.
+any API compatibility at this point, either. If you want a production ready,
+high quality, generalized event loop implementation check out
+[libuv](https://libuv.org/), libev, etc.
 
 ## Features
 
