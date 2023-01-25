@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const os = std.os;
+const stream = @import("stream.zig");
 
 /// TCP client and server.
 ///
@@ -14,7 +15,13 @@ pub fn TCP(comptime xev: type) type {
     return struct {
         const Self = @This();
 
-        socket: os.socket_t,
+        fd: os.socket_t,
+
+        pub usingnamespace stream.Stream(xev, Self, .{
+            .close = true,
+            .read = true,
+            .write = true,
+        });
 
         /// Initialize a new TCP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
@@ -31,14 +38,14 @@ pub fn TCP(comptime xev: type) type {
             };
 
             return .{
-                .socket = try os.socket(addr.any.family, flags, 0),
+                .fd = try os.socket(addr.any.family, flags, 0),
             };
         }
 
         /// Initialize a TCP socket from a file descriptor.
         pub fn initFd(fd: os.socket_t) Self {
             return .{
-                .socket = fd,
+                .fd = fd,
             };
         }
 
@@ -46,8 +53,8 @@ pub fn TCP(comptime xev: type) type {
         pub fn bind(self: Self, addr: std.net.Address) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            try os.setsockopt(self.socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(self.socket, &addr.any, addr.getOsSockLen());
+            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try os.bind(self.fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Listen for connections on the socket. This puts the socket into passive
@@ -55,7 +62,7 @@ pub fn TCP(comptime xev: type) type {
         pub fn listen(self: Self, backlog: u31) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            try os.listen(self.socket, backlog);
+            try os.listen(self.fd, backlog);
         }
 
         /// Accept a single connection.
@@ -75,7 +82,7 @@ pub fn TCP(comptime xev: type) type {
             c.* = .{
                 .op = .{
                     .accept = .{
-                        .socket = self.socket,
+                        .socket = self.fd,
                     },
                 },
 
@@ -131,7 +138,7 @@ pub fn TCP(comptime xev: type) type {
             c.* = .{
                 .op = .{
                     .connect = .{
-                        .socket = self.socket,
+                        .socket = self.fd,
                         .addr = addr,
                     },
                 },
@@ -150,50 +157,6 @@ pub fn TCP(comptime xev: type) type {
                             c_inner,
                             initFd(c_inner.op.connect.socket),
                             if (r.connect) |_| {} else |err| err,
-                        });
-                    }
-                }).callback,
-            };
-
-            loop.add(c);
-        }
-
-        /// Close the socket.
-        pub fn close(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                r: CloseError!void,
-            ) xev.CallbackAction,
-        ) void {
-            c.* = .{
-                .op = .{
-                    .close = .{
-                        .fd = self.socket,
-                    },
-                },
-
-                .userdata = userdata,
-                .callback = (struct {
-                    fn callback(
-                        ud: ?*anyopaque,
-                        l_inner: *xev.Loop,
-                        c_inner: *xev.Completion,
-                        r: xev.Result,
-                    ) xev.CallbackAction {
-                        return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                            l_inner,
-                            c_inner,
-                            initFd(c_inner.op.close.fd),
-                            if (r.close) |_| {} else |err| err,
                         });
                     }
                 }).callback,
@@ -222,7 +185,7 @@ pub fn TCP(comptime xev: type) type {
             c.* = .{
                 .op = .{
                     .shutdown = .{
-                        .socket = self.socket,
+                        .socket = self.fd,
                         .how = .send,
                     },
                 },
@@ -248,139 +211,9 @@ pub fn TCP(comptime xev: type) type {
             loop.add(c);
         }
 
-        /// Read from the socket. This performs a single read. The callback must
-        /// requeue the read if additional reads want to be performed. Additional
-        /// reads simultaneously can be queued by calling this multiple times. Note
-        /// that depending on the backend, the reads can happen out of order.
-        pub fn read(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            buf: xev.ReadBuffer,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                b: xev.ReadBuffer,
-                r: ReadError!usize,
-            ) xev.CallbackAction,
-        ) void {
-            switch (buf) {
-                inline .slice, .array => {
-                    c.* = .{
-                        .op = .{
-                            .recv = .{
-                                .fd = self.socket,
-                                .buffer = buf,
-                            },
-                        },
-                        .userdata = userdata,
-                        .callback = (struct {
-                            fn callback(
-                                ud: ?*anyopaque,
-                                l_inner: *xev.Loop,
-                                c_inner: *xev.Completion,
-                                r: xev.Result,
-                            ) xev.CallbackAction {
-                                return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                                    l_inner,
-                                    c_inner,
-                                    initFd(c_inner.op.recv.fd),
-                                    c_inner.op.recv.buffer,
-                                    if (r.recv) |v| v else |err| err,
-                                });
-                            }
-                        }).callback,
-                    };
-
-                    // If we're dup-ing, then we ask the backend to manage the fd.
-                    switch (xev.backend) {
-                        .io_uring,
-                        .kqueue,
-                        .wasi_poll,
-                        => {},
-
-                        .epoll => c.flags.dup = true,
-                    }
-
-                    loop.add(c);
-                },
-            }
-        }
-
-        /// Write to the socket. This performs a single write. Additional writes
-        /// can be queued by calling this multiple times. Note that depending on the
-        /// backend, writes can happen out of order.
-        pub fn write(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            buf: xev.WriteBuffer,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                b: xev.WriteBuffer,
-                r: WriteError!usize,
-            ) xev.CallbackAction,
-        ) void {
-            switch (buf) {
-                inline .slice, .array => {
-                    c.* = .{
-                        .op = .{
-                            .send = .{
-                                .fd = self.socket,
-                                .buffer = buf,
-                            },
-                        },
-                        .userdata = userdata,
-                        .callback = (struct {
-                            fn callback(
-                                ud: ?*anyopaque,
-                                l_inner: *xev.Loop,
-                                c_inner: *xev.Completion,
-                                r: xev.Result,
-                            ) xev.CallbackAction {
-                                return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                                    l_inner,
-                                    c_inner,
-                                    initFd(c_inner.op.send.fd),
-                                    c_inner.op.send.buffer,
-                                    if (r.send) |v| v else |err| err,
-                                });
-                            }
-                        }).callback,
-                    };
-
-                    // If we're dup-ing, then we ask the backend to manage the fd.
-                    switch (xev.backend) {
-                        .io_uring,
-                        .kqueue,
-                        .wasi_poll,
-                        => {},
-
-                        .epoll => c.flags.dup = true,
-                    }
-
-                    loop.add(c);
-                },
-            }
-        }
-
         pub const AcceptError = xev.AcceptError;
-        pub const CloseError = xev.CloseError;
         pub const ConnectError = xev.ConnectError;
         pub const ShutdownError = xev.ShutdownError;
-        pub const ReadError = xev.ReadError;
-        pub const WriteError = xev.WriteError;
 
         test "TCP: accept/connect/send/recv/close" {
             // We have no way to get a socket in WASI from a WASI context.
@@ -444,7 +277,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: Self,
-                    r: CloseError!void,
+                    r: Self.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -463,7 +296,7 @@ pub fn TCP(comptime xev: type) type {
                     c: *xev.Completion,
                     _: Self,
                     _: xev.WriteBuffer,
-                    r: WriteError!usize,
+                    r: Self.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -481,7 +314,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Completion,
                     _: Self,
                     _: xev.ReadBuffer,
-                    r: ReadError!usize,
+                    r: Self.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -499,7 +332,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: Self,
-                    r: CloseError!void,
+                    r: Self.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = null;
@@ -512,7 +345,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: Self,
-                    r: CloseError!void,
+                    r: Self.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = false;
