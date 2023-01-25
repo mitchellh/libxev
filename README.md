@@ -83,6 +83,86 @@ major event loops. This may differ on a feature-by-feature basis, and
 if you can show really poor performance in an issue I'm interested
 in resolving it!
 
+## Example
+
+<table>
+<tr>
+<td> Zig </td> <td> C </td>
+</tr>
+<tr>
+<td>
+
+```zig
+const xev = @import("xev");
+
+pub fn main() !void {
+    var loop = try xev.Loop.init(.{});
+    defer loop.deinit();
+ 
+    const w = try xev.Timer.init();
+    defer w.deinit();
+
+    // 5s timer
+    var c: xev.Completion = undefined;
+    w.run(&loop, &c, 5000, void, null, &timerCallback);
+
+    try loop.run(.until_done);
+}
+
+fn timerCallback(
+    userdata: ?*void,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    result: xev.Timer.RunError!void,
+) xev.CallbackAction {
+	   _ = userdata;
+   	_ = loop;
+   	_ = c;
+    _ = result catch unreachable;
+    return .disarm;
+}
+```
+
+</td>
+<td>
+    
+```zig
+#include <stddef.h>
+#include <stdio.h>
+#include <xev.h>
+
+xev_cb_action timerCallback(xev_loop* loop, xev_completion* c, int result, void *userdata) {
+    return XEV_DISARM;
+}
+
+int main(void) {
+    xev_loop loop;
+    if (xev_loop_init(&loop) != 0) {
+        printf("xev_loop_init failure\n");
+        return 1;
+    }
+ 
+    xev_completion c;
+    xev_watcher w;
+    if (xev_timer_init(&w) != 0) {
+        printf("xev_timer_init failure\n");
+        return 1;
+    }
+
+    xev_completion c;
+    xev_timer_run(&w, &loop, &c, 5000, NULL, &timerCallback);
+
+    xev_loop_run(&loop, XEV_RUN_UNTIL_DONE);
+
+    xev_timer_deinit(&w);
+    xev_loop_deinit(&loop);
+    return 0;
+}
+```
+</td>
+</tr>
+</table>
+
 ## Documentation
 
 🚧 Documentation is a work-in-progress. 🚧
