@@ -85,6 +85,11 @@ in resolving it!
 
 ## Example
 
+The example below shows an identical program written in Zig and in C
+that uses libxev to run a single 5s timer. This is almost silly how
+simple it is but is meant to just convey the overall feel of the library
+rather than a practical use case.
+
 <table>
 <tr>
 <td> Zig </td> <td> C </td>
@@ -142,7 +147,6 @@ int main(void) {
         return 1;
     }
 
-    xev_completion c;
     xev_watcher w;
     if (xev_timer_init(&w) != 0) {
         printf("xev_timer_init failure\n");
