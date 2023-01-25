@@ -13,11 +13,9 @@ jobs:
           x86-linux-musl,
           x86_64-linux-gnu,
           x86_64-linux-musl,
-          wasm32-wasi
-
-          # TODO
           aarch64-macos,
           x86_64-macos,
+          wasm32-wasi
 
           # i386-windows,
           # x86_64-windows-gnu,
