@@ -98,7 +98,7 @@ const xev = @import("xev");
 pub fn main() !void {
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
- 
+
     const w = try xev.Timer.init();
     defer w.deinit();
 
@@ -115,17 +115,17 @@ fn timerCallback(
     c: *xev.Completion,
     result: xev.Timer.RunError!void,
 ) xev.CallbackAction {
-	   _ = userdata;
-   	_ = loop;
-   	_ = c;
-    _ = result catch unreachable;
-    return .disarm;
+   _ = userdata;
+   _ = loop;
+   _ = c;
+   _ = result catch unreachable;
+   return .disarm;
 }
 ```
 
 </td>
 <td>
-    
+
 ```zig
 #include <stddef.h>
 #include <stdio.h>
@@ -141,7 +141,7 @@ int main(void) {
         printf("xev_loop_init failure\n");
         return 1;
     }
- 
+
     xev_completion c;
     xev_watcher w;
     if (xev_timer_init(&w) != 0) {
