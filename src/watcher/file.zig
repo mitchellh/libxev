@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
 const main = @import("../main.zig");
+const stream = @import("stream.zig");
 
 /// File operations.
 ///
@@ -27,25 +28,28 @@ pub fn File(comptime xev: type) type {
         const Self = @This();
 
         /// The underlying file
-        file: std.fs.File,
+        fd: std.os.fd_t,
 
-        pub const CloseError = xev.CloseError;
-        pub const ReadError = xev.ReadError;
-        pub const WriteError = xev.WriteError;
+        pub usingnamespace stream.Stream(xev, Self, .{
+            .close = true,
+            .read = .read,
+            .write = .write,
+            .threadpool = true,
+        });
 
         /// Initialize a new TCP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
         /// resource.
         pub fn init(file: std.fs.File) !Self {
             return .{
-                .file = file,
+                .fd = file.handle,
             };
         }
 
         /// Initialize a File from a file descriptor.
         pub fn initFd(fd: std.fs.File.Handle) Self {
             return .{
-                .file = .{ .handle = fd },
+                .fd = fd,
             };
         }
 
@@ -54,175 +58,6 @@ pub fn File(comptime xev: type) type {
         /// synchronously.
         pub fn deinit(self: *File) void {
             _ = self;
-        }
-
-        /// Close the file.
-        pub fn close(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                r: CloseError!void,
-            ) xev.CallbackAction,
-        ) void {
-            c.* = .{
-                .op = .{
-                    .close = .{
-                        .fd = self.file.handle,
-                    },
-                },
-
-                .userdata = userdata,
-                .callback = (struct {
-                    fn callback(
-                        ud: ?*anyopaque,
-                        l_inner: *xev.Loop,
-                        c_inner: *xev.Completion,
-                        r: xev.Result,
-                    ) xev.CallbackAction {
-                        return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                            l_inner,
-                            c_inner,
-                            initFd(c_inner.op.close.fd),
-                            if (r.close) |_| {} else |err| err,
-                        });
-                    }
-                }).callback,
-            };
-
-            loop.add(c);
-        }
-
-        /// Read from the file. This performs a single read. The callback must
-        /// requeue the read if additional reads want to be performed. Additional
-        /// reads simultaneously can be queued by calling this multiple times. Note
-        /// that depending on the backend, the reads can happen out of order.
-        pub fn read(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            buf: xev.ReadBuffer,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                b: xev.ReadBuffer,
-                r: ReadError!usize,
-            ) xev.CallbackAction,
-        ) void {
-            switch (buf) {
-                inline .slice, .array => {
-                    c.* = .{
-                        .op = .{
-                            .read = .{
-                                .fd = self.file.handle,
-                                .buffer = buf,
-                            },
-                        },
-                        .userdata = userdata,
-                        .callback = (struct {
-                            fn callback(
-                                ud: ?*anyopaque,
-                                l_inner: *xev.Loop,
-                                c_inner: *xev.Completion,
-                                r: xev.Result,
-                            ) xev.CallbackAction {
-                                return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                                    l_inner,
-                                    c_inner,
-                                    initFd(c_inner.op.read.fd),
-                                    c_inner.op.read.buffer,
-                                    if (r.read) |v| v else |err| err,
-                                });
-                            }
-                        }).callback,
-                    };
-
-                    switch (xev.backend) {
-                        .io_uring, .wasi_poll => {},
-
-                        // Epoll we must run on a threadpool
-                        inline .epoll,
-                        .kqueue,
-                        => c.flags.threadpool = true,
-                    }
-
-                    loop.add(c);
-                },
-            }
-        }
-
-        /// Write to the file. This performs a single write. Additional writes
-        /// can be queued by calling this multiple times. Note that depending on the
-        /// backend, writes can happen out of order.
-        pub fn write(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            buf: xev.WriteBuffer,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                b: xev.WriteBuffer,
-                r: WriteError!usize,
-            ) xev.CallbackAction,
-        ) void {
-            switch (buf) {
-                inline .slice, .array => {
-                    c.* = .{
-                        .op = .{
-                            .write = .{
-                                .fd = self.file.handle,
-                                .buffer = buf,
-                            },
-                        },
-                        .userdata = userdata,
-                        .callback = (struct {
-                            fn callback(
-                                ud: ?*anyopaque,
-                                l_inner: *xev.Loop,
-                                c_inner: *xev.Completion,
-                                r: xev.Result,
-                            ) xev.CallbackAction {
-                                return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                                    l_inner,
-                                    c_inner,
-                                    initFd(c_inner.op.write.fd),
-                                    c_inner.op.write.buffer,
-                                    if (r.write) |v| v else |err| err,
-                                });
-                            }
-                        }).callback,
-                    };
-
-                    switch (xev.backend) {
-                        .io_uring, .wasi_poll => {},
-
-                        // Epoll we must run on a threadpool
-                        inline .epoll,
-                        .kqueue,
-                        => c.flags.threadpool = true,
-                    }
-
-                    loop.add(c);
-                },
-            }
         }
 
         test {
@@ -258,7 +93,7 @@ pub fn File(comptime xev: type) type {
                     _: *xev.Completion,
                     _: Self,
                     _: xev.WriteBuffer,
-                    r: WriteError!usize,
+                    r: Self.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -285,7 +120,7 @@ pub fn File(comptime xev: type) type {
                     _: *xev.Completion,
                     _: Self,
                     _: xev.ReadBuffer,
-                    r: ReadError!usize,
+                    r: Self.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;

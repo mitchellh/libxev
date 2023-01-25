@@ -19,8 +19,8 @@ pub fn TCP(comptime xev: type) type {
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
-            .read = true,
-            .write = true,
+            .read = .recv,
+            .write = .send,
         });
 
         /// Initialize a new TCP with the family from the given address. Only

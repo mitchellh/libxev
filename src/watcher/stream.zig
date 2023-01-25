@@ -1,9 +1,15 @@
 /// Options for creating a stream type. Each of the options makes the
 /// functionality available for the stream.
 pub const Options = struct {
-    read: bool,
-    write: bool,
+    read: ReadMethod,
+    write: WriteMethod,
     close: bool,
+
+    /// True to schedule the read/write on the threadpool.
+    threadpool: bool = false,
+
+    pub const ReadMethod = enum { none, read, recv };
+    pub const WriteMethod = enum { none, write, send };
 };
 
 /// Creates a stream type that is meant to be embedded within other
@@ -18,8 +24,8 @@ pub const Options = struct {
 pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) type {
     return struct {
         pub usingnamespace if (options.close) Closeable(xev, T, options) else struct {};
-        pub usingnamespace if (options.read) Readable(xev, T, options) else struct {};
-        pub usingnamespace if (options.write) Writeable(xev, T, options) else struct {};
+        pub usingnamespace if (options.read != .none) Readable(xev, T, options) else struct {};
+        pub usingnamespace if (options.write != .none) Writeable(xev, T, options) else struct {};
     };
 }
 
@@ -78,8 +84,6 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
 }
 
 pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    _ = options;
-
     return struct {
         const Self = T;
 
@@ -108,10 +112,21 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
             switch (buf) {
                 inline .slice, .array => {
                     c.* = .{
-                        .op = .{
-                            .recv = .{
-                                .fd = self.fd,
-                                .buffer = buf,
+                        .op = switch (options.read) {
+                            .none => unreachable,
+
+                            .read => .{
+                                .read = .{
+                                    .fd = self.fd,
+                                    .buffer = buf,
+                                },
+                            },
+
+                            .recv => .{
+                                .recv = .{
+                                    .fd = self.fd,
+                                    .buffer = buf,
+                                },
                             },
                         },
                         .userdata = userdata,
@@ -122,14 +137,33 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                                 c_inner: *xev.Completion,
                                 r: xev.Result,
                             ) xev.CallbackAction {
-                                return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                                    l_inner,
-                                    c_inner,
-                                    T.initFd(c_inner.op.recv.fd),
-                                    c_inner.op.recv.buffer,
-                                    if (r.recv) |v| v else |err| err,
-                                });
+                                return switch (options.read) {
+                                    .none => unreachable,
+
+                                    .recv => @call(.always_inline, cb, .{
+                                        @ptrCast(?*Userdata, @alignCast(
+                                            @max(1, @alignOf(Userdata)),
+                                            ud,
+                                        )),
+                                        l_inner,
+                                        c_inner,
+                                        T.initFd(c_inner.op.recv.fd),
+                                        c_inner.op.recv.buffer,
+                                        if (r.recv) |v| v else |err| err,
+                                    }),
+
+                                    .read => @call(.always_inline, cb, .{
+                                        @ptrCast(?*Userdata, @alignCast(
+                                            @max(1, @alignOf(Userdata)),
+                                            ud,
+                                        )),
+                                        l_inner,
+                                        c_inner,
+                                        T.initFd(c_inner.op.read.fd),
+                                        c_inner.op.read.buffer,
+                                        if (r.read) |v| v else |err| err,
+                                    }),
+                                };
                             }
                         }).callback,
                     };
@@ -137,11 +171,19 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                     // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
                         .io_uring,
-                        .kqueue,
                         .wasi_poll,
                         => {},
 
-                        .epoll => c.flags.dup = true,
+                        .epoll => {
+                            if (options.threadpool)
+                                c.flags.threadpool = true
+                            else
+                                c.flags.dup = true;
+                        },
+
+                        .kqueue => {
+                            if (options.threadpool) c.flags.threadpool = true;
+                        },
                     }
 
                     loop.add(c);
@@ -152,8 +194,6 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
 }
 
 pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    _ = options;
-
     return struct {
         const Self = T;
 
@@ -185,10 +225,21 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             switch (buf) {
                 inline .slice, .array => {
                     c.* = .{
-                        .op = .{
-                            .send = .{
-                                .fd = self.fd,
-                                .buffer = buf,
+                        .op = switch (options.write) {
+                            .none => unreachable,
+
+                            .write => .{
+                                .write = .{
+                                    .fd = self.fd,
+                                    .buffer = buf,
+                                },
+                            },
+
+                            .send => .{
+                                .send = .{
+                                    .fd = self.fd,
+                                    .buffer = buf,
+                                },
                             },
                         },
                         .userdata = userdata,
@@ -199,14 +250,33 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                                 c_inner: *xev.Completion,
                                 r: xev.Result,
                             ) xev.CallbackAction {
-                                return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
-                                    l_inner,
-                                    c_inner,
-                                    T.initFd(c_inner.op.send.fd),
-                                    c_inner.op.send.buffer,
-                                    if (r.send) |v| v else |err| err,
-                                });
+                                return switch (options.write) {
+                                    .none => unreachable,
+
+                                    .send => @call(.always_inline, cb, .{
+                                        @ptrCast(?*Userdata, @alignCast(
+                                            @max(1, @alignOf(Userdata)),
+                                            ud,
+                                        )),
+                                        l_inner,
+                                        c_inner,
+                                        T.initFd(c_inner.op.send.fd),
+                                        c_inner.op.send.buffer,
+                                        if (r.send) |v| v else |err| err,
+                                    }),
+
+                                    .write => @call(.always_inline, cb, .{
+                                        @ptrCast(?*Userdata, @alignCast(
+                                            @max(1, @alignOf(Userdata)),
+                                            ud,
+                                        )),
+                                        l_inner,
+                                        c_inner,
+                                        T.initFd(c_inner.op.write.fd),
+                                        c_inner.op.write.buffer,
+                                        if (r.write) |v| v else |err| err,
+                                    }),
+                                };
                             }
                         }).callback,
                     };
@@ -214,11 +284,20 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     // If we're dup-ing, then we ask the backend to manage the fd.
                     switch (xev.backend) {
                         .io_uring,
-                        .kqueue,
                         .wasi_poll,
                         => {},
 
-                        .epoll => c.flags.dup = true,
+                        .epoll => {
+                            if (options.threadpool) {
+                                c.flags.threadpool = true;
+                            } else {
+                                c.flags.dup = true;
+                            }
+                        },
+
+                        .kqueue => {
+                            if (options.threadpool) c.flags.threadpool = true;
+                        },
                     }
 
                     loop.add(c);
