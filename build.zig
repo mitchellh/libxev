@@ -47,17 +47,26 @@ pub fn build(b: *std.build.Builder) !void {
         "Install the test binaries into zig-out",
     ) orelse false;
 
+    // Our tests require libc on Linux and Mac. Note that libxev itself
+    // does NOT require libc.
+    const test_libc = switch (target.getOsTag()) {
+        .linux, .macos => true,
+        else => false,
+    };
+
     // We always build our test exe as part of `zig build` so that
     // we can easily run it manually without digging through the cache.
     const test_exe = b.addTestExe("xev-test", "src/main.zig");
     test_exe.setBuildMode(mode);
     test_exe.setTarget(target);
+    if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
     if (test_install) test_exe.install();
 
     // zig build test test binary and runner.
     const tests_run = b.addTestSource(pkg.source);
     tests_run.setBuildMode(mode);
     tests_run.setTarget(target);
+    if (test_libc) tests_run.linkLibC(); // Tests depend on libc, libxev does not
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests_run.step);
