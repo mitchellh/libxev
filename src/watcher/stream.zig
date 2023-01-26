@@ -1,3 +1,5 @@
+const std = @import("std");
+
 /// Options for creating a stream type. Each of the options makes the
 /// functionality available for the stream.
 pub const Options = struct {
@@ -11,6 +13,39 @@ pub const Options = struct {
     pub const ReadMethod = enum { none, read, recv };
     pub const WriteMethod = enum { none, write, send };
 };
+
+/// Creates a generic stream type that supports read, write, close. This
+/// can be used for any file descriptor that would exhibit normal blocking
+/// behavior on read/write. This should NOT be used for local files because
+/// local files have some special properties; you should use xev.File for that.
+pub fn GenericStream(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The underlying file
+        fd: std.os.fd_t,
+
+        pub usingnamespace Stream(xev, Self, .{
+            .close = true,
+            .read = .read,
+            .write = .write,
+        });
+
+        /// Initialize a generic stream from a file descriptor.
+        pub fn initFd(fd: std.os.fd_t) Self {
+            return .{
+                .fd = fd,
+            };
+        }
+
+        /// Clean up any watcher resources. This does NOT close the file.
+        /// If you want to close the file you must call close or do so
+        /// synchronously.
+        pub fn deinit(self: *Self) void {
+            _ = self;
+        }
+    };
+}
 
 /// Creates a stream type that is meant to be embedded within other
 /// types using "usingnamespace". A stream is something that supports read,
