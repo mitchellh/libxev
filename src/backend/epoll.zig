@@ -151,10 +151,25 @@ pub const Loop = struct {
         comptime cb: xev.Callback,
     ) void {
         // Get the timestamp of the absolute time that we'll execute this timer.
-        const next_ts: std.os.timespec = .{
-            .tv_sec = self.now.tv_sec,
-            // TODO: overflow handling
-            .tv_nsec = self.now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+        // There are lots of failure scenarios here in math. If we see any
+        // of them we just use the maximum value.
+        const next_ts: std.os.timespec = next_ts: {
+            const max: std.os.timespec = .{
+                .tv_sec = std.math.maxInt(isize),
+                .tv_nsec = std.math.maxInt(isize),
+            };
+
+            const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
+                break :next_ts max;
+            const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
+                break :next_ts max;
+
+            break :next_ts .{
+                .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
+                    break :next_ts max,
+                .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
+                    break :next_ts max,
+            };
         };
 
         c.* = .{
@@ -923,12 +938,25 @@ pub const Operation = union(OperationType) {
         c: *Completion = undefined,
 
         fn less(_: void, a: *const Timer, b: *const Timer) bool {
-            // TODO: overflow
-            const ts_a = a.next;
-            const ts_b = b.next;
-            const ns_a = @intCast(u64, ts_a.tv_sec) * std.time.ns_per_s + @intCast(u64, ts_a.tv_nsec);
-            const ns_b = @intCast(u64, ts_b.tv_sec) * std.time.ns_per_s + @intCast(u64, ts_b.tv_nsec);
-            return ns_a < ns_b;
+            return a.ns() < b.ns();
+        }
+
+        /// Returns the nanoseconds of this timer. Note that maxInt(u64) ns is
+        /// 584 years so if we get any overflows we just use maxInt(u64). If
+        /// any software is running in 584 years waiting on this timer...
+        /// shame on me I guess... but I'll be dead.
+        fn ns(self: *const Timer) u64 {
+            assert(self.next.tv_sec >= 0);
+            assert(self.next.tv_nsec >= 0);
+
+            const max = std.math.maxInt(u64);
+            const s_ns = std.math.mul(
+                u64,
+                @intCast(u64, self.next.tv_sec),
+                std.time.ns_per_s,
+            ) catch return max;
+            return std.math.add(u64, s_ns, @intCast(u64, self.next.tv_nsec)) catch
+                return max;
         }
     };
 };
