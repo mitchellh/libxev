@@ -361,6 +361,9 @@ pub const Loop = struct {
             changes > 0 or
             !self.completions.empty())
         {
+            // If we're stopped then the loop is fully over.
+            if (self.flags.stopped) return;
+
             self.update_now();
             const now_timer: Timer = .{ .next = self.now };
 
