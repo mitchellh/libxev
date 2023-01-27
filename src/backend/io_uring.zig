@@ -33,8 +33,8 @@ pub const Loop = struct {
     /// always matches the number of entries so the memory allocated will be
     /// 2x entries (plus the basic loop overhead).
     pub fn init(options: xev.Options) !Loop {
-        // TODO: overflow
-        const entries = @intCast(u13, options.entries);
+        const entries = std.math.cast(u13, options.entries) orelse
+            return error.TooManyEntries;
 
         var result: Loop = .{
             // TODO(mitchellh): add an init_advanced function or something
@@ -157,10 +157,13 @@ pub const Loop = struct {
     }
 
     /// Add a timer to the loop. The timer will initially execute in "next_ms"
-    /// from now and will repeat every "repeat_ms" thereafter. If "repeat_ms" is
-    /// zero then the timer is oneshot. If "next_ms" is zero then the timer will
-    /// invoke immediately (the callback will be called immediately -- as part
-    /// of this function call -- to avoid any additional system calls).
+    /// from now and will repeat every "repeat_ms" thereafter. If "next_ms" is
+    /// zero then the timer will invoke on the next loop tick.
+    ///
+    /// If next_ms is too large of a value that it doesn't fit into the
+    /// kernel time structure, the maximum sleep value will be used for your
+    /// system (this is at least 45 days on a 32-bit system, and thousands of
+    /// years on a 64-bit system).
     pub fn timer(
         self: *Loop,
         c: *Completion,
@@ -169,10 +172,25 @@ pub const Loop = struct {
         comptime cb: xev.Callback,
     ) void {
         // Get the timestamp of the absolute time that we'll execute this timer.
-        const next_ts: std.os.linux.kernel_timespec = .{
-            .tv_sec = self.now.tv_sec,
-            // TODO: overflow handling
-            .tv_nsec = self.now.tv_nsec + (@intCast(isize, next_ms) * 1000000),
+        // There are lots of failure scenarios here in math. If we see any
+        // of them we just use the maximum value.
+        const next_ts: std.os.linux.kernel_timespec = next_ts: {
+            const max: std.os.linux.kernel_timespec = .{
+                .tv_sec = std.math.maxInt(isize),
+                .tv_nsec = std.math.maxInt(isize),
+            };
+
+            const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
+                break :next_ts max;
+            const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
+                break :next_ts max;
+
+            break :next_ts .{
+                .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
+                    break :next_ts max,
+                .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
+                    break :next_ts max,
+            };
         };
 
         c.* = .{
@@ -759,6 +777,21 @@ test "Completion size" {
 
     // Just so we are aware when we change the size
     try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+}
+
+test "io_uring: overflow entries count" {
+    const testing = std.testing;
+
+    {
+        var loop = try Loop.init(.{});
+        defer loop.deinit();
+    }
+
+    {
+        try testing.expectError(error.TooManyEntries, Loop.init(.{
+            .entries = std.math.pow(u14, 2, 13),
+        }));
+    }
 }
 
 test "io_uring: timerfd" {
