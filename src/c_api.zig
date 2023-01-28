@@ -27,6 +27,89 @@ export fn xev_loop_run(loop: *xev.Loop, mode: xev.RunMode) c_int {
 }
 
 //-------------------------------------------------------------------
+// ThreadPool
+
+export fn xev_threadpool_config_init(cfg: *xev.ThreadPool.Config) void {
+    cfg.* = .{};
+}
+
+export fn xev_threadpool_config_set_stack_size(
+    cfg: *xev.ThreadPool.Config,
+    v: u32,
+) void {
+    cfg.stack_size = v;
+}
+
+export fn xev_threadpool_config_set_max_threads(
+    cfg: *xev.ThreadPool.Config,
+    v: u32,
+) void {
+    cfg.max_threads = v;
+}
+
+export fn xev_threadpool_init(
+    threadpool: *xev.ThreadPool,
+    cfg_: ?*xev.ThreadPool.Config,
+) c_int {
+    const cfg: xev.ThreadPool.Config = if (cfg_) |v| v.* else .{};
+    threadpool.* = xev.ThreadPool.init(cfg);
+    return 0;
+}
+
+export fn xev_threadpool_deinit(threadpool: *xev.ThreadPool) void {
+    threadpool.deinit();
+}
+
+export fn xev_threadpool_shutdown(threadpool: *xev.ThreadPool) void {
+    threadpool.shutdown();
+}
+
+export fn xev_threadpool_schedule(
+    pool: *xev.ThreadPool,
+    batch: *xev.ThreadPool.Batch,
+) void {
+    pool.schedule(batch.*);
+}
+
+export fn xev_threadpool_task_init(
+    t: *xev.ThreadPool.Task,
+    cb: *const fn (*xev.ThreadPool.Task) callconv(.C) void,
+) void {
+    const extern_t = @ptrCast(*Task, @alignCast(@alignOf(Task), t));
+    extern_t.c_callback = cb;
+
+    t.* = .{
+        .callback = (struct {
+            fn callback(inner_t: *xev.ThreadPool.Task) void {
+                @fieldParentPtr(
+                    Task,
+                    "data",
+                    @ptrCast(*Task.Data, inner_t),
+                ).c_callback(inner_t);
+            }
+        }).callback,
+    };
+}
+
+export fn xev_threadpool_batch_empty(b: *xev.ThreadPool.Batch) void {
+    b.* = .{};
+}
+
+export fn xev_threadpool_batch_single(
+    b: *xev.ThreadPool.Batch,
+    t: *xev.ThreadPool.Task,
+) void {
+    b.* = xev.ThreadPool.Batch.from(t);
+}
+
+export fn xev_threadpool_batch_push(
+    b: *xev.ThreadPool.Batch,
+    other: *xev.ThreadPool.Batch,
+) void {
+    b.push(other.*);
+}
+
+//-------------------------------------------------------------------
 // Timers
 
 export fn xev_timer_init(v: *xev.Timer) c_int {
@@ -119,7 +202,13 @@ export fn xev_timer_cancel(
 /// for completions.
 const Completion = extern struct {
     data: [@sizeOf(xev.Completion)]u8,
-    c_callback: ?*const anyopaque,
+    c_callback: ?*const anyopaque align(1),
+};
+
+const Task = extern struct {
+    const Data = [@sizeOf(xev.ThreadPool.Task)]u8;
+    data: Data,
+    c_callback: *const fn (*xev.ThreadPool.Task) callconv(.C) void align(1),
 };
 
 /// Returns the unique error code for an error.
@@ -140,4 +229,8 @@ test "c-api sizes" {
     try testing.expect(@sizeOf(xev.Loop) <= 512);
     try testing.expect(@sizeOf(Completion) <= 320);
     try testing.expect(@sizeOf(xev.Timer) <= 256);
+    try testing.expectEqual(@as(usize, 48), @sizeOf(xev.ThreadPool));
+    try testing.expectEqual(@as(usize, 24), @sizeOf(xev.ThreadPool.Batch));
+    try testing.expectEqual(@as(usize, 24), @sizeOf(Task));
+    try testing.expectEqual(@as(usize, 8), @sizeOf(xev.ThreadPool.Config));
 }
