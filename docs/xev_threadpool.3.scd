@@ -62,12 +62,12 @@ The xev_shutdown(3) call notifies all threads that the pool is in a shutdown
 state. They complete their most recent tasks, shut down, and accept no new
 work. This function returns _immediately_. The xev_deinit(3) call waits for
 all the threads in the pool to exit, then cleans up any additional state.
-xev_deinit(3) can be called anytime after xev_shutdown(3); it doesn't have
-to be immediately after so long as the ordering of shutdown and then deinit
-is maintained.
+xev_deinit(3) and xev_shutdown(3) can be called in any order.
 
 The xev_threadpool(3) value must be pointer-stable until after
-xev_deinit(3) returns.
+xev_deinit(3) returns. After this point, no other xev_threadpool API
+calls can be called using the pointer. You may reinitialize and reuse the
+value.
 
 # TASK SCHEDULING
 
