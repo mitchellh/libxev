@@ -38,7 +38,7 @@ int main(void) {
     // atomically into the thread pool. We initialize an empty batch that
     // we'll add our tasks to.
     xev_threadpool_batch batch;
-    xev_threadpool_batch_empty(&batch);
+    xev_threadpool_batch_init(&batch);
 
     // Create all our tasks we want to submit. The number here can be changed
     // to anything!
@@ -47,10 +47,7 @@ int main(void) {
     for (int i = 0; i < TASK_COUNT; i++) {
         jobs[i].done = false;
         xev_threadpool_task_init(&jobs[i].pool_task, &task_callback);
-
-        xev_threadpool_batch task_batch;
-        xev_threadpool_batch_single(&task_batch, &jobs[i].pool_task);
-        xev_threadpool_batch_push(&batch, &task_batch);
+        xev_threadpool_batch_push_task(&batch, &jobs[i].pool_task);
     }
 
     // Schedule our batch. This will immediately queue and start the tasks

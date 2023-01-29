@@ -82,12 +82,13 @@ xev_threadpool_task_init(&t, &do_expensive_work);
 ```
 
 The task then must be added to a batch. The code below creates a batch
-with a single item "t". You can use xev_threadpool_batch_push(3) to merge
+with a single item "t". You can use xev_threadpool_batch_push_batch(3) to merge
 multiple batches.
 
 ```
 xev_threadpool_batch b;
-xev_threadpool_batch_single(&b, &t);
+xev_threadpool_batch_init(&b);
+xev_threadpool_batch_push_task(&b, &t);
 ```
 
 Finally, the batch must be scheduled with the pool with

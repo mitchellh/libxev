@@ -91,18 +91,18 @@ export fn xev_threadpool_task_init(
     };
 }
 
-export fn xev_threadpool_batch_empty(b: *xev.ThreadPool.Batch) void {
+export fn xev_threadpool_batch_init(b: *xev.ThreadPool.Batch) void {
     b.* = .{};
 }
 
-export fn xev_threadpool_batch_single(
+export fn xev_threadpool_batch_push_task(
     b: *xev.ThreadPool.Batch,
     t: *xev.ThreadPool.Task,
 ) void {
-    b.* = xev.ThreadPool.Batch.from(t);
+    b.push(xev.ThreadPool.Batch.from(t));
 }
 
-export fn xev_threadpool_batch_push(
+export fn xev_threadpool_batch_push_batch(
     b: *xev.ThreadPool.Batch,
     other: *xev.ThreadPool.Batch,
 ) void {

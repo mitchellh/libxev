@@ -60,9 +60,9 @@ void xev_threadpool_shutdown(xev_threadpool* pool);
 void xev_threadpool_schedule(xev_threadpool* pool, xev_threadpool_batch *batch);
 
 void xev_threadpool_task_init(xev_threadpool_task* t, xev_task_cb cb);
-void xev_threadpool_batch_empty(xev_threadpool_batch* b);
-void xev_threadpool_batch_single(xev_threadpool_batch* b, xev_threadpool_task *t);
-void xev_threadpool_batch_push(xev_threadpool_batch* b, xev_threadpool_batch *other);
+void xev_threadpool_batch_init(xev_threadpool_batch* b);
+void xev_threadpool_batch_push_task(xev_threadpool_batch* b, xev_threadpool_task *t);
+void xev_threadpool_batch_push_batch(xev_threadpool_batch* b, xev_threadpool_batch *other);
 
 int xev_timer_init(xev_watcher *w);
 void xev_timer_deinit(xev_watcher *w);
