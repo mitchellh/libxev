@@ -1,4 +1,4 @@
-xev_threadpool(3) "github.com/mitchellh/libxev" "Miscellaneous Information Manual"
+xev_threadpool(3) "github.com/mitchellh/libxev" "Library Functions Manual"
 
 # NAME
 
@@ -51,7 +51,7 @@ assert(xev_threadpool_init(&pool, null));
 ```
 
 The pool is now ready to have task batches scheduled to it. To shutdown
-a pool, you must call xev_shutdown(3) and xev_deinit(3) in that order.
+a pool, you must call xev_shutdown(3) and xev_deinit(3).
 
 ```
 xev_shutdown(&pool);
