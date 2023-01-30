@@ -14,13 +14,14 @@ pub const Loop = struct {
     /// Our queue of submissions that failed to enqueue.
     submissions: queue.Intrusive(Completion) = .{},
 
-    /// Our queue of completed completions where the callback hasn't been called.
-    completions: queue.Intrusive(Completion) = .{},
-
     /// Cached time
     now: std.os.timespec = undefined,
 
     flags: packed struct {
+        /// True if the "now" field is outdated and should be updated
+        /// when it is used.
+        now_outdated: bool = true,
+
         /// Whether the loop is stopped or not.
         stopped: bool = false,
 
@@ -54,9 +55,9 @@ pub const Loop = struct {
     /// Run the event loop. See RunMode documentation for details on modes.
     pub fn run(self: *Loop, mode: xev.RunMode) !void {
         switch (mode) {
-            .no_wait => try self.tick(0),
-            .once => try self.tick(1),
-            .until_done => while (!self.done()) try self.tick(1),
+            .no_wait => try self.tick_(.no_wait),
+            .once => try self.tick_(.once),
+            .until_done => try self.tick_(.until_done),
         }
     }
 
@@ -68,70 +69,67 @@ pub const Loop = struct {
         self.flags.stopped = true;
     }
 
-    fn done(self: *Loop) bool {
-        return self.flags.stopped or (self.active == 0 and
-            self.submissions.empty() and
-            self.completions.empty());
-    }
-
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
         std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.now) catch {};
+        self.flags.now_outdated = false;
     }
 
-    /// Tick through the event loop once, waiting for at least "wait" completions
-    /// to be processed by the loop itself.
-    pub fn tick(self: *Loop, wait: u32) !void {
-        // TODO: make configurable
-        const busy_wait = 0;
-
-        // If we're stopped then the loop is fully over.
-        if (self.flags.stopped) return;
-
+    /// Tick the loop. The mode is comptime so we can do some tricks to
+    /// avoid function calls and runtime branching.
+    fn tick_(self: *Loop, comptime mode: xev.RunMode) !void {
         // We can't nest runs.
         if (self.flags.in_run) return error.NestedRunsNotAllowed;
         self.flags.in_run = true;
         defer self.flags.in_run = false;
 
-        // If we have no queued submissions then we do the wait as part
-        // of the submit call, because then we can do exactly once syscall
-        // to get all our events.
-        if (busy_wait == 0 and self.submissions.empty()) {
-            _ = try self.ring.submit_and_wait(wait);
-        } else {
-            // We have submissions, meaning we have to do multiple submissions
-            // anyways so we always just do non-waiting ones.
-            _ = try self.submit();
+        // The total number of events we're waiting for.
+        const wait = switch (mode) {
+            // until_done is one because we need to wait for at least one
+            // (if we have any).
+            .until_done => 1,
+            .once => 1,
+            .no_wait => 0,
+        };
+
+        var cqes: [128]linux.io_uring_cqe = undefined;
+        while (true) {
+            // If we're stopped then the loop is fully over.
+            if (self.flags.stopped or
+                (self.active == 0 and self.submissions.empty())) break;
+
+            // If we have no queued submissions then we do the wait as part
+            // of the submit call, because then we can do exactly once syscall
+            // to get all our events.
+            if (self.submissions.empty()) {
+                _ = try self.ring.submit_and_wait(wait);
+            } else {
+                // We have submissions, meaning we have to do multiple submissions
+                // anyways so we always just do non-waiting ones.
+                _ = try self.submit();
+            }
+
+            // We always note that our "now" value is outdated.
+            self.flags.now_outdated = true;
+
+            // Wait for completions...
+            const count = self.ring.copy_cqes(&cqes, wait) catch |err| return err;
+            for (cqes[0..count]) |cqe| {
+                const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
+                self.active -= 1;
+                switch (c.invoke(self, cqe.res)) {
+                    .disarm => {},
+                    .rearm => self.add(c),
+                }
+            }
+
+            // Subtract our waiters. If we reached zero then we're done.
+            switch (mode) {
+                .no_wait => break,
+                .once => if (count > 0) break,
+                .until_done => {},
+            }
         }
-
-        // We always update our concept of "now"
-        self.update_now();
-
-        // During some real world testing, I found that the overhead of
-        // io_uring waits (GETEVENTS) under heavy load is higher than busy
-        // waiting on the userspace CQ ring. So, we spend some time spinning
-        // the CPU checking for CQ readiness before giving up and going to sleep.
-        // This stops being true as soon as there are many tasks or threads
-        // fighting for CPU contention that assist in moving forward the
-        // ring.
-        //
-        // The busy_wait parameter is tune-able. The higher it is the higher
-        // CPU will be but the lower latency. The default 20_000 was empirically
-        // chosen on a test machine since its about the cost of the syscall
-        // when it has to wait under load, and avoiding the context switch makes
-        // up for the time.
-        if (busy_wait > 0) {
-            var i: usize = 0;
-            while (self.ring.cq_ready() == 0 and i < busy_wait) : (i += 1) {}
-        }
-
-        // Sync our completions with the wait amount we specified. If we did
-        // the submit_and_wait above then the wait number should be immediately
-        // ready.
-        try self.sync_completions(wait);
-
-        // Run all our callbacks
-        self.invoke_completions();
     }
 
     /// Submit all queued operations. This never does an io_uring submit
@@ -145,15 +143,6 @@ pub const Loop = struct {
         var queued = self.submissions;
         self.submissions = .{};
         while (queued.pop()) |c| self.add_(c, true);
-    }
-
-    /// Handle all of the completions.
-    fn complete(self: *Loop) !void {
-        // Sync
-        try self.sync_completions(0);
-
-        // Run our callbacks
-        self.invoke_completions();
     }
 
     /// Add a timer to the loop. The timer will initially execute in "next_ms"
@@ -184,6 +173,8 @@ pub const Loop = struct {
                 break :next_ts max;
             const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
                 break :next_ts max;
+
+            if (self.flags.now_outdated) self.update_now();
 
             break :next_ts .{
                 .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
@@ -216,7 +207,7 @@ pub const Loop = struct {
     /// Internal add function. The only difference is try_submit. If try_submit
     /// is true, then this function will attempt to submit the queue to the
     /// ring if the submission queue is full rather than filling up our FIFO.
-    fn add_(
+    inline fn add_(
         self: *Loop,
         completion: *Completion,
         try_submit: bool,
@@ -383,49 +374,6 @@ pub const Loop = struct {
         // here.
         sqe.user_data = @ptrToInt(completion);
     }
-
-    /// Sync the completions that are done. This appends to self.completions.
-    fn sync_completions(self: *Loop, wait: u32) !void {
-        // The number of completions we want to wait for, since we can go
-        // through the loop multiple times.
-        var wait_rem = wait;
-
-        // We load cqes in two phases. We first load all the CQEs into our
-        // queue, and then we process all CQEs. We do this in two phases so
-        // that any callbacks that call into the loop don't cause unbounded
-        // stack growth.
-        var cqes: [128]linux.io_uring_cqe = undefined;
-        while (true) {
-            // Guard against waiting indefinitely (if there are too few requests inflight),
-            // especially if this is not the first time round the loop:
-            const count = self.ring.copy_cqes(&cqes, wait_rem) catch |err| switch (err) {
-                else => return err,
-            };
-
-            // Subtract down to zero
-            wait_rem -|= count;
-
-            for (cqes[0..count]) |cqe| {
-                const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
-                c.res = cqe.res;
-                self.completions.push(c);
-            }
-
-            // If copy_cqes didn't fill our buffer we have to be done.
-            if (count < cqes.len) break;
-        }
-    }
-
-    /// Call all of our completion callbacks for any queued completions.
-    fn invoke_completions(self: *Loop) void {
-        while (self.completions.pop()) |c| {
-            self.active -= 1;
-            switch (c.invoke(self)) {
-                .disarm => {},
-                .rearm => self.add(c),
-            }
-        }
-    }
 };
 
 /// A completion represents a single queued request in the ring.
@@ -447,68 +395,67 @@ pub const Completion = struct {
 
     /// Internally set
     next: ?*Completion = null,
-    res: i32 = 0,
 
     /// Invokes the callback for this completion after properly constructing
     /// the Result based on the res code.
-    fn invoke(self: *Completion, loop: *Loop) xev.CallbackAction {
-        const res: Result = switch (self.op) {
+    fn invoke(self: *Completion, loop: *Loop, res: i32) xev.CallbackAction {
+        const result: Result = switch (self.op) {
             .accept => .{
-                .accept = if (self.res >= 0)
-                    @intCast(std.os.socket_t, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
+                .accept = if (res >= 0)
+                    @intCast(std.os.socket_t, res)
+                else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .close => .{
-                .close = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                .close = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .connect => .{
-                .connect = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                .connect = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .read => .{
-                .read = self.readResult(.read),
+                .read = self.readResult(.read, res),
             },
 
             .recv => .{
-                .recv = self.readResult(.recv),
+                .recv = self.readResult(.recv, res),
             },
 
             .recvmsg => .{
-                .recvmsg = self.readResult(.recvmsg),
+                .recvmsg = self.readResult(.recvmsg, res),
             },
 
             .send => .{
-                .send = if (self.res >= 0)
-                    @intCast(usize, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
+                .send = if (res >= 0)
+                    @intCast(usize, res)
+                else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .sendmsg => .{
-                .sendmsg = if (self.res >= 0)
-                    @intCast(usize, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
+                .sendmsg = if (res >= 0)
+                    @intCast(usize, res)
+                else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .shutdown => .{
-                .shutdown = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                .shutdown = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .timer => .{
-                .timer = if (self.res >= 0) .request else switch (@intToEnum(std.os.E, -self.res)) {
+                .timer = if (res >= 0) .request else switch (@intToEnum(std.os.E, -res)) {
                     .TIME => .expiration,
                     .CANCELED => .cancel,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -516,7 +463,7 @@ pub const Completion = struct {
             },
 
             .timer_remove => .{
-                .timer_remove = if (self.res >= 0) {} else switch (@intToEnum(std.os.E, -self.res)) {
+                .timer_remove = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
                     .NOENT => error.NotFound,
                     .BUSY => error.ExpirationInProgress,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -524,23 +471,23 @@ pub const Completion = struct {
             },
 
             .write => .{
-                .write = if (self.res >= 0)
-                    @intCast(usize, self.res)
-                else switch (@intToEnum(std.os.E, -self.res)) {
+                .write = if (res >= 0)
+                    @intCast(usize, res)
+                else switch (@intToEnum(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
         };
 
-        return self.callback(self.userdata, loop, self, res);
+        return self.callback(self.userdata, loop, self, result);
     }
 
-    fn readResult(self: *Completion, comptime op: OperationType) ReadError!usize {
-        if (self.res > 0) {
-            return @intCast(usize, self.res);
+    fn readResult(self: *Completion, comptime op: OperationType, res: i32) ReadError!usize {
+        if (res > 0) {
+            return @intCast(usize, res);
         }
 
-        if (self.res == 0) {
+        if (res == 0) {
             const active = @field(self.op, @tagName(op));
             if (!@hasField(@TypeOf(active), "buffer")) return ReadError.EOF;
 
@@ -552,7 +499,7 @@ pub const Completion = struct {
             };
         }
 
-        return switch (@intToEnum(std.os.E, -self.res)) {
+        return switch (@intToEnum(std.os.E, -res)) {
             else => |errno| std.os.unexpectedErrno(errno),
         };
     }
@@ -776,7 +723,7 @@ test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 144), @sizeOf(Completion));
 }
 
 test "io_uring: overflow entries count" {
