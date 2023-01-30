@@ -124,7 +124,7 @@ fn UDPSendto(comptime xev: type) type {
                                     s_inner,
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
-                                    if (r.recvfrom) |v| v else |err| err,
+                                    r.recvfrom,
                                 });
                             }
                         }).callback,
@@ -187,7 +187,7 @@ fn UDPSendto(comptime xev: type) type {
                                     s_inner,
                                     initFd(c_inner.op.sendto.fd),
                                     c_inner.op.sendto.buffer,
-                                    if (r.sendto) |v| v else |err| err,
+                                    r.sendto,
                                 });
                             }
                         }).callback,
