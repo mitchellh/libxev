@@ -1,10 +1,11 @@
-/// A timer fires a callback after a specified amount of time and
-/// can optionally repeat at a specified interval.
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
 
+/// A timer fires a callback after a specified amount of time. A timer can
+/// repeat by returning "rearm" in the callback or by rescheduling the
+/// start within the callback.
 pub fn Timer(comptime xev: type) type {
     return struct {
         const Self = @This();

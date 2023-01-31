@@ -239,6 +239,12 @@ pub const Loop = struct {
 
         // Setup the submission depending on the operation
         switch (completion.op) {
+            // Do nothing with noop completions.
+            .noop => {
+                self.active -= 1;
+                return;
+            },
+
             .accept => |*v| linux.io_uring_prep_accept(
                 sqe,
                 v.socket,
@@ -387,11 +393,11 @@ pub const Loop = struct {
 pub const Completion = struct {
     /// Operation to execute. This is only safe to read BEFORE the completion
     /// is queued. After being queued (with "add"), the operation may change.
-    op: Operation,
+    op: Operation = .{ .noop = {} },
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: xev.Callback,
+    callback: xev.Callback = xev.noopCallback,
 
     /// Internally set
     next: ?*Completion = null,
@@ -400,6 +406,8 @@ pub const Completion = struct {
     /// the Result based on the res code.
     fn invoke(self: *Completion, loop: *Loop, res: i32) xev.CallbackAction {
         const result: Result = switch (self.op) {
+            .noop => unreachable,
+
             .accept => .{
                 .accept = if (res >= 0)
                     @intCast(std.os.socket_t, res)
@@ -506,6 +514,11 @@ pub const Completion = struct {
 };
 
 pub const OperationType = enum {
+    /// Do nothing. This operation will not be queued and will never
+    /// have its callback fired. This is NOT equivalent to the io_uring
+    /// "nop" operation.
+    noop,
+
     /// Accept a connection on a socket.
     accept,
 
@@ -547,6 +560,7 @@ pub const OperationType = enum {
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    noop: void,
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     close: CloseError!void,
@@ -566,6 +580,8 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    noop: void,
+
     accept: struct {
         socket: std.os.socket_t,
         addr: std.os.sockaddr = undefined,
@@ -739,6 +755,19 @@ test "io_uring: overflow entries count" {
             .entries = std.math.pow(u14, 2, 13),
         }));
     }
+}
+
+test "io_uring: default completion" {
+    //const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    var c: Completion = .{};
+    loop.add(&c);
+
+    // Tick
+    try loop.run(.until_done);
 }
 
 test "io_uring: timerfd" {

@@ -109,8 +109,22 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         /// A way to access the raw type.
         pub const Sys = T;
 
+        pub fn noopCallback(
+            _: ?*anyopaque,
+            _: *Loop,
+            _: *Completion,
+            _: Result,
+        ) CallbackAction {
+            return .disarm;
+        }
+
         test {
             @import("std").testing.refAllDecls(@This());
+        }
+
+        test "completion is zero-able" {
+            var c: Completion = .{};
+            _ = c;
         }
     };
 }
