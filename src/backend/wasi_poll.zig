@@ -7,8 +7,8 @@ const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
 
 pub const Loop = struct {
+    pub const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
-    const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
     const WakeupType = if (threaded) std.atomic.Atomic(bool) else bool;
     const wakeup_init = if (threaded) .{ .value = false } else false;
 
