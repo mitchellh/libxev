@@ -288,6 +288,11 @@ pub const Loop = struct {
 
     fn start(self: *Loop, completion: *Completion) void {
         const res_: ?Result = switch (completion.op) {
+            .noop => {
+                completion.flags.state = .dead;
+                return;
+            },
+
             .cancel => |v| res: {
                 // We stop immediately. We only stop if we are in the
                 // "adding" state because cancellation or any other action
@@ -491,11 +496,11 @@ pub const Loop = struct {
 pub const Completion = struct {
     /// Operation to execute. This is only safe to read BEFORE the completion
     /// is queued. After being queued (with "add"), the operation may change.
-    op: Operation,
+    op: Operation = .{ .noop = {} },
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: xev.Callback,
+    callback: xev.Callback = xev.noopCallback,
 
     //---------------------------------------------------------------
     // Internal fields
@@ -594,6 +599,7 @@ pub const Completion = struct {
 
             .close,
             .async_wait,
+            .noop,
             .shutdown,
             .cancel,
             .timer,
@@ -609,6 +615,7 @@ pub const Completion = struct {
             // or in another location.
             .close,
             .async_wait,
+            .noop,
             .shutdown,
             .cancel,
             .timer,
@@ -714,6 +721,7 @@ pub const Completion = struct {
 };
 
 pub const OperationType = enum {
+    noop,
     cancel,
     accept,
     read,
@@ -729,6 +737,7 @@ pub const OperationType = enum {
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    noop: void,
     cancel: CancelError!void,
     accept: AcceptError!std.os.fd_t,
     read: ReadError!usize,
@@ -746,6 +755,8 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    noop: void,
+
     cancel: struct {
         c: *Completion,
     },

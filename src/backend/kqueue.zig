@@ -632,6 +632,11 @@ pub const Loop = struct {
         const action: StartAction = if (c.flags.threadpool) .{
             .threadpool = {},
         } else switch (c.op) {
+            .noop => {
+                c.flags.state = .dead;
+                return false;
+            },
+
             .cancel => action: {
                 // Queue the cancel
                 break :action .{ .cancel = {} };
@@ -879,11 +884,11 @@ pub const Loop = struct {
 /// A completion is a request to perform some work with the loop.
 pub const Completion = struct {
     /// Operation to execute.
-    op: Operation,
+    op: Operation = .{ .noop = {} },
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: xev.Callback,
+    callback: xev.Callback = xev.noopCallback,
 
     //---------------------------------------------------------------
     // Internal fields
@@ -933,6 +938,8 @@ pub const Completion = struct {
     /// "connect" requires you to initiate the connection first.
     fn kevent(self: *Completion) ?Kevent {
         return switch (self.op) {
+            .noop => unreachable,
+
             .cancel,
             .close,
             .timer,
@@ -1006,6 +1013,7 @@ pub const Completion = struct {
         return switch (self.op) {
             .cancel,
             .close,
+            .noop,
             .timer,
             .shutdown,
             => {
@@ -1107,6 +1115,8 @@ pub const Completion = struct {
     fn syscall_result(c: *Completion, r: i32) Result {
         const errno = os.errno(r);
         return switch (c.op) {
+            .noop => unreachable,
+
             .accept => .{
                 .accept = switch (errno) {
                     .SUCCESS => r,
@@ -1209,6 +1219,7 @@ pub const Completion = struct {
 };
 
 pub const OperationType = enum {
+    noop,
     accept,
     connect,
     read,
@@ -1229,6 +1240,8 @@ pub const OperationType = enum {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    noop: void,
+
     accept: struct {
         socket: os.socket_t,
         addr: os.sockaddr = undefined,
@@ -1299,6 +1312,7 @@ pub const Operation = union(OperationType) {
 };
 
 pub const Result = union(OperationType) {
+    noop: void,
     accept: AcceptError!os.socket_t,
     connect: ConnectError!void,
     close: CloseError!void,
