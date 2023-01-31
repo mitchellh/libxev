@@ -40,8 +40,10 @@ work _completion_, as opposed to work _readiness_.
 **Zero runtime allocations.** This helps make runtime performance more
 predictable and makes libxev well suited for embedded environments.
 
-**Timers, TCP, UDP.** High-level platform-agnostic APIs for interacting
-with timers, TCP/UDP sockets, and more.
+**Timers, TCP, UDP, Files.** High-level platform-agnostic APIs for interacting
+with timers, TCP/UDP sockets, files, and more. For platforms that don't
+support async IO, the file operations are automatically scheduled to
+a thread pool.
 
 **Generic Thread Pool (Optional).** You can create a generic thread pool,
 configure its resource utilization, and use this to perform custom background
