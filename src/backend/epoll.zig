@@ -705,6 +705,26 @@ pub const Completion = struct {
         in_progress = 4,
     };
 
+    /// Returns the state of this completion. There are some things to
+    /// be caution about when calling this function.
+    ///
+    /// First, this is only safe to call from the main thread. This cannot
+    /// be called from any other thread.
+    ///
+    /// Second, if you are using default "undefined" completions, this will
+    /// NOT return a valid value if you access it. You must zero your
+    /// completion using ".{}". You only need to zero the completion once.
+    /// Once the completion is in use, it will always be valid.
+    ///
+    /// Third, if you stop the loop (loop.stop()), the completions registered
+    /// with the loop will NOT be reset to a dead state.
+    pub fn state(self: Completion) xev.CompletionState {
+        return switch (self.flags.state) {
+            .dead => .dead,
+            .adding, .deleting, .active, .in_progress => .active,
+        };
+    }
+
     /// Perform the operation associated with this completion. This will
     /// perform the full blocking operation for the completion.
     fn perform(self: *Completion) Result {
@@ -1075,7 +1095,7 @@ test "Completion size" {
 }
 
 test "epoll: default completion" {
-    //const testing = std.testing;
+    const testing = std.testing;
 
     var loop = try Loop.init(.{});
     defer loop.deinit();
@@ -1085,6 +1105,9 @@ test "epoll: default completion" {
 
     // Tick
     try loop.run(.until_done);
+
+    // Completion should be dead.
+    try testing.expect(c.state() == .dead);
 }
 
 test "epoll: stop" {
@@ -1158,10 +1181,18 @@ test "epoll: timer" {
         }
     }).callback);
 
+    // State checking
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c2.state() == .active);
+
     // Tick
     while (!called) try loop.run(.no_wait);
     try testing.expect(called);
     try testing.expect(!called2);
+
+    // State checking
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c2.state() == .active);
 }
 
 test "epoll: timerfd" {
