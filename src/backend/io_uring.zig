@@ -117,6 +117,7 @@ pub const Loop = struct {
             for (cqes[0..count]) |cqe| {
                 const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
                 self.active -= 1;
+                c.flags.state = .dead;
                 switch (c.invoke(self, cqe.res)) {
                     .disarm => {},
                     .rearm => self.add(c),
@@ -212,6 +213,10 @@ pub const Loop = struct {
         completion: *Completion,
         try_submit: bool,
     ) void {
+        // The completion at this point is active no matter what because
+        // it is going to be queued.
+        completion.flags.state = .active;
+
         const sqe = self.ring.get_sqe() catch |err| switch (err) {
             error.SubmissionQueueFull => retry: {
                 // If the queue is full and we're in try_submit mode then we
@@ -241,6 +246,7 @@ pub const Loop = struct {
         switch (completion.op) {
             // Do nothing with noop completions.
             .noop => {
+                completion.flags.state = .dead;
                 self.active -= 1;
                 return;
             },
@@ -401,6 +407,37 @@ pub const Completion = struct {
 
     /// Internally set
     next: ?*Completion = null,
+    flags: packed struct {
+        state: State = .dead,
+    } = .{},
+
+    const State = enum(u1) {
+        /// completion is not part of any loop
+        dead = 0,
+
+        /// completion is registered with epoll
+        active = 1,
+    };
+
+    /// Returns the state of this completion. There are some things to
+    /// be caution about when calling this function.
+    ///
+    /// First, this is only safe to call from the main thread. This cannot
+    /// be called from any other thread.
+    ///
+    /// Second, if you are using default "undefined" completions, this will
+    /// NOT return a valid value if you access it. You must zero your
+    /// completion using ".{}". You only need to zero the completion once.
+    /// Once the completion is in use, it will always be valid.
+    ///
+    /// Third, if you stop the loop (loop.stop()), the completions registered
+    /// with the loop will NOT be reset to a dead state.
+    pub fn state(self: Completion) xev.CompletionState {
+        return switch (self.flags.state) {
+            .dead => .dead,
+            .active => .active,
+        };
+    }
 
     /// Invokes the callback for this completion after properly constructing
     /// the Result based on the res code.
@@ -739,7 +776,7 @@ test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 144), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
 }
 
 test "io_uring: overflow entries count" {
@@ -758,7 +795,7 @@ test "io_uring: overflow entries count" {
 }
 
 test "io_uring: default completion" {
-    //const testing = std.testing;
+    const testing = std.testing;
 
     var loop = try Loop.init(.{});
     defer loop.deinit();
@@ -768,6 +805,9 @@ test "io_uring: default completion" {
 
     // Tick
     try loop.run(.until_done);
+
+    // Completion should be dead.
+    try testing.expect(c.state() == .dead);
 }
 
 test "io_uring: timerfd" {
@@ -811,9 +851,13 @@ test "io_uring: timerfd" {
     };
     loop.add(&c);
 
+    // Verify states
+    try testing.expect(c.state() == .active);
+
     // Tick
     try loop.run(.until_done);
     try testing.expect(called);
+    try testing.expect(c.state() == .dead);
 }
 
 test "io_uring: timer" {
@@ -848,10 +892,18 @@ test "io_uring: timer" {
         }
     }).callback);
 
+    // State checking
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c2.state() == .active);
+
     // Tick
     while (!called) try loop.run(.no_wait);
     try testing.expect(called);
     try testing.expect(!called2);
+
+    // State checking
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c2.state() == .active);
 }
 
 test "io_uring: stop" {

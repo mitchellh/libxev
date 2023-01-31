@@ -78,6 +78,7 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const Options = loop.Options;
         pub const RunMode = loop.RunMode;
         pub const CallbackAction = loop.CallbackAction;
+        pub const CompletionState = loop.CompletionState;
         //
         // // Error types
         pub const AcceptError = T.AcceptError;

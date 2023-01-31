@@ -64,3 +64,14 @@ pub const CallbackAction = enum(c_int) {
     /// for anything else.
     rearm = 1,
 };
+
+/// The state that a completion can be in.
+pub const CompletionState = enum(c_int) {
+    /// The completion is not being used and is ready to be configured
+    /// for new work.
+    dead = 0,
+
+    /// The completion is part of an event loop. This may be already waited
+    /// on or in the process of being registered.
+    active = 1,
+};
