@@ -42,14 +42,23 @@ typedef enum {
     XEV_RUN_NO_WAIT = 0,
     XEV_RUN_ONCE = 1,
     XEV_RUN_UNTIL_DONE = 2,
-} xev_run_mode;
+} xev_run_mode_t;
+
+typedef enum {
+    XEV_COMPLETION_DEAD = 0,
+    XEV_COMPLETION_ACTIVE = 1,
+} xev_completion_state_t;
+
 
 /* Documentation for functions can be found in man pages or online. I
  * purposely do not add docs to the header so that you can quickly scan
  * all exported functions. */
 int xev_loop_init(xev_loop* loop);
 void xev_loop_deinit(xev_loop* loop);
-int xev_loop_run(xev_loop* loop, xev_run_mode mode);
+int xev_loop_run(xev_loop* loop, xev_run_mode_t mode);
+
+void xev_completion_zero(xev_completion* c);
+xev_completion_state_t xev_completion_state(xev_completion* c);
 
 void xev_threadpool_config_init(xev_threadpool_config* config);
 void xev_threadpool_config_set_stack_size(xev_threadpool_config* config, uint32_t v);

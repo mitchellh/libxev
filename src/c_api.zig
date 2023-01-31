@@ -26,6 +26,14 @@ export fn xev_loop_run(loop: *xev.Loop, mode: xev.RunMode) c_int {
     return 0;
 }
 
+export fn xev_completion_zero(c: *xev.Completion) void {
+    c.* = .{};
+}
+
+export fn xev_completion_state(c: *xev.Completion) xev.CompletionState {
+    return c.state();
+}
+
 //-------------------------------------------------------------------
 // ThreadPool
 

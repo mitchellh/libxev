@@ -21,19 +21,15 @@ a given _thing_ (timer, socket, etc.) is "active." "Active" means that the
 thing in question is part of an event loop and _running_ (the definition of
 running is dependent on the type of the watcher).
 
-libxev does not have an equivalent explicit state, because it is typically
-trivial to track this state manually in your program if it is important
-to you. The design reasons for this are (1) because it aligns with libxev's
-ethos of program author provided memory -- watchers such as TCP, UDP, etc.
-are not required to be pointer-stable like they are in libuv or libev
-and (2) we don't want the [admittedly trivial] state tracking overhead if
-the program author doesn't care about it.
+For libxev, the correct question to ask is: is this _completion_ active?
+A completion represents a single operation and can be used to determine
+if a corresponding watcher is active if the complation was used with
+the watcher.
 
-If knowing active state is important to you, we recommend tracking it
-manually: when you start an operation with a completion, set some flag
-to true to note it is active. When a callback is called, set some flag
-to false to note it is no longer active (if the completion is being
-disarmed).
+Completion state can be checked using the `c.state()` function (Zig) or
+the xev_completion_state(3) function (C). This will return an enum value
+of "dead" or "alive". More enum values may be added in the future if
+it is determined that finer grained state is useful.
 
 # SUGGEST A TOPIC
 
