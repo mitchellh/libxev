@@ -70,4 +70,4 @@ jobs:
       run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime
 
     # Run a full build to ensure that works
-    # - run: nix build
+    - run: nix build

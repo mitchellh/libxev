@@ -22,12 +22,16 @@
   } @ inputs: let
     overlays = [
       # Other overlays
-      (final: prev: {
+      (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
+        zig = zigpkgs.master;
 
         # Latest versions
         wasmtime = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmtime;
         wasmer = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmer;
+
+        # Our package
+        libxev = prev.callPackage ./nix/package.nix {};
       })
     ];
 
@@ -56,6 +60,10 @@
 
         # For compatibility with older versions of the `nix` binary
         devShell = self.devShells.${system}.default;
+
+        # Our package
+        packages.libxev = pkgs.libxev;
+        defaultPackage = packages.libxev;
       }
     );
 }
