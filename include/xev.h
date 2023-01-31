@@ -36,6 +36,7 @@ typedef struct { uint8_t data[XEV_SIZEOF_THREADPOOL_CONFIG]; } xev_threadpool_co
 typedef enum { XEV_DISARM = 0, XEV_REARM = 1 } xev_cb_action;
 typedef void (*xev_task_cb)(xev_threadpool_task* t);
 typedef xev_cb_action (*xev_timer_cb)(xev_loop* l, xev_completion* c, int result, void* userdata);
+typedef xev_cb_action (*xev_async_cb)(xev_loop* l, xev_completion* c, int result, void* userdata);
 
 typedef enum {
     XEV_RUN_NO_WAIT = 0,
@@ -66,12 +67,13 @@ void xev_threadpool_batch_push_batch(xev_threadpool_batch* b, xev_threadpool_bat
 
 int xev_timer_init(xev_watcher *w);
 void xev_timer_deinit(xev_watcher *w);
-void xev_timer_run(xev_watcher *w, xev_loop* loop, xev_completion* c, uint64_t next_ms, void* userdata, xev_timer_cb* cb);
+void xev_timer_run(xev_watcher *w, xev_loop* loop, xev_completion* c, uint64_t next_ms, void* userdata, xev_timer_cb cb);
 void xev_timer_cancel(xev_watcher *w, xev_loop* loop, xev_completion* c, xev_completion* c_cancel, void* userdata, xev_timer_cb cb);
 
-int xev_async_init(xev_watcher *w, xev_completion *c);
-int xev_async_notify(xev_watcher *w, xev_loop* loop);
-void xev_async_wait(xev_watcher *w, xev_loop* loop, void* userdata, xev_timer_cb* cb);
+int xev_async_init(xev_watcher *w);
+void xev_async_deinit(xev_watcher *w);
+int xev_async_notify(xev_watcher *w);
+void xev_async_wait(xev_watcher *w, xev_loop* loop, xev_completion* c, void* userdata, xev_async_cb cb);
 
 #ifdef __cplusplus
 }

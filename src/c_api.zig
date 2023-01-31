@@ -134,9 +134,9 @@ export fn xev_timer_run(
         ?*anyopaque,
     ) callconv(.C) xev.CallbackAction,
 ) void {
-    const Callback = @TypeOf(cb);
+    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
     const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c));
-    extern_c.c_callback = @ptrCast(?*const anyopaque, cb);
+    extern_c.c_callback = @ptrCast(*const anyopaque, cb);
 
     v.run(loop, c, next_ms, anyopaque, userdata, (struct {
         fn callback(
@@ -146,7 +146,10 @@ export fn xev_timer_run(
             r: xev.Timer.RunError!void,
         ) xev.CallbackAction {
             const cb_extern_c = @ptrCast(*Completion, cb_c);
-            const cb_c_callback = @ptrCast(Callback, @alignCast(@alignOf(Callback), cb_extern_c.c_callback));
+            const cb_c_callback = @ptrCast(
+                *const Callback,
+                @alignCast(@alignOf(Callback), cb_extern_c.c_callback),
+            );
             return @call(.auto, cb_c_callback, .{
                 cb_loop,
                 cb_c,
@@ -170,9 +173,9 @@ export fn xev_timer_cancel(
         ?*anyopaque,
     ) callconv(.C) xev.CallbackAction,
 ) void {
-    const Callback = @TypeOf(cb);
+    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
     const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c));
-    extern_c.c_callback = @ptrCast(?*const anyopaque, cb);
+    extern_c.c_callback = @ptrCast(*const anyopaque, cb);
 
     v.cancel(loop, c, c_cancel, anyopaque, userdata, (struct {
         fn callback(
@@ -182,7 +185,65 @@ export fn xev_timer_cancel(
             r: xev.Timer.CancelError!void,
         ) xev.CallbackAction {
             const cb_extern_c = @ptrCast(*Completion, cb_c);
-            const cb_c_callback = @ptrCast(Callback, @alignCast(@alignOf(Callback), cb_extern_c.c_callback));
+            const cb_c_callback = @ptrCast(
+                *const Callback,
+                @alignCast(@alignOf(Callback), cb_extern_c.c_callback),
+            );
+            return @call(.auto, cb_c_callback, .{
+                cb_loop,
+                cb_c,
+                if (r) |_| 0 else |err| errorCode(err),
+                ud,
+            });
+        }
+    }).callback);
+}
+
+//-------------------------------------------------------------------
+// Async
+
+export fn xev_async_init(v: *xev.Async) c_int {
+    v.* = xev.Async.init() catch |err| return errorCode(err);
+    return 0;
+}
+
+export fn xev_async_deinit(v: *xev.Async) void {
+    v.deinit();
+}
+
+export fn xev_async_notify(v: *xev.Async) c_int {
+    v.notify() catch |err| return errorCode(err);
+    return 0;
+}
+
+export fn xev_async_wait(
+    v: *xev.Async,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    userdata: ?*anyopaque,
+    cb: *const fn (
+        *xev.Loop,
+        *xev.Completion,
+        c_int,
+        ?*anyopaque,
+    ) callconv(.C) xev.CallbackAction,
+) void {
+    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
+    const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c));
+    extern_c.c_callback = @ptrCast(*const anyopaque, cb);
+
+    v.wait(loop, c, anyopaque, userdata, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            cb_loop: *xev.Loop,
+            cb_c: *xev.Completion,
+            r: xev.Async.WaitError!void,
+        ) xev.CallbackAction {
+            const cb_extern_c = @ptrCast(*Completion, cb_c);
+            const cb_c_callback = @ptrCast(
+                *const Callback,
+                @alignCast(@alignOf(Callback), cb_extern_c.c_callback),
+            );
             return @call(.auto, cb_c_callback, .{
                 cb_loop,
                 cb_c,
@@ -201,14 +262,15 @@ export fn xev_timer_cancel(
 /// We just tack it onto the end of the memory chunk that C programs allocate
 /// for completions.
 const Completion = extern struct {
-    data: [@sizeOf(xev.Completion)]u8,
-    c_callback: ?*const anyopaque align(1),
+    const Data = [@sizeOf(xev.Completion)]u8;
+    data: Data,
+    c_callback: *const anyopaque,
 };
 
 const Task = extern struct {
     const Data = [@sizeOf(xev.ThreadPool.Task)]u8;
     data: Data,
-    c_callback: *const fn (*xev.ThreadPool.Task) callconv(.C) void align(1),
+    c_callback: *const fn (*xev.ThreadPool.Task) callconv(.C) void,
 };
 
 /// Returns the unique error code for an error.
@@ -228,6 +290,7 @@ test "c-api sizes" {
     const testing = std.testing;
     try testing.expect(@sizeOf(xev.Loop) <= 512);
     try testing.expect(@sizeOf(Completion) <= 320);
+    try testing.expect(@sizeOf(xev.Async) <= 256);
     try testing.expect(@sizeOf(xev.Timer) <= 256);
     try testing.expectEqual(@as(usize, 48), @sizeOf(xev.ThreadPool));
     try testing.expectEqual(@as(usize, 24), @sizeOf(xev.ThreadPool.Batch));
