@@ -109,6 +109,8 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         /// A way to access the raw type.
         pub const Sys = T;
 
+        /// A callback that does nothing and immediately disarms. This
+        /// implements xev.Callback and is the default value for completions.
         pub fn noopCallback(
             _: ?*anyopaque,
             _: *Loop,

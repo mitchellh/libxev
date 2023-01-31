@@ -377,6 +377,11 @@ pub const Loop = struct {
 
     fn start(self: *Loop, completion: *Completion) void {
         const res_: ?Result = switch (completion.op) {
+            .noop => {
+                completion.flags.state = .dead;
+                return;
+            },
+
             .cancel => |v| res: {
                 if (completion.flags.threadpool) {
                     break :res .{ .cancel = error.ThreadPoolUnsupported };
@@ -645,11 +650,11 @@ pub const Loop = struct {
 pub const Completion = struct {
     /// Operation to execute. This is only safe to read BEFORE the completion
     /// is queued. After being queued (with "add"), the operation may change.
-    op: Operation,
+    op: Operation = .{ .noop = {} },
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: xev.Callback,
+    callback: xev.Callback = xev.noopCallback,
 
     //---------------------------------------------------------------
     // Internal fields
@@ -708,6 +713,7 @@ pub const Completion = struct {
             // or in another location.
             .cancel,
             .close,
+            .noop,
             .shutdown,
             .timer,
             => unreachable,
@@ -820,11 +826,14 @@ pub const Completion = struct {
             .cancel,
             .timer,
             => null,
+
+            .noop => unreachable,
         };
     }
 };
 
 pub const OperationType = enum {
+    noop,
     accept,
     connect,
     read,
@@ -842,6 +851,7 @@ pub const OperationType = enum {
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
+    noop: void,
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     read: ReadError!usize,
@@ -861,6 +871,8 @@ pub const Result = union(OperationType) {
 /// on the underlying system in use. The high level operations are
 /// done by initializing the request handles.
 pub const Operation = union(OperationType) {
+    noop: void,
+
     cancel: struct {
         c: *Completion,
     },
@@ -1060,6 +1072,19 @@ test "Completion size" {
 
     // Just so we are aware when we change the size
     try testing.expectEqual(@as(usize, 200), @sizeOf(Completion));
+}
+
+test "epoll: default completion" {
+    //const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    var c: Completion = .{};
+    loop.add(&c);
+
+    // Tick
+    try loop.run(.until_done);
 }
 
 test "epoll: stop" {
