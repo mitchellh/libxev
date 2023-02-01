@@ -382,6 +382,7 @@ pub const Loop = struct {
         // If we failed to add the completion then we call the callback
         // immediately and mark the error.
         if (res_) |res| {
+            completion.flags.state = .dead;
             switch (completion.callback(
                 completion.userdata,
                 self,
@@ -406,20 +407,37 @@ pub const Loop = struct {
         self.active += 1;
     }
 
-    fn stop_completion(self: *Loop, completion: *Completion) void {
-        const rearm: bool = switch (completion.op) {
+    fn stop_completion(self: *Loop, c: *Completion) void {
+        // We may modify the state below so we need to know now if this
+        // completion was active.
+        const active = c.flags.state == .active;
+
+        const rearm: bool = switch (c.op) {
             .timer => |*v| timer: {
-                const c = v.c;
+                assert(v.c == c);
 
                 // Timers needs to be removed from the timer heap only if
                 // it has been inserted.
-                if (v.heap.inserted()) {
+                if (c.flags.state == .active) {
                     self.timers.remove(v);
                 }
 
                 // If the timer was never fired, we need to fire it with
                 // the cancellation notice.
                 if (c.flags.state != .dead) {
+                    // If we have reset set AND we got a cancellation result,
+                    // that means that we were canceled so that we can update
+                    // our expiration time.
+                    if (v.reset) |r| {
+                        v.next = r;
+                        v.reset = null;
+                        break :timer true;
+                    }
+
+                    // We have to set the completion as dead here because
+                    // it isn't safe to modify completions after a callback.
+                    c.flags.state = .dead;
+
                     const action = c.callback(c.userdata, self, c, .{ .timer = .cancel });
                     switch (action) {
                         .disarm => {},
@@ -435,13 +453,10 @@ pub const Loop = struct {
 
         // Decrement the active count so we know how many are running for
         // .until_done run semantics.
-        if (completion.flags.state == .active) self.active -= 1;
-
-        // Mark the completion as done
-        completion.flags.state = .dead;
+        if (active) self.active -= 1;
 
         // If we're rearming, add it again immediately
-        if (rearm) self.start(completion);
+        if (rearm) self.start(c);
     }
 
     /// Add a timer to the loop. The timer will initially execute in "next_ms"
@@ -456,24 +471,10 @@ pub const Loop = struct {
         userdata: ?*anyopaque,
         comptime cb: xev.Callback,
     ) void {
-        // Get the absolute time we'll execute this timer next.
-        var next_ts: wasi.timestamp_t = ts: {
-            var now_ts: wasi.timestamp_t = undefined;
-            switch (wasi.clock_time_get(@bitCast(u32, std.os.CLOCK.MONOTONIC), 1, &now_ts)) {
-                .SUCCESS => {},
-                .INVAL => unreachable,
-                else => unreachable,
-            }
-
-            // TODO: overflow
-            now_ts += next_ms * std.time.ns_per_ms;
-            break :ts now_ts;
-        };
-
         c.* = .{
             .op = .{
                 .timer = .{
-                    .next = next_ts,
+                    .next = timer_next(next_ms),
                 },
             },
             .userdata = userdata,
@@ -481,6 +482,61 @@ pub const Loop = struct {
         };
 
         self.add(c);
+    }
+
+    /// See io_uring.timer_reset for docs.
+    pub fn timer_reset(
+        self: *Loop,
+        c: *Completion,
+        c_cancel: *Completion,
+        next_ms: u64,
+        userdata: ?*anyopaque,
+        comptime cb: xev.Callback,
+    ) void {
+        switch (c.flags.state) {
+            .dead, .deleting => {
+                self.timer(c, next_ms, userdata, cb);
+                return;
+            },
+
+            // Adding state we can just modify the metadata and return
+            // since the timer isn't in the heap yet.
+            .adding => {
+                c.op.timer.next = timer_next(next_ms);
+                c.userdata = userdata;
+                c.callback = cb;
+                return;
+            },
+
+            .active => {
+                // Update the reset time for the timer to the desired time
+                // along with all the callbacks.
+                c.op.timer.reset = timer_next(next_ms);
+                c.userdata = userdata;
+                c.callback = cb;
+
+                // If the cancellation is active, we assume its for this timer
+                // and do nothing.
+                if (c_cancel.state() == .active) return;
+                assert(c_cancel.state() == .dead and c.state() == .active);
+                c_cancel.* = .{ .op = .{ .cancel = .{ .c = c } } };
+                self.add(c_cancel);
+            },
+        }
+    }
+
+    fn timer_next(next_ms: u64) wasi.timestamp_t {
+        // Get the absolute time we'll execute this timer next.
+        var now_ts: wasi.timestamp_t = undefined;
+        switch (wasi.clock_time_get(@bitCast(u32, std.os.CLOCK.MONOTONIC), 1, &now_ts)) {
+            .SUCCESS => {},
+            .INVAL => unreachable,
+            else => unreachable,
+        }
+
+        // TODO: overflow
+        now_ts += next_ms * std.time.ns_per_ms;
+        return now_ts;
     }
 
     fn get_now() !wasi.timestamp_t {
@@ -530,9 +586,6 @@ pub const Completion = struct {
 
         /// completion is actively being sent to poll
         active = 3,
-
-        /// completion is being performed and callback invoked
-        in_progress = 4,
     };
 
     /// Returns the state of this completion. There are some things to
@@ -551,7 +604,7 @@ pub const Completion = struct {
     pub fn state(self: Completion) xev.CompletionState {
         return switch (self.flags.state) {
             .dead => .dead,
-            .adding, .deleting, .active, .in_progress => .active,
+            .adding, .deleting, .active => .active,
         };
     }
 
@@ -825,6 +878,12 @@ const Timer = struct {
     /// The absolute time to fire this timer next.
     next: std.os.wasi.timestamp_t,
 
+    /// Only used internally. If this is non-null and timer is
+    /// CANCELLED, then the timer is rearmed automatically with this
+    /// as the next time. The callback will not be called on the
+    /// cancellation.
+    reset: ?std.os.wasi.timestamp_t = null,
+
     /// Internal heap fields.
     heap: heap.IntrusiveField(Timer) = .{},
 
@@ -1048,6 +1107,130 @@ test "wasi: timer" {
     // State checking
     try testing.expect(c1.state() == .dead);
     try testing.expect(c2.state() == .active);
+}
+
+test "wasi: timer reset" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, cb);
+
+    // We know timer won't be called from the timer test previously.
+    try loop.run(.no_wait);
+    try testing.expect(trigger == null);
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .active);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
+}
+
+test "wasi: timer reset before tick" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, cb);
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .dead);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
+}
+
+test "wasi: timer reset after trigger" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 1, &trigger, cb);
+
+    // Run the timer
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    trigger = null;
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .dead);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
 }
 
 test "wasi: timer cancellation" {
