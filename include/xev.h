@@ -77,6 +77,7 @@ void xev_threadpool_batch_push_batch(xev_threadpool_batch* b, xev_threadpool_bat
 int xev_timer_init(xev_watcher *w);
 void xev_timer_deinit(xev_watcher *w);
 void xev_timer_run(xev_watcher *w, xev_loop* loop, xev_completion* c, uint64_t next_ms, void* userdata, xev_timer_cb cb);
+void xev_timer_reset(xev_watcher *w, xev_loop* loop, xev_completion* c, xev_completion *c_cancel, uint64_t next_ms, void* userdata, xev_timer_cb cb);
 void xev_timer_cancel(xev_watcher *w, xev_loop* loop, xev_completion* c, xev_completion* c_cancel, void* userdata, xev_timer_cb cb);
 
 int xev_async_init(xev_watcher *w);

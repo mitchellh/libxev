@@ -73,6 +73,55 @@ pub fn Timer(comptime xev: type) type {
             }).callback);
         }
 
+        /// Reset a timer to execute in next_ms milliseconds. If the timer
+        /// is already started, this will stop it and restart it. If the
+        /// timer has never been started, this is equivalent to running "run".
+        /// In every case, the timer callback is updated to the given userdata
+        /// and callback.
+        ///
+        /// This requires an additional completion c_cancel to represent
+        /// the need to possibly cancel the previous timer. You can check
+        /// if c_cancel was used by checking the state() after the call.
+        ///
+        /// VERY IMPORTANT: both c and c_cancel MUST NOT be undefined. They
+        /// must be initialized to ".{}" if being used for the first time.
+        pub fn reset(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            c_cancel: *xev.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: RunError!void,
+            ) xev.CallbackAction,
+        ) void {
+            _ = self;
+
+            loop.timer_reset(c, c_cancel, next_ms, userdata, (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    return @call(.always_inline, cb, .{
+                        @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                        l_inner,
+                        c_inner,
+                        if (r.timer) |trigger| @as(RunError!void, switch (trigger) {
+                            .request, .expiration => {},
+                            .cancel => error.Canceled,
+                        }) else |err| err,
+                    });
+                }
+            }).callback);
+        }
+
         /// Cancel a previously started timer. The timer to cancel used the completion
         /// "c_cancel". A new completion "c" must be specified which will be called
         /// with the callback once cancellation is complete.
@@ -192,6 +241,124 @@ pub fn Timer(comptime xev: type) type {
             // Wait
             try loop.run(.until_done);
             try testing.expect(called);
+        }
+
+        test "timer reset" {
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var timer = try init();
+            defer timer.deinit();
+
+            var c_timer: xev.Completion = .{};
+            var c_cancel: xev.Completion = .{};
+            const cb = (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: RunError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback;
+
+            // Add the timer
+            var canceled = false;
+            timer.run(&loop, &c_timer, 100_000, bool, &canceled, cb);
+
+            // Wait
+            try loop.run(.no_wait);
+            try testing.expect(!canceled);
+
+            // Reset it
+            timer.reset(&loop, &c_timer, &c_cancel, 1, bool, &canceled, cb);
+
+            try loop.run(.until_done);
+            try testing.expect(canceled);
+            try testing.expect(c_timer.state() == .dead);
+            try testing.expect(c_cancel.state() == .dead);
+        }
+
+        test "timer reset before tick" {
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var timer = try init();
+            defer timer.deinit();
+
+            var c_timer: xev.Completion = .{};
+            var c_cancel: xev.Completion = .{};
+            const cb = (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: RunError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback;
+
+            // Add the timer
+            var canceled = false;
+            timer.run(&loop, &c_timer, 100_000, bool, &canceled, cb);
+
+            // Reset it
+            timer.reset(&loop, &c_timer, &c_cancel, 1, bool, &canceled, cb);
+
+            try loop.run(.until_done);
+            try testing.expect(canceled);
+            try testing.expect(c_timer.state() == .dead);
+            try testing.expect(c_cancel.state() == .dead);
+        }
+
+        test "timer reset after trigger" {
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var timer = try init();
+            defer timer.deinit();
+
+            var c_timer: xev.Completion = .{};
+            var c_cancel: xev.Completion = .{};
+            const cb = (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: RunError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback;
+
+            // Add the timer
+            var canceled = false;
+            timer.run(&loop, &c_timer, 1, bool, &canceled, cb);
+            try loop.run(.until_done);
+            try testing.expect(canceled);
+            canceled = false;
+
+            // Reset it
+            timer.reset(&loop, &c_timer, &c_cancel, 1, bool, &canceled, cb);
+
+            try loop.run(.until_done);
+            try testing.expect(canceled);
+            try testing.expect(c_timer.state() == .dead);
+            try testing.expect(c_cancel.state() == .dead);
         }
 
         test "timer cancel" {
