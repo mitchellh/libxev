@@ -161,34 +161,10 @@ pub const Loop = struct {
         userdata: ?*anyopaque,
         comptime cb: xev.Callback,
     ) void {
-        // Get the timestamp of the absolute time that we'll execute this timer.
-        // There are lots of failure scenarios here in math. If we see any
-        // of them we just use the maximum value.
-        const next_ts: std.os.linux.kernel_timespec = next_ts: {
-            const max: std.os.linux.kernel_timespec = .{
-                .tv_sec = std.math.maxInt(isize),
-                .tv_nsec = std.math.maxInt(isize),
-            };
-
-            const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
-                break :next_ts max;
-            const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
-                break :next_ts max;
-
-            if (self.flags.now_outdated) self.update_now();
-
-            break :next_ts .{
-                .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
-                    break :next_ts max,
-                .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
-                    break :next_ts max,
-            };
-        };
-
         c.* = .{
             .op = .{
                 .timer = .{
-                    .next = next_ts,
+                    .next = self.timer_next(next_ms),
                 },
             },
             .userdata = userdata,
@@ -196,6 +172,86 @@ pub const Loop = struct {
         };
 
         self.add(c);
+    }
+
+    /// Reset a timer to trigger in next_ms.
+    ///
+    /// Important: c and c_cancel must NEVER be undefined. If you are using
+    /// timer_reset you should always initial c to the zero value ".{}".
+    ///
+    /// If the timer completion "c" is dead, this is equivalent to calling
+    /// "timer" and "c_cancel" is not used. You can verify this scenario by
+    /// checking "c_cancel.state()" after this call.
+    ///
+    /// If the timer completion "c" is active, and "c_cancel" is also active,
+    /// it is assumed that c_cancel is already resetting the timer. The
+    /// "next_ms" time is updated but otherwise the cancellation continues
+    /// and reset works.
+    ///
+    /// If the timer completion "c" is active, and "c_cancel" is dead,
+    /// "c" is cancelled and restarted to trigger in next_ms.
+    ///
+    /// There is no guarantee that c_cancel will ever be used. Check the
+    /// resulting state to know if you can reclaim its memory or not.
+    pub fn timer_reset(
+        self: *Loop,
+        c: *Completion,
+        c_cancel: *Completion,
+        next_ms: u64,
+        userdata: ?*anyopaque,
+        comptime cb: xev.Callback,
+    ) void {
+        if (c.state() == .dead) {
+            self.timer(c, next_ms, userdata, cb);
+            return;
+        }
+
+        // Update the reset time for the timer to the desired time
+        // along with all the callbacks.
+        c.op.timer.reset = self.timer_next(next_ms);
+        c.userdata = userdata;
+        c.callback = cb;
+
+        // If the cancellation is active, we assume its for this timer
+        // and do nothing.
+        if (c_cancel.state() == .active) return;
+
+        assert(c_cancel.state() == .dead and c.state() == .active);
+
+        // Note: we COULD use IORING_TIMEOUT_UPDATE here with the
+        // IORING_TIMEOUT_REMOVE op. We don't right now because it complicates
+        // our logic and ups our required kernel version to 5.11 while this
+        // works good enough. If there is a compelling reason to use
+        // IORING_TIMEOUT_UPDATE, I'm open to hearing it.
+
+        c_cancel.* = .{
+            .op = .{ .timer_remove = .{ .timer = c } },
+        };
+        self.add(c_cancel);
+    }
+
+    fn timer_next(self: *Loop, next_ms: u64) std.os.linux.kernel_timespec {
+        // Get the timestamp of the absolute time that we'll execute this timer.
+        // There are lots of failure scenarios here in math. If we see any
+        // of them we just use the maximum value.
+        const max: std.os.linux.kernel_timespec = .{
+            .tv_sec = std.math.maxInt(isize),
+            .tv_nsec = std.math.maxInt(isize),
+        };
+
+        const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
+            return max;
+        const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
+            return max;
+
+        if (self.flags.now_outdated) self.update_now();
+
+        return .{
+            .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
+                return max,
+            .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
+                return max,
+        };
     }
 
     /// Add a completion to the loop. This does NOT start the operation!
@@ -499,12 +555,27 @@ pub const Completion = struct {
                 },
             },
 
-            .timer => .{
-                .timer = if (res >= 0) .request else switch (@intToEnum(std.os.E, -res)) {
-                    .TIME => .expiration,
-                    .CANCELED => .cancel,
-                    else => |errno| std.os.unexpectedErrno(errno),
-                },
+            .timer => |*op| timer: {
+                const e = @intToEnum(std.os.E, -res);
+
+                // If we have reset set AND we got a cancellation result,
+                // that means that we were canceled so that we can update
+                // our expiration time.
+                if (op.reset) |r| {
+                    if (e == .CANCELED) {
+                        op.next = r;
+                        op.reset = null;
+                        return .rearm;
+                    }
+                }
+
+                break :timer .{
+                    .timer = if (res >= 0) .request else switch (e) {
+                        .TIME => .expiration,
+                        .CANCELED => .cancel,
+                        else => |errno| std.os.unexpectedErrno(errno),
+                    },
+                };
             },
 
             .timer_remove => .{
@@ -674,6 +745,12 @@ pub const Operation = union(OperationType) {
 
     timer: struct {
         next: std.os.linux.kernel_timespec,
+
+        /// Only used internally. If this is non-null and timer is
+        /// CANCELLED, then the timer is rearmed automatically with this
+        /// as the next time. The callback will not be called on the
+        /// cancellation.
+        reset: ?std.os.linux.kernel_timespec = null,
     },
 
     timer_remove: struct {
@@ -906,6 +983,48 @@ test "io_uring: timer" {
     try testing.expect(c2.state() == .active);
 }
 
+test "io_uring: timer reset" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, cb);
+
+    // We know timer won't be called from the timer test previously.
+    try loop.run(.no_wait);
+    try testing.expect(trigger == null);
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .active);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
+}
+
 test "io_uring: stop" {
     const testing = std.testing;
 
@@ -942,14 +1061,13 @@ test "io_uring: timer remove" {
     defer loop.deinit();
 
     // Add the timer
-    var called = false;
+    var trigger: ?TimerTrigger = null;
     var c1: Completion = undefined;
-    loop.timer(&c1, 100_000, &called, (struct {
+    loop.timer(&c1, 100_000, &trigger, (struct {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
-            const b = @ptrCast(*bool, ud.?);
-            const trigger = r.timer catch unreachable;
-            b.* = trigger != .cancel;
+            const b = @ptrCast(*?TimerTrigger, ud.?);
+            b.* = r.timer catch unreachable;
             return .disarm;
         }
     }).callback);
@@ -977,7 +1095,7 @@ test "io_uring: timer remove" {
 
     // Tick
     try loop.run(.until_done);
-    try testing.expect(!called);
+    try testing.expect(trigger.? == .cancel);
 }
 
 test "io_uring: socket accept/connect/send/recv/close" {
