@@ -168,6 +168,46 @@ export fn xev_timer_run(
     }).callback);
 }
 
+export fn xev_timer_reset(
+    v: *xev.Timer,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    c_cancel: *xev.Completion,
+    next_ms: u64,
+    userdata: ?*anyopaque,
+    cb: *const fn (
+        *xev.Loop,
+        *xev.Completion,
+        c_int,
+        ?*anyopaque,
+    ) callconv(.C) xev.CallbackAction,
+) void {
+    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
+    const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c));
+    extern_c.c_callback = @ptrCast(*const anyopaque, cb);
+
+    v.reset(loop, c, c_cancel, next_ms, anyopaque, userdata, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            cb_loop: *xev.Loop,
+            cb_c: *xev.Completion,
+            r: xev.Timer.RunError!void,
+        ) xev.CallbackAction {
+            const cb_extern_c = @ptrCast(*Completion, cb_c);
+            const cb_c_callback = @ptrCast(
+                *const Callback,
+                @alignCast(@alignOf(Callback), cb_extern_c.c_callback),
+            );
+            return @call(.auto, cb_c_callback, .{
+                cb_loop,
+                cb_c,
+                if (r) |_| 0 else |err| errorCode(err),
+                ud,
+            });
+        }
+    }).callback);
+}
+
 export fn xev_timer_cancel(
     v: *xev.Timer,
     loop: *xev.Loop,
