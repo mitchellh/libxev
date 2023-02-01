@@ -241,8 +241,10 @@ pub const Loop = struct {
 
         const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
             return max;
-        const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
-            return max;
+        const next_ns = std.math.cast(
+            isize,
+            (next_ms % std.time.ms_per_s) * std.time.ns_per_ms,
+        ) orelse return max;
 
         if (self.flags.now_outdated) self.update_now();
 

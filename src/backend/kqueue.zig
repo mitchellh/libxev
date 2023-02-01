@@ -634,8 +634,10 @@ pub const Loop = struct {
 
         const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
             return max;
-        const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
-            return max;
+        const next_ns = std.math.cast(
+            isize,
+            (next_ms % std.time.ms_per_s) * std.time.ns_per_ms,
+        ) orelse return max;
 
         return .{
             .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
