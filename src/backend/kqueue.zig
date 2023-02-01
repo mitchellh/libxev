@@ -424,6 +424,7 @@ pub const Loop = struct {
                 // We store whether this completion was active so we can decrement
                 // the active count later
                 const c_active = c.flags.state == .active;
+                c.flags.state = .dead;
 
                 // Decrease our waiters because we are definitely processing one.
                 wait_rem -|= 1;
@@ -446,7 +447,7 @@ pub const Loop = struct {
                     },
 
                     // Only resubmit if we aren't already active (in the queue)
-                    .rearm => if (c.flags.state != .active) self.submissions.push(c),
+                    .rearm => if (!c_active) self.submissions.push(c),
                 }
             }
 
@@ -568,32 +569,10 @@ pub const Loop = struct {
         userdata: ?*anyopaque,
         comptime cb: xev.Callback,
     ) void {
-        // Get the timestamp of the absolute time that we'll execute this timer.
-        // There are lots of failure scenarios here in math. If we see any
-        // of them we just use the maximum value.
-        const next_ts: std.os.timespec = next_ts: {
-            const max: std.os.timespec = .{
-                .tv_sec = std.math.maxInt(isize),
-                .tv_nsec = std.math.maxInt(isize),
-            };
-
-            const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
-                break :next_ts max;
-            const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
-                break :next_ts max;
-
-            break :next_ts .{
-                .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
-                    break :next_ts max,
-                .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
-                    break :next_ts max,
-            };
-        };
-
         c.* = .{
             .op = .{
                 .timer = .{
-                    .next = next_ts,
+                    .next = self.timer_next(next_ms),
                 },
             },
             .userdata = userdata,
@@ -601,6 +580,69 @@ pub const Loop = struct {
         };
 
         self.add(c);
+    }
+
+    /// See io_uring.timer_reset for docs.
+    pub fn timer_reset(
+        self: *Loop,
+        c: *Completion,
+        c_cancel: *Completion,
+        next_ms: u64,
+        userdata: ?*anyopaque,
+        comptime cb: xev.Callback,
+    ) void {
+        switch (c.flags.state) {
+            .dead, .deleting => {
+                self.timer(c, next_ms, userdata, cb);
+                return;
+            },
+
+            // Adding state we can just modify the metadata and return
+            // since the timer isn't in the heap yet.
+            .adding => {
+                c.op.timer.next = self.timer_next(next_ms);
+                c.userdata = userdata;
+                c.callback = cb;
+                return;
+            },
+
+            .active => {
+                // Update the reset time for the timer to the desired time
+                // along with all the callbacks.
+                c.op.timer.reset = self.timer_next(next_ms);
+                c.userdata = userdata;
+                c.callback = cb;
+
+                // If the cancellation is active, we assume its for this timer
+                // and do nothing.
+                if (c_cancel.state() == .active) return;
+                assert(c_cancel.state() == .dead and c.state() == .active);
+                c_cancel.* = .{ .op = .{ .cancel = .{ .c = c } } };
+                self.add(c_cancel);
+            },
+        }
+    }
+
+    fn timer_next(self: Loop, next_ms: u64) std.os.timespec {
+        // Get the timestamp of the absolute time that we'll execute this timer.
+        // There are lots of failure scenarios here in math. If we see any
+        // of them we just use the maximum value.
+        const max: std.os.timespec = .{
+            .tv_sec = std.math.maxInt(isize),
+            .tv_nsec = std.math.maxInt(isize),
+        };
+
+        const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
+            return max;
+        const next_ns = std.math.cast(isize, next_ms % std.time.ms_per_s) orelse
+            return max;
+
+        return .{
+            .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
+                return max,
+            .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
+                return max,
+        };
     }
 
     fn done(self: *Loop) bool {
@@ -820,6 +862,17 @@ pub const Loop = struct {
                 if (c.flags.state == .active) {
                     // Remove from the heap so it never fires...
                     self.timers.remove(v);
+
+                    // If we have reset set AND we got a cancellation result,
+                    // that means that we were canceled so that we can update
+                    // our expiration time.
+                    if (v.reset) |r| {
+                        v.next = r;
+                        v.reset = null;
+                        self.active -= 1;
+                        self.add(c);
+                        return;
+                    }
                 }
 
                 // Add to our completions so we trigger the callback.
@@ -1443,6 +1496,12 @@ const Timer = struct {
     /// The absolute time to fire this timer next.
     next: os.timespec,
 
+    /// Only used internally. If this is non-null and timer is
+    /// CANCELLED, then the timer is rearmed automatically with this
+    /// as the next time. The callback will not be called on the
+    /// cancellation.
+    reset: ?os.timespec = null,
+
     /// Internal heap fields.
     heap: heap.IntrusiveField(Timer) = .{},
 
@@ -1629,6 +1688,130 @@ test "kqueue: timer" {
     // State checking
     try testing.expect(c1.state() == .dead);
     try testing.expect(c2.state() == .active);
+}
+
+test "kqueue: timer reset" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, cb);
+
+    // We know timer won't be called from the timer test previously.
+    try loop.run(.no_wait);
+    try testing.expect(trigger == null);
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .active);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
+}
+
+test "kqueue: timer reset before tick" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 100_000, &trigger, cb);
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .dead);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
+}
+
+test "kqueue: timer reset after trigger" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const cb: xev.Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: xev.Result,
+        ) xev.CallbackAction {
+            _ = l;
+            const v = @ptrCast(*?TimerTrigger, ud.?);
+            v.* = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Add the timer
+    var trigger: ?TimerTrigger = null;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 1, &trigger, cb);
+
+    // Run the timer
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    trigger = null;
+
+    // Reset the timer
+    var c_cancel: Completion = .{};
+    loop.timer_reset(&c1, &c_cancel, 1, &trigger, cb);
+    try testing.expect(c1.state() == .active);
+    try testing.expect(c_cancel.state() == .dead);
+
+    // Run
+    try loop.run(.until_done);
+    try testing.expect(trigger.? == .expiration);
+    try testing.expect(c1.state() == .dead);
+    try testing.expect(c_cancel.state() == .dead);
 }
 
 test "kqueue: timer cancellation" {
