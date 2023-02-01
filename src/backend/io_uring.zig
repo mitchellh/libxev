@@ -582,6 +582,14 @@ pub const Completion = struct {
                 .timer_remove = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
                     .NOENT => error.NotFound,
                     .BUSY => error.ExpirationInProgress,
+
+                    // Okay, I don't know why this might happen. It appears to
+                    // happen when the timer you're attempting to cancel has
+                    // already expired, but I can't reproduce this in a unit
+                    // test. If this isn't safe to ignore or someone can find
+                    // the meaning of this, I'd be curious.
+                    .TIME => {},
+
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
