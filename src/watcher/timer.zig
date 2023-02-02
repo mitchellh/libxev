@@ -131,7 +131,7 @@ pub fn Timer(comptime xev: type) type {
         pub fn cancel(
             self: Self,
             loop: *xev.Loop,
-            c: *xev.Completion,
+            c_timer: *xev.Completion,
             c_cancel: *xev.Completion,
             comptime Userdata: type,
             userdata: ?*Userdata,
@@ -144,11 +144,11 @@ pub fn Timer(comptime xev: type) type {
         ) void {
             _ = self;
 
-            c.* = switch (xev.backend) {
+            c_cancel.* = switch (xev.backend) {
                 .io_uring => .{
                     .op = .{
                         .timer_remove = .{
-                            .timer = c_cancel,
+                            .timer = c_timer,
                         },
                     },
 
@@ -176,7 +176,7 @@ pub fn Timer(comptime xev: type) type {
                 => .{
                     .op = .{
                         .cancel = .{
-                            .c = c_cancel,
+                            .c = c_timer,
                         },
                     },
 
@@ -199,7 +199,7 @@ pub fn Timer(comptime xev: type) type {
                 },
             };
 
-            loop.add(c);
+            loop.add(c_cancel);
         }
 
         /// Error that could happen while running a timer.
@@ -388,7 +388,7 @@ pub fn Timer(comptime xev: type) type {
             // Cancel
             var cancel_confirm = false;
             var c2: xev.Completion = undefined;
-            timer.cancel(&loop, &c2, &c1, bool, &cancel_confirm, (struct {
+            timer.cancel(&loop, &c1, &c2, bool, &cancel_confirm, (struct {
                 fn callback(
                     ud: ?*bool,
                     _: *xev.Loop,

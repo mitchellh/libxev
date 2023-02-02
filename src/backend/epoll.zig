@@ -1091,7 +1091,9 @@ const ThreadPoolError = error{
     ThreadPoolUnsupported,
 };
 
-pub const CancelError = ThreadPoolError || error{};
+pub const CancelError = ThreadPoolError || error{
+    NotFound,
+};
 
 pub const AcceptError = std.os.EpollCtlError || error{
     DupFailed,

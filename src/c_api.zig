@@ -211,7 +211,7 @@ export fn xev_timer_reset(
 export fn xev_timer_cancel(
     v: *xev.Timer,
     loop: *xev.Loop,
-    c: *xev.Completion,
+    c_timer: *xev.Completion,
     c_cancel: *xev.Completion,
     userdata: ?*anyopaque,
     cb: *const fn (
@@ -222,10 +222,10 @@ export fn xev_timer_cancel(
     ) callconv(.C) xev.CallbackAction,
 ) void {
     const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
-    const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c));
+    const extern_c = @ptrCast(*Completion, @alignCast(@alignOf(Completion), c_cancel));
     extern_c.c_callback = @ptrCast(*const anyopaque, cb);
 
-    v.cancel(loop, c, c_cancel, anyopaque, userdata, (struct {
+    v.cancel(loop, c_timer, c_cancel, anyopaque, userdata, (struct {
         fn callback(
             ud: ?*anyopaque,
             cb_loop: *xev.Loop,
