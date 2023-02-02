@@ -560,15 +560,12 @@ pub const Completion = struct {
             .timer => |*op| timer: {
                 const e = @intToEnum(std.os.E, -res);
 
-                // If we have reset set AND we got a cancellation result,
-                // that means that we were canceled so that we can update
-                // our expiration time.
+                // If we have reset set, that means that we were canceled so
+                // that we can update our expiration time.
                 if (op.reset) |r| {
-                    if (e == .CANCELED) {
-                        op.next = r;
-                        op.reset = null;
-                        return .rearm;
-                    }
+                    op.next = r;
+                    op.reset = null;
+                    return .rearm;
                 }
 
                 break :timer .{
