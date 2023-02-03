@@ -37,7 +37,7 @@ pub fn run(comptime thread_count: comptime_int) !void {
     // Initialize all our threads
     var threads: [thread_count]std.Thread = undefined;
     for (threads) |*thr| {
-        thr.* = try std.Thread.spawn(.{}, threadMain, .{&loop});
+        thr.* = try std.Thread.spawn(.{}, threadMain, .{});
     }
 
     const start_time = try Instant.now();
@@ -75,8 +75,7 @@ fn asyncCallback(
     return .disarm;
 }
 
-fn threadMain(loop: *xev.Loop) !void {
+fn threadMain() !void {
     while (state == .running) try notifier.notify();
     state = .stopped;
-    _ = loop;
 }
