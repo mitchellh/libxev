@@ -15,7 +15,7 @@ pub fn Timer(comptime xev: type) type {
             return .{};
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *const Self) void {
             // Nothing for now.
             _ = self;
         }

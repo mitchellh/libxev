@@ -56,7 +56,7 @@ pub fn File(comptime xev: type) type {
         /// Clean up any watcher resources. This does NOT close the file.
         /// If you want to close the file you must call close or do so
         /// synchronously.
-        pub fn deinit(self: *File) void {
+        pub fn deinit(self: *const File) void {
             _ = self;
         }
 
