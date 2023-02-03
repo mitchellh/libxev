@@ -265,3 +265,23 @@ $ zig build test
 This will run all the tests for all the supported features for the current
 host platform. For example, on Linux this will run both the full io_uring
 and epoll test suite.
+ 
+**You can build and run tests for other platforms** by cross-compiling the
+ test executable, copying it to a target machine and executing it. For example,
+ the below shows how to cross-compile and build the tests for macOS from Linux:
+ 
+ ```sh
+ $ zig build -Dtarget=aarch64-macos -Dinstall-tests
+ ...
+ 
+ $ file zig-out/bin/xev-test
+ zig-out/bin/xev-test: Mach-O 64-bit arm64 executable
+ ```
+
+ **WASI is a special-case.** You can run tests for WASI if you have 
+ [wasmtime](https://wasmtime.dev/) installed:
+ 
+ ```
+ $ zig build test -Dtarget=wasm32-wasi -Dwasmtime
+ ...
+ ```
