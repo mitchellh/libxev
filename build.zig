@@ -41,6 +41,12 @@ pub fn build(b: *std.build.Builder) !void {
         "Build and install a single example",
     );
 
+    const example_install = b.option(
+        bool,
+        "example",
+        "Install the example binaries to zig-out/example",
+    ) orelse (example_name != null);
+
     const test_install = b.option(
         bool,
         "install-tests",
@@ -159,7 +165,7 @@ pub fn build(b: *std.build.Builder) !void {
     _ = try benchTargets(b, target, mode, bench_install, bench_name);
 
     // Examples
-    _ = try exampleTargets(b, target, mode, static_c_lib, example_name != null, example_name);
+    _ = try exampleTargets(b, target, mode, static_c_lib, example_install, example_name);
 
     // Man pages
     if (man_pages) {
@@ -259,7 +265,7 @@ fn exampleTargets(
             c_exe.setTarget(target);
             c_exe.setBuildMode(mode);
             c_exe.addPackage(pkg);
-            c_exe.setOutputDir("zig-out/bench");
+            c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         } else {
             const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
@@ -276,6 +282,7 @@ fn exampleTargets(
                 "-D_POSIX_C_SOURCE=199309L",
             });
             c_exe.linkLibrary(c_lib);
+            c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         }
     }

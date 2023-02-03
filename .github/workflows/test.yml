@@ -69,5 +69,8 @@ jobs:
     - name: test wasi
       run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime
 
+    - name: build all benchmarks and examples
+      run: nix develop -c zig build -Dexample -Dbench
+
     # Run a full build to ensure that works
     - run: nix build
