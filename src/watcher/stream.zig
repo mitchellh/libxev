@@ -337,7 +337,7 @@ pub fn GenericStream(comptime xev: type) type {
         /// Clean up any watcher resources. This does NOT close the file.
         /// If you want to close the file you must call close or do so
         /// synchronously.
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *const Self) void {
             _ = self;
         }
 
