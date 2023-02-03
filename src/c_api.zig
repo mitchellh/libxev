@@ -26,6 +26,14 @@ export fn xev_loop_run(loop: *xev.Loop, mode: xev.RunMode) c_int {
     return 0;
 }
 
+export fn xev_loop_now(loop: *xev.Loop) i64 {
+    return loop.now();
+}
+
+export fn xev_loop_update_now(loop: *xev.Loop) void {
+    loop.update_now();
+}
+
 export fn xev_completion_zero(c: *xev.Completion) void {
     c.* = .{};
 }
