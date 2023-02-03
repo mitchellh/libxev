@@ -59,7 +59,7 @@ pub const Loop = struct {
     thread_pool_completions: TaskCompletionQueue,
 
     /// Cached time
-    now: os.timespec,
+    cached_now: os.timespec,
 
     /// Some internal fields we can pack for better space.
     flags: packed struct {
@@ -98,7 +98,7 @@ pub const Loop = struct {
             .mach_port = mach_port,
             .thread_pool = options.thread_pool,
             .thread_pool_completions = undefined,
-            .now = undefined,
+            .cached_now = undefined,
         };
         res.update_now();
         return res;
@@ -357,17 +357,21 @@ pub const Loop = struct {
         // We also loop if there are any requested changes. Requested
         // changes are only ever deletions currently, so we just process
         // those until we have no more.
-        while ((self.active > 0 and (wait == 0 or wait_rem > 0)) or
-            changes > 0 or
-            !self.completions.empty())
-        {
+        while (true) {
             // If we're stopped then the loop is fully over.
             if (self.flags.stopped) return;
 
+            // We must update our time no matter what
             self.update_now();
-            const now_timer: Timer = .{ .next = self.now };
+
+            // NOTE(mitchellh): This is a hideous boolean statement we should
+            // clean it up.
+            if (!((self.active > 0 and (wait == 0 or wait_rem > 0)) or
+                changes > 0 or
+                !self.completions.empty())) break;
 
             // Run our expired timers
+            const now_timer: Timer = .{ .next = self.cached_now };
             while (self.timers.peek()) |t| {
                 if (!Timer.less({}, t, &now_timer)) break;
 
@@ -460,8 +464,8 @@ pub const Loop = struct {
                 const t = self.timers.peek() orelse break :timeout null;
 
                 // Determine the time in milliseconds.
-                const ms_now = @intCast(u64, self.now.tv_sec) * std.time.ms_per_s +
-                    @intCast(u64, self.now.tv_nsec) / std.time.ns_per_ms;
+                const ms_now = @intCast(u64, self.cached_now.tv_sec) * std.time.ms_per_s +
+                    @intCast(u64, self.cached_now.tv_nsec) / std.time.ns_per_ms;
                 const ms_next = @intCast(u64, t.next.tv_sec) * std.time.ms_per_s +
                     @intCast(u64, t.next.tv_nsec) / std.time.ns_per_ms;
                 const ms = ms_next -| ms_now;
@@ -554,9 +558,31 @@ pub const Loop = struct {
         }
     }
 
+    /// Returns the "loop" time in milliseconds. The loop time is updated
+    /// once per loop tick, before IO polling occurs. It remains constant
+    /// throughout callback execution.
+    ///
+    /// You can force an update of the "now" value by calling update_now()
+    /// at any time from the main thread.
+    ///
+    /// The clock that is used is not guaranteed. In general, a monotonic
+    /// clock source is always used if available. This value should typically
+    /// just be used for relative time calculations within the loop, such as
+    /// answering the question "did this happen <x> ms ago?".
+    pub fn now(self: *Loop) i64 {
+        // If anything overflows we just return the max value.
+        const max = std.math.maxInt(i64);
+
+        // Calculate all the values, being careful about overflows in order
+        // to just return the maximum value.
+        const sec = std.math.mul(isize, self.cached_now.tv_sec, std.time.ms_per_s) catch return max;
+        const nsec = @divFloor(self.cached_now.tv_nsec, std.time.ns_per_ms);
+        return std.math.lossyCast(i64, sec +| nsec);
+    }
+
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        os.clock_gettime(os.CLOCK.MONOTONIC, &self.now) catch {};
+        os.clock_gettime(os.CLOCK.MONOTONIC, &self.cached_now) catch {};
     }
 
     /// Add a timer to the loop. The timer will execute in "next_ms". This
@@ -640,9 +666,9 @@ pub const Loop = struct {
         ) orelse return max;
 
         return .{
-            .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
+            .tv_sec = std.math.add(isize, self.cached_now.tv_sec, next_s) catch
                 return max,
-            .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
+            .tv_nsec = std.math.add(isize, self.cached_now.tv_nsec, next_ns) catch
                 return max,
         };
     }
@@ -1605,6 +1631,20 @@ comptime {
         @compileLog(@sizeOf(Completion));
         unreachable;
     }
+}
+
+test "kqueue: loop time" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // should never init zero
+    var now = loop.now();
+    try testing.expect(now > 0);
+
+    // should update on a loop tick
+    while (now == loop.now()) try loop.run(.no_wait);
 }
 
 test "kqueue: stop" {

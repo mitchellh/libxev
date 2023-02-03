@@ -15,7 +15,7 @@ pub const Loop = struct {
     submissions: queue.Intrusive(Completion) = .{},
 
     /// Cached time
-    now: std.os.timespec = undefined,
+    cached_now: std.os.timespec = undefined,
 
     flags: packed struct {
         /// True if the "now" field is outdated and should be updated
@@ -69,9 +69,33 @@ pub const Loop = struct {
         self.flags.stopped = true;
     }
 
+    /// Returns the "loop" time in milliseconds. The loop time is updated
+    /// once per loop tick, before IO polling occurs. It remains constant
+    /// throughout callback execution.
+    ///
+    /// You can force an update of the "now" value by calling update_now()
+    /// at any time from the main thread.
+    ///
+    /// The clock that is used is not guaranteed. In general, a monotonic
+    /// clock source is always used if available. This value should typically
+    /// just be used for relative time calculations within the loop, such as
+    /// answering the question "did this happen <x> ms ago?".
+    pub fn now(self: *Loop) i64 {
+        if (self.flags.now_outdated) self.update_now();
+
+        // If anything overflows we just return the max value.
+        const max = std.math.maxInt(i64);
+
+        // Calculate all the values, being careful about overflows in order
+        // to just return the maximum value.
+        const sec = std.math.mul(isize, self.cached_now.tv_sec, std.time.ms_per_s) catch return max;
+        const nsec = @divFloor(self.cached_now.tv_nsec, std.time.ns_per_ms);
+        return std.math.lossyCast(i64, sec +| nsec);
+    }
+
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.now) catch {};
+        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.cached_now) catch {};
         self.flags.now_outdated = false;
     }
 
@@ -95,8 +119,13 @@ pub const Loop = struct {
         var cqes: [128]linux.io_uring_cqe = undefined;
         while (true) {
             // If we're stopped then the loop is fully over.
-            if (self.flags.stopped or
-                (self.active == 0 and self.submissions.empty())) break;
+            if (self.flags.stopped) break;
+
+            // We always note that our "now" value is outdated even if we have
+            // no completions to execute.
+            self.flags.now_outdated = true;
+
+            if (self.active == 0 and self.submissions.empty()) break;
 
             // If we have no queued submissions then we do the wait as part
             // of the submit call, because then we can do exactly once syscall
@@ -108,9 +137,6 @@ pub const Loop = struct {
                 // anyways so we always just do non-waiting ones.
                 _ = try self.submit();
             }
-
-            // We always note that our "now" value is outdated.
-            self.flags.now_outdated = true;
 
             // Wait for completions...
             const count = self.ring.copy_cqes(&cqes, wait) catch |err| return err;
@@ -249,9 +275,9 @@ pub const Loop = struct {
         if (self.flags.now_outdated) self.update_now();
 
         return .{
-            .tv_sec = std.math.add(isize, self.now.tv_sec, next_s) catch
+            .tv_sec = std.math.add(isize, self.cached_now.tv_sec, next_s) catch
                 return max,
-            .tv_nsec = std.math.add(isize, self.now.tv_nsec, next_ns) catch
+            .tv_nsec = std.math.add(isize, self.cached_now.tv_nsec, next_ns) catch
                 return max,
         };
     }
@@ -1059,6 +1085,20 @@ test "io_uring: stop" {
     loop.stop();
     try loop.run(.until_done);
     try testing.expect(!called);
+}
+
+test "io_uring: loop time" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // should never init zero
+    var now = loop.now();
+    try testing.expect(now > 0);
+
+    // should update on a loop tick
+    while (now == loop.now()) try loop.run(.no_wait);
 }
 
 test "io_uring: timer remove" {

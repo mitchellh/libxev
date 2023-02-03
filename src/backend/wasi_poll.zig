@@ -33,6 +33,9 @@ pub const Loop = struct {
     /// bool because we know we're single threaded.
     wakeup: WakeupType = wakeup_init,
 
+    /// Cached time
+    cached_now: wasi.timestamp_t,
+
     /// Some internal fields we can pack for better space.
     flags: packed struct {
         /// Whether we're in a run or not (to prevent nested runs).
@@ -44,7 +47,7 @@ pub const Loop = struct {
 
     pub fn init(options: xev.Options) !Loop {
         _ = options;
-        return .{};
+        return .{ .cached_now = try get_now() };
     }
 
     pub fn deinit(self: *Loop) void {
@@ -132,157 +135,162 @@ pub const Loop = struct {
         }
 
         // Wait and process events. We only do this if we have any active.
-        if (self.active > 0) {
-            var wait_rem = @intCast(usize, wait);
-            while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
-                const now = try get_now();
-                const now_timer: Timer = .{ .next = now };
+        var wait_rem = @intCast(usize, wait);
+        while (true) {
+            // If we're stopped then the loop is fully over.
+            if (self.flags.stopped) return;
 
-                // Run our expired timers
-                while (self.timers.peek()) |t| {
-                    if (!Timer.less({}, t, &now_timer)) break;
+            // We must always update the loop time even if we have no
+            // active completions.
+            self.update_now();
 
-                    // Remove the timer
-                    assert(self.timers.deleteMin().? == t);
+            if (!(self.active > 0 and (wait == 0 or wait_rem > 0))) break;
 
-                    // Completion is now dead because it has been processed.
-                    // Users can reuse it (unless they specify rearm in
-                    // which case we readd it).
-                    const c = t.c;
-                    c.flags.state = .dead;
-                    self.active -= 1;
+            // Run our expired timers
+            const now_timer: Timer = .{ .next = self.cached_now };
+            while (self.timers.peek()) |t| {
+                if (!Timer.less({}, t, &now_timer)) break;
 
-                    // Lower our remaining count
-                    wait_rem -|= 1;
+                // Remove the timer
+                assert(self.timers.deleteMin().? == t);
 
-                    // Invoke
-                    const action = c.callback(c.userdata, self, c, .{
-                        .timer = .expiration,
-                    });
-                    switch (action) {
-                        .disarm => {},
-                        .rearm => self.start(c),
-                    }
+                // Completion is now dead because it has been processed.
+                // Users can reuse it (unless they specify rearm in
+                // which case we readd it).
+                const c = t.c;
+                c.flags.state = .dead;
+                self.active -= 1;
+
+                // Lower our remaining count
+                wait_rem -|= 1;
+
+                // Invoke
+                const action = c.callback(c.userdata, self, c, .{
+                    .timer = .expiration,
+                });
+                switch (action) {
+                    .disarm => {},
+                    .rearm => self.start(c),
                 }
+            }
 
-                // Run our async waiters
-                if (!self.asyncs.empty()) {
-                    const wakeup = if (threaded) self.wakeup.load(.SeqCst) else self.wakeup;
-                    if (wakeup) {
-                        // Reset to false, we've "woken up" now.
-                        if (threaded)
-                            self.wakeup.store(false, .SeqCst)
+            // Run our async waiters
+            if (!self.asyncs.empty()) {
+                const wakeup = if (threaded) self.wakeup.load(.SeqCst) else self.wakeup;
+                if (wakeup) {
+                    // Reset to false, we've "woken up" now.
+                    if (threaded)
+                        self.wakeup.store(false, .SeqCst)
+                    else
+                        self.wakeup = false;
+
+                    // There is at least one pending async. This isn't efficient
+                    // AT ALL. We should improve this in the short term by
+                    // using a queue here of asyncs we know should wake up
+                    // (we know because we have access to it in async_notify).
+                    // I didn't do that right away because we need a Wasm
+                    // compatibile std.Thread.Mutex.
+                    var asyncs = self.asyncs;
+                    self.asyncs = .{};
+                    while (asyncs.pop()) |c| {
+                        const c_wakeup = if (threaded)
+                            c.op.async_wait.wakeup.load(.SeqCst)
                         else
-                            self.wakeup = false;
+                            c.op.async_wait.wakeup;
 
-                        // There is at least one pending async. This isn't efficient
-                        // AT ALL. We should improve this in the short term by
-                        // using a queue here of asyncs we know should wake up
-                        // (we know because we have access to it in async_notify).
-                        // I didn't do that right away because we need a Wasm
-                        // compatibile std.Thread.Mutex.
-                        var asyncs = self.asyncs;
-                        self.asyncs = .{};
-                        while (asyncs.pop()) |c| {
-                            const c_wakeup = if (threaded)
-                                c.op.async_wait.wakeup.load(.SeqCst)
-                            else
-                                c.op.async_wait.wakeup;
+                        // If we aren't waking this one up, requeue
+                        if (!c_wakeup) {
+                            self.asyncs.push(c);
+                            continue;
+                        }
 
-                            // If we aren't waking this one up, requeue
-                            if (!c_wakeup) {
-                                self.asyncs.push(c);
-                                continue;
-                            }
+                        // We are waking up, mark this as dead and call it.
+                        c.flags.state = .dead;
+                        self.active -= 1;
 
-                            // We are waking up, mark this as dead and call it.
-                            c.flags.state = .dead;
-                            self.active -= 1;
+                        // Lower our waiters
+                        wait_rem -|= 1;
 
-                            // Lower our waiters
-                            wait_rem -|= 1;
+                        const action = c.callback(c.userdata, self, c, .{ .async_wait = {} });
+                        switch (action) {
+                            // We disarm by default
+                            .disarm => {},
 
-                            const action = c.callback(c.userdata, self, c, .{ .async_wait = {} });
-                            switch (action) {
-                                // We disarm by default
-                                .disarm => {},
-
-                                // Rearm we just restart it. We use start instead of
-                                // add because then it'll become immediately available
-                                // if we loop again.
-                                .rearm => self.start(c),
-                            }
+                            // Rearm we just restart it. We use start instead of
+                            // add because then it'll become immediately available
+                            // if we loop again.
+                            .rearm => self.start(c),
                         }
                     }
                 }
+            }
 
-                // Setup our timeout. If we have nothing to wait for then
-                // we just set an expiring timer so that we still poll but it
-                // will return ASAP.
-                const timeout: wasi.timestamp_t = if (wait_rem == 0) now else timeout: {
-                    // If we have a timer use that value, otherwise we can afford
-                    // to sleep for awhile since we're waiting for something to
-                    // happen. We set this sleep to 60 seconds arbitrarily. On
-                    // other backends we wait indefinitely.
-                    const t: *const Timer = self.timers.peek() orelse
-                        break :timeout now + (60 * std.time.ns_per_s);
-                    break :timeout t.next;
-                };
-                self.batch.array[0] = .{
-                    .userdata = 0,
+            // Setup our timeout. If we have nothing to wait for then
+            // we just set an expiring timer so that we still poll but it
+            // will return ASAP.
+            const timeout: wasi.timestamp_t = if (wait_rem == 0) self.cached_now else timeout: {
+                // If we have a timer use that value, otherwise we can afford
+                // to sleep for awhile since we're waiting for something to
+                // happen. We set this sleep to 60 seconds arbitrarily. On
+                // other backends we wait indefinitely.
+                const t: *const Timer = self.timers.peek() orelse
+                    break :timeout self.cached_now + (60 * std.time.ns_per_s);
+                break :timeout t.next;
+            };
+            self.batch.array[0] = .{
+                .userdata = 0,
+                .u = .{
+                    .tag = wasi.EVENTTYPE_CLOCK,
                     .u = .{
-                        .tag = wasi.EVENTTYPE_CLOCK,
-                        .u = .{
-                            .clock = .{
-                                .id = @bitCast(u32, std.os.CLOCK.MONOTONIC),
-                                .timeout = timeout,
-                                .precision = 1 * std.time.ns_per_ms,
-                                .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
-                            },
+                        .clock = .{
+                            .id = @bitCast(u32, std.os.CLOCK.MONOTONIC),
+                            .timeout = timeout,
+                            .precision = 1 * std.time.ns_per_ms,
+                            .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
                         },
                     },
-                };
+                },
+            };
 
-                // Build our batch of subscriptions and poll
-                var events: [Batch.capacity]wasi.event_t = undefined;
-                const subs = self.batch.array[0..self.batch.len];
-                assert(events.len >= subs.len);
-                var n: usize = 0;
-                switch (wasi.poll_oneoff(&subs[0], &events[0], subs.len, &n)) {
-                    .SUCCESS => {},
-                    else => |err| return std.os.unexpectedErrno(err),
-                }
-
-                // Poll!
-                for (events[0..n]) |ev| {
-                    // A system event
-                    if (ev.userdata == 0) continue;
-
-                    const c = @intToPtr(*Completion, @intCast(usize, ev.userdata));
-
-                    // We assume disarm since this is the safest time to access
-                    // the completion. It makes rearms slightly more expensive
-                    // but not by very much.
-                    c.flags.state = .dead;
-                    self.batch.put(c);
-                    self.active -= 1;
-
-                    const res = c.perform();
-                    const action = c.callback(c.userdata, self, c, res);
-                    switch (action) {
-                        // We disarm by default
-                        .disarm => {},
-
-                        // Rearm we just restart it. We use start instead of
-                        // add because then it'll become immediately available
-                        // if we loop again.
-                        .rearm => self.start(c),
-                    }
-                }
-
-                if (wait == 0) break;
-                wait_rem -|= n;
+            // Build our batch of subscriptions and poll
+            var events: [Batch.capacity]wasi.event_t = undefined;
+            const subs = self.batch.array[0..self.batch.len];
+            assert(events.len >= subs.len);
+            var n: usize = 0;
+            switch (wasi.poll_oneoff(&subs[0], &events[0], subs.len, &n)) {
+                .SUCCESS => {},
+                else => |err| return std.os.unexpectedErrno(err),
             }
+
+            // Poll!
+            for (events[0..n]) |ev| {
+                // A system event
+                if (ev.userdata == 0) continue;
+
+                const c = @intToPtr(*Completion, @intCast(usize, ev.userdata));
+
+                // We assume disarm since this is the safest time to access
+                // the completion. It makes rearms slightly more expensive
+                // but not by very much.
+                c.flags.state = .dead;
+                self.batch.put(c);
+                self.active -= 1;
+
+                const res = c.perform();
+                const action = c.callback(c.userdata, self, c, res);
+                switch (action) {
+                    // We disarm by default
+                    .disarm => {},
+
+                    // Rearm we just restart it. We use start instead of
+                    // add because then it'll become immediately available
+                    // if we loop again.
+                    .rearm => self.start(c),
+                }
+            }
+
+            if (wait == 0) break;
+            wait_rem -|= n;
         }
     }
 
@@ -523,6 +531,26 @@ pub const Loop = struct {
                 self.add(c_cancel);
             },
         }
+    }
+
+    /// Returns the "loop" time in milliseconds. The loop time is updated
+    /// once per loop tick, before IO polling occurs. It remains constant
+    /// throughout callback execution.
+    ///
+    /// You can force an update of the "now" value by calling update_now()
+    /// at any time from the main thread.
+    ///
+    /// The clock that is used is not guaranteed. In general, a monotonic
+    /// clock source is always used if available. This value should typically
+    /// just be used for relative time calculations within the loop, such as
+    /// answering the question "did this happen <x> ms ago?".
+    pub fn now(self: *Loop) i64 {
+        return std.math.lossyCast(i64, @divFloor(self.cached_now, std.time.ns_per_ms));
+    }
+
+    /// Update the cached time.
+    pub fn update_now(self: *Loop) void {
+        if (get_now()) |t| self.cached_now = t else |_| {}
     }
 
     fn timer_next(next_ms: u64) wasi.timestamp_t {
@@ -1052,6 +1080,20 @@ const Batch = struct {
         try testing.expect(cs[4].batch_idx == capacity - 1);
     }
 };
+
+test "wasi: loop time" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // should never init zero
+    var now = loop.now();
+    try testing.expect(now > 0);
+
+    // should update on a loop tick
+    while (now == loop.now()) try loop.run(.no_wait);
+}
 
 test "wasi: timer" {
     const testing = std.testing;

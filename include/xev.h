@@ -56,6 +56,8 @@ typedef enum {
 int xev_loop_init(xev_loop* loop);
 void xev_loop_deinit(xev_loop* loop);
 int xev_loop_run(xev_loop* loop, xev_run_mode_t mode);
+int64_t xev_loop_now(xev_loop* loop);
+void xev_loop_update_now(xev_loop* loop);
 
 void xev_completion_zero(xev_completion* c);
 xev_completion_state_t xev_completion_state(xev_completion* c);
