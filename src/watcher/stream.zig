@@ -213,6 +213,14 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             completion: xev.Completion = .{},
             userdata: ?*anyopaque = null,
             next: ?*@This() = null,
+
+            /// This can be used to convert a completion pointer back to
+            /// a WriteRequest. This is only safe of course if the completion
+            /// originally is from a write request. This is useful for getting
+            /// the WriteRequest back in a callback from queuedWrite.
+            pub fn from(c: *xev.Completion) *WriteRequest {
+                return @fieldParentPtr(WriteRequest, "completion", c);
+            }
         };
 
         /// Write to the stream. This queues the writes to ensure they
@@ -293,7 +301,10 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             // The userdata as to go on the WriteRequest because we need
             // our actual completion userdata to be the WriteQueue so that
             // we can process the queue.
-            req.userdata = userdata;
+            req.userdata = @ptrCast(
+                ?*anyopaque,
+                @alignCast(@alignOf(anyopaque), userdata),
+            );
 
             // If the queue is empty, then we add our completion. Otherwise,
             // the previously queued writes will trigger this one.
@@ -655,24 +666,26 @@ pub fn GenericStream(comptime xev: type) type {
                     }
                 }).callback,
             );
+
+            var c_result: ?*xev.Completion = null;
             parent.queueWrite(
                 &loop,
                 &write_queue,
                 &write_req[1],
                 .{ .slice = "world!\n" },
-                void,
-                null,
+                ?*xev.Completion,
+                &c_result,
                 (struct {
                     fn callback(
-                        _: ?*void,
+                        ud: ?*?*xev.Completion,
                         _: *xev.Loop,
                         c: *xev.Completion,
                         _: Self,
                         _: xev.WriteBuffer,
                         r: Self.WriteError!usize,
                     ) xev.CallbackAction {
-                        _ = c;
                         _ = r catch unreachable;
+                        ud.?.* = c;
                         return .disarm;
                     }
                 }).callback,
@@ -682,6 +695,9 @@ pub fn GenericStream(comptime xev: type) type {
             try loop.run(.until_done);
             try testing.expect(read_len != null);
             try testing.expectEqualSlices(u8, "hello, world!\n", read_buf[0..read_len.?]);
+
+            // Verify our completion is equal to our request
+            try testing.expect(Self.WriteRequest.from(c_result.?) == &write_req[1]);
         }
     };
 }
