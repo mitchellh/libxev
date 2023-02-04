@@ -8,9 +8,9 @@ pub const pkg = std.build.Pkg{
     .source = .{ .path = thisDir() ++ "/src/main.zig" },
 };
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
-    const mode = b.standardReleaseOptions();
+    const optimize = b.standardOptimizeOption(.{});
 
     const man_pages = b.option(
         bool,
@@ -62,16 +62,25 @@ pub fn build(b: *std.build.Builder) !void {
 
     // We always build our test exe as part of `zig build` so that
     // we can easily run it manually without digging through the cache.
-    const test_exe = b.addTestExe("xev-test", "src/main.zig");
-    test_exe.setBuildMode(mode);
-    test_exe.setTarget(target);
-    if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
-    if (test_install) test_exe.install();
+    if (test_install) {
+        const test_exe = b.addTest(.{
+            .name = "xev-test",
+            .kind = .test_exe,
+            .root_source_file = .{ .path = "src/main.zig" },
+            .target = target,
+            .optimize = optimize,
+        });
+        if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
+        test_exe.install();
+    }
 
     // zig build test test binary and runner.
-    const tests_run = b.addTestSource(pkg.source);
-    tests_run.setBuildMode(mode);
-    tests_run.setTarget(target);
+    const tests_run = b.addTest(.{
+        .name = "xev-test",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
     if (test_libc) tests_run.linkLibC(); // Tests depend on libc, libxev does not
 
     const test_step = b.step("test", "Run tests");
@@ -79,16 +88,21 @@ pub fn build(b: *std.build.Builder) !void {
 
     // Static C lib
     const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi) lib: {
-        const static_lib = b.addStaticLibrary("xev", "src/c_api.zig");
-        static_lib.setBuildMode(mode);
-        static_lib.setTarget(target);
+        const static_lib = b.addStaticLibrary(.{
+            .name = "xev",
+            .root_source_file = .{ .path = "src/c_api.zig" },
+            .target = target,
+            .optimize = optimize,
+        });
         static_lib.install();
         static_lib.linkLibC();
         b.default_step.dependOn(&static_lib.step);
 
-        const static_binding_test = b.addExecutable("static-binding-test", null);
-        static_binding_test.setBuildMode(mode);
-        static_binding_test.setTarget(target);
+        const static_binding_test = b.addExecutable(.{
+            .name = "static-binding-test",
+            .target = target,
+            .optimize = optimize,
+        });
         static_binding_test.linkLibC();
         static_binding_test.addIncludePath("include");
         static_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" });
@@ -109,15 +123,20 @@ pub fn build(b: *std.build.Builder) !void {
         else
             "xev";
 
-        const dynamic_lib = b.addSharedLibrary(dynamic_lib_name, "src/c_api.zig", .unversioned);
-        dynamic_lib.setBuildMode(mode);
-        dynamic_lib.setTarget(target);
+        const dynamic_lib = b.addSharedLibrary(.{
+            .name = dynamic_lib_name,
+            .root_source_file = .{ .path = "src/c_api.zig" },
+            .target = target,
+            .optimize = optimize,
+        });
         dynamic_lib.install();
         b.default_step.dependOn(&dynamic_lib.step);
 
-        const dynamic_binding_test = b.addExecutable("dynamic-binding-test", null);
-        dynamic_binding_test.setBuildMode(mode);
-        dynamic_binding_test.setTarget(target);
+        const dynamic_binding_test = b.addExecutable(.{
+            .name = "dynamic-binding-test",
+            .target = target,
+            .optimize = optimize,
+        });
         dynamic_binding_test.linkLibC();
         dynamic_binding_test.addIncludePath("include");
         dynamic_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
@@ -162,10 +181,10 @@ pub fn build(b: *std.build.Builder) !void {
         b.installFile(file, "share/pkgconfig/libxev.pc");
     }
     // Benchmarks
-    _ = try benchTargets(b, target, mode, bench_install, bench_name);
+    _ = try benchTargets(b, target, optimize, bench_install, bench_name);
 
     // Examples
-    _ = try exampleTargets(b, target, mode, static_c_lib, example_install, example_name);
+    _ = try exampleTargets(b, target, optimize, static_c_lib, example_install, example_name);
 
     // Man pages
     if (man_pages) {
@@ -175,7 +194,7 @@ pub fn build(b: *std.build.Builder) !void {
 }
 
 fn benchTargets(
-    b: *std.build.Builder,
+    b: *std.Build,
     target: std.zig.CrossTarget,
     mode: std.builtin.Mode,
     install: bool,
@@ -210,9 +229,12 @@ fn benchTargets(
         }
 
         // Executable builder.
-        const c_exe = b.addExecutable(name, path);
-        c_exe.setTarget(target);
-        c_exe.setBuildMode(.ReleaseFast); // benchmarks are always release fast
+        const c_exe = b.addExecutable(.{
+            .name = name,
+            .root_source_file = .{ .path = path },
+            .target = target,
+            .optimize = .ReleaseFast, // benchmarks are always release fast
+        });
         c_exe.addPackage(pkg);
         c_exe.setOutputDir("zig-out/bench");
         if (install) c_exe.install();
@@ -225,9 +247,9 @@ fn benchTargets(
 }
 
 fn exampleTargets(
-    b: *std.build.Builder,
+    b: *std.Build,
     target: std.zig.CrossTarget,
-    mode: std.builtin.Mode,
+    optimize: std.builtin.Mode,
     c_lib_: ?*std.build.LibExeObjStep,
     install: bool,
     install_name: ?[]const u8,
@@ -261,17 +283,22 @@ fn exampleTargets(
 
         const is_zig = std.mem.eql(u8, entry.name[index + 1 ..], "zig");
         if (is_zig) {
-            const c_exe = b.addExecutable(name, path);
-            c_exe.setTarget(target);
-            c_exe.setBuildMode(mode);
+            const c_exe = b.addExecutable(.{
+                .name = name,
+                .root_source_file = .{ .path = path },
+                .target = target,
+                .optimize = optimize,
+            });
             c_exe.addPackage(pkg);
             c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         } else {
             const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
-            const c_exe = b.addExecutable(name, null);
-            c_exe.setTarget(target);
-            c_exe.setBuildMode(mode);
+            const c_exe = b.addExecutable(.{
+                .name = name,
+                .target = target,
+                .optimize = optimize,
+            });
             c_exe.linkLibC();
             c_exe.addIncludePath("include");
             c_exe.addCSourceFile(path, &[_][]const u8{
