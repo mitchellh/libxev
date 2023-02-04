@@ -360,14 +360,20 @@ pub const Loop = struct {
                     sqe,
                     v.fd,
                     buf,
-                    0,
+
+                    // offset is a u64 but if the value is -1 then it uses
+                    // the offset in the fd.
+                    @bitCast(u64, @as(i64, -1)),
                 ),
 
                 .slice => |buf| linux.io_uring_prep_read(
                     sqe,
                     v.fd,
                     buf,
-                    0,
+
+                    // offset is a u64 but if the value is -1 then it uses
+                    // the offset in the fd.
+                    @bitCast(u64, @as(i64, -1)),
                 ),
             },
 
@@ -453,14 +459,20 @@ pub const Loop = struct {
                     sqe,
                     v.fd,
                     buf.array[0..buf.len],
-                    0,
+
+                    // offset is a u64 but if the value is -1 then it uses
+                    // the offset in the fd.
+                    @bitCast(u64, @as(i64, -1)),
                 ),
 
                 .slice => |buf| linux.io_uring_prep_write(
                     sqe,
                     v.fd,
                     buf,
-                    0,
+
+                    // offset is a u64 but if the value is -1 then it uses
+                    // the offset in the fd.
+                    @bitCast(u64, @as(i64, -1)),
                 ),
             },
         }
