@@ -24,7 +24,7 @@ stdenv.mkDerivation rec {
 
   installPhase = ''
     runHook preInstall
-    zig build -Drelease-fast -Dman-pages --prefix $out install
+    zig build -Doptimize=ReleaseFast -Dman-pages --prefix $out install
     runHook postInstall
   '';
 
