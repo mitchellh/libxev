@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const queue = @import("../queue.zig");
 
 /// Options for creating a stream type. Each of the options makes the
 /// functionality available for the stream.
@@ -202,6 +203,106 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
 
         pub const WriteError = xev.WriteError;
 
+        /// WriteQueue is the queue of write requests for ordered writes.
+        /// This can be copied around.
+        pub const WriteQueue = queue.Intrusive(WriteRequest);
+
+        /// WriteRequest is a single request for a write. It wraps a
+        /// completion so that it can be inserted into the WriteQueue.
+        pub const WriteRequest = struct {
+            completion: xev.Completion = .{},
+            userdata: ?*anyopaque = null,
+            next: ?*@This() = null,
+        };
+
+        /// Write to the stream. This queues the writes to ensure they
+        /// remain in order. Queueing has a small overhead: you must
+        /// maintain a WriteQueue and WriteRequests instead of just
+        /// Completions.
+        ///
+        /// If ordering isn't important, or you can maintain ordering
+        /// naturally in your program, consider using write since it
+        /// has a slightly smaller overhead.
+        ///
+        /// The "CallbackAction" return value of this callback behaves slightly
+        /// different. The "rearm" return value will re-queue the same write
+        /// at the end of the queue.
+        ///
+        /// It is safe to call this at anytime from the main thread.
+        pub fn queueWrite(
+            self: Self,
+            loop: *xev.Loop,
+            q: *WriteQueue,
+            req: *WriteRequest,
+            buf: xev.WriteBuffer,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                b: xev.WriteBuffer,
+                r: WriteError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            // Initialize our completion
+            req.* = .{};
+            self.write_init(&req.completion, buf);
+            req.completion.userdata = q;
+            req.completion.callback = (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    const q_inner = @ptrCast(?*WriteQueue, @alignCast(@alignOf(WriteQueue), ud)).?;
+
+                    // The queue MUST have a request because a completion
+                    // can only be added if the queue is not empty, and
+                    // nothing else should be popping!.
+                    const req_inner = q_inner.pop().?;
+
+                    const cb_res = write_result(c_inner, r);
+                    const action = @call(.always_inline, cb, .{
+                        @ptrCast(?*Userdata, @alignCast(
+                            @max(1, @alignOf(Userdata)),
+                            req_inner.userdata,
+                        )),
+                        l_inner,
+                        c_inner,
+                        cb_res.writer,
+                        cb_res.buf,
+                        cb_res.result,
+                    });
+
+                    // Rearm requeues this request, it doesn't return rearm
+                    // on the actual callback here...
+                    if (action == .rearm) q_inner.push(req_inner);
+
+                    // If we have another request, add that completion next.
+                    if (q_inner.head) |req_next| l_inner.add(&req_next.completion);
+
+                    // We always disarm because the completion in the next
+                    // request will be used if there is more to queue.
+                    return .disarm;
+                }
+            }).callback;
+
+            // The userdata as to go on the WriteRequest because we need
+            // our actual completion userdata to be the WriteQueue so that
+            // we can process the queue.
+            req.userdata = userdata;
+
+            // If the queue is empty, then we add our completion. Otherwise,
+            // the previously queued writes will trigger this one.
+            if (q.empty()) loop.add(&req.completion);
+
+            // We always add this item to our queue no matter what
+            q.push(req);
+        }
+
         /// Write to the stream. This performs a single write. Additional
         /// writes can be requested by calling this multiple times.
         ///
@@ -209,6 +310,8 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         /// if this is called multiple times. If ordered writes are important
         /// (they usually are!) then you should only call write again once
         /// the previous write callback is called.
+        ///
+        /// If ordering is important, use queueWrite instead.
         pub fn write(
             self: Self,
             loop: *xev.Loop,
@@ -224,6 +327,63 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 b: xev.WriteBuffer,
                 r: WriteError!usize,
             ) xev.CallbackAction,
+        ) void {
+            self.write_init(c, buf);
+            c.userdata = userdata;
+            c.callback = (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    const cb_res = write_result(c_inner, r);
+                    return @call(.always_inline, cb, .{
+                        @ptrCast(?*Userdata, @alignCast(
+                            @max(1, @alignOf(Userdata)),
+                            ud,
+                        )),
+                        l_inner,
+                        c_inner,
+                        cb_res.writer,
+                        cb_res.buf,
+                        cb_res.result,
+                    });
+                }
+            }).callback;
+
+            loop.add(c);
+        }
+
+        /// Extracts the result from a completion for a write callback.
+        inline fn write_result(c: *xev.Completion, r: xev.Result) struct {
+            writer: Self,
+            buf: xev.WriteBuffer,
+            result: WriteError!usize,
+        } {
+            return switch (options.write) {
+                .none => unreachable,
+
+                .send => .{
+                    .writer = T.initFd(c.op.send.fd),
+                    .buf = c.op.send.buffer,
+                    .result = if (r.send) |v| v else |err| err,
+                },
+
+                .write => .{
+                    .writer = T.initFd(c.op.write.fd),
+                    .buf = c.op.write.buffer,
+                    .result = if (r.write) |v| v else |err| err,
+                },
+            };
+        }
+
+        /// Initialize the completion c for a write. This does NOT set
+        /// userdata or a callback.
+        fn write_init(
+            self: Self,
+            c: *xev.Completion,
+            buf: xev.WriteBuffer,
         ) void {
             switch (buf) {
                 inline .slice, .array => {
@@ -245,43 +405,6 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                                 },
                             },
                         },
-                        .userdata = userdata,
-                        .callback = (struct {
-                            fn callback(
-                                ud: ?*anyopaque,
-                                l_inner: *xev.Loop,
-                                c_inner: *xev.Completion,
-                                r: xev.Result,
-                            ) xev.CallbackAction {
-                                return switch (options.write) {
-                                    .none => unreachable,
-
-                                    .send => @call(.always_inline, cb, .{
-                                        @ptrCast(?*Userdata, @alignCast(
-                                            @max(1, @alignOf(Userdata)),
-                                            ud,
-                                        )),
-                                        l_inner,
-                                        c_inner,
-                                        T.initFd(c_inner.op.send.fd),
-                                        c_inner.op.send.buffer,
-                                        if (r.send) |v| v else |err| err,
-                                    }),
-
-                                    .write => @call(.always_inline, cb, .{
-                                        @ptrCast(?*Userdata, @alignCast(
-                                            @max(1, @alignOf(Userdata)),
-                                            ud,
-                                        )),
-                                        l_inner,
-                                        c_inner,
-                                        T.initFd(c_inner.op.write.fd),
-                                        c_inner.op.write.buffer,
-                                        if (r.write) |v| v else |err| err,
-                                    }),
-                                };
-                            }
-                        }).callback,
                     };
 
                     // If we're dup-ing, then we ask the backend to manage the fd.
@@ -302,8 +425,6 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                             if (options.threadpool) c.flags.threadpool = true;
                         },
                     }
-
-                    loop.add(c);
                 },
             }
         }
@@ -466,6 +587,101 @@ pub fn GenericStream(comptime xev: type) type {
             try loop.run(.until_done);
             try testing.expect(read_len != null);
             try testing.expectEqualSlices(u8, send_buf, read_buf[0..read_len.?]);
+        }
+
+        test "pty: queued writes" {
+            const testing = std.testing;
+            switch (builtin.os.tag) {
+                .linux, .macos => {},
+                else => return error.SkipZigTest,
+            }
+
+            // Create the pty parent/child side.
+            var pty = try Pty.init();
+            defer pty.deinit();
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            const parent = initFd(pty.parent);
+            const child = initFd(pty.child);
+
+            // Read
+            var read_buf: [128]u8 = undefined;
+            var read_len: ?usize = null;
+            var c_read: xev.Completion = undefined;
+            child.read(&loop, &c_read, .{ .slice = &read_buf }, ?usize, &read_len, (struct {
+                fn callback(
+                    ud: ?*?usize,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Self,
+                    _: xev.ReadBuffer,
+                    r: Self.ReadError!usize,
+                ) xev.CallbackAction {
+                    ud.?.* = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+
+            // This should not block!
+            try loop.run(.no_wait);
+            try testing.expect(read_len == null);
+
+            var write_queue: Self.WriteQueue = .{};
+            var write_req: [2]Self.WriteRequest = undefined;
+
+            // Send (note the newline at the end of the buf is important
+            // since we're in cooked mode)
+            parent.queueWrite(
+                &loop,
+                &write_queue,
+                &write_req[0],
+                .{ .slice = "hello, " },
+                void,
+                null,
+                (struct {
+                    fn callback(
+                        _: ?*void,
+                        _: *xev.Loop,
+                        c: *xev.Completion,
+                        _: Self,
+                        _: xev.WriteBuffer,
+                        r: Self.WriteError!usize,
+                    ) xev.CallbackAction {
+                        _ = c;
+                        _ = r catch unreachable;
+                        return .disarm;
+                    }
+                }).callback,
+            );
+            parent.queueWrite(
+                &loop,
+                &write_queue,
+                &write_req[1],
+                .{ .slice = "world!\n" },
+                void,
+                null,
+                (struct {
+                    fn callback(
+                        _: ?*void,
+                        _: *xev.Loop,
+                        c: *xev.Completion,
+                        _: Self,
+                        _: xev.WriteBuffer,
+                        r: Self.WriteError!usize,
+                    ) xev.CallbackAction {
+                        _ = c;
+                        _ = r catch unreachable;
+                        return .disarm;
+                    }
+                }).callback,
+            );
+
+            // The write and read should trigger
+            try loop.run(.until_done);
+            try testing.expect(read_len != null);
+            try testing.expectEqualSlices(u8, "hello, world!\n", read_buf[0..read_len.?]);
         }
     };
 }
