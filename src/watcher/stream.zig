@@ -211,7 +211,6 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         /// completion so that it can be inserted into the WriteQueue.
         pub const WriteRequest = struct {
             completion: xev.Completion = .{},
-            buf: xev.WriteBuffer = undefined,
             userdata: ?*anyopaque = null,
             next: ?*@This() = null,
         };
@@ -295,7 +294,6 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             // our actual completion userdata to be the WriteQueue so that
             // we can process the queue.
             req.userdata = userdata;
-            req.buf = buf;
 
             // If the queue is empty, then we add our completion. Otherwise,
             // the previously queued writes will trigger this one.
