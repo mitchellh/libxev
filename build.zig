@@ -3,7 +3,7 @@ const LibExeObjStep = std.build.LibExeObjStep;
 const ScdocStep = @import("src/build/ScdocStep.zig");
 
 /// Use this with addAnonymousModule in your project.
-pub const xev_module =  std.Build.CreateModuleOptions {
+pub const module =  std.Build.CreateModuleOptions {
     .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
 };
 
@@ -234,7 +234,7 @@ fn benchTargets(
             .target = target,
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
-        c_exe.addAnonymousModule("xev", xev_module);
+        c_exe.addAnonymousModule("xev", module);
         c_exe.setOutputDir("zig-out/bench");
         if (install) c_exe.install();
 
@@ -288,7 +288,7 @@ fn exampleTargets(
                 .target = target,
                 .optimize = optimize,
             });
-            c_exe.addAnonymousModule("xev", xev_module);
+            c_exe.addAnonymousModule("xev", module);
             c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         } else {

@@ -26,7 +26,7 @@ etc.
 
 libxev has no dependencies, making it easy to install into your Zig project
 using any available Zig package manager or Git submodules. The `build.zig`
-file exports a `pkg` constant that you can use with `addPackage`:
+file exports a `module` constant that you can use with `addAnonymousModule`:
 
 ```
 // build.zig
@@ -36,7 +36,7 @@ const libxev = @import("submodules/libxev/build.zig");
 pub fn build(b: *std.build.Builder) !void {
     // Your other build options...
 
-    my_exe.addPackage(libxev.pkg);
+    my_exe.addAnonymousModule(libxev.module);
 }
 ```
 
