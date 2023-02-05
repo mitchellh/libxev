@@ -36,7 +36,7 @@ const libxev = @import("submodules/libxev/build.zig");
 pub fn build(b: *std.build.Builder) !void {
     // Your other build options...
 
-    my_exe.addAnonymousModule(libxev.module);
+    my_exe.addAnonymousModule("xev", libxev.module);
 }
 ```
 
