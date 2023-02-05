@@ -2,10 +2,9 @@ const std = @import("std");
 const LibExeObjStep = std.build.LibExeObjStep;
 const ScdocStep = @import("src/build/ScdocStep.zig");
 
-/// Use this with addPackage in your project.
-pub const pkg = std.build.Pkg{
-    .name = "xev",
-    .source = .{ .path = thisDir() ++ "/src/main.zig" },
+/// Use this with addAnonymousModule in your project.
+pub const module =  std.Build.CreateModuleOptions {
+    .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
 };
 
 pub fn build(b: *std.Build) !void {
@@ -235,7 +234,7 @@ fn benchTargets(
             .target = target,
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
-        c_exe.addPackage(pkg);
+        c_exe.addAnonymousModule("xev", module);
         c_exe.setOutputDir("zig-out/bench");
         if (install) c_exe.install();
 
@@ -289,7 +288,7 @@ fn exampleTargets(
                 .target = target,
                 .optimize = optimize,
             });
-            c_exe.addPackage(pkg);
+            c_exe.addAnonymousModule("xev", module);
             c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         } else {
