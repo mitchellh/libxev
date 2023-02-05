@@ -3,7 +3,7 @@ const LibExeObjStep = std.build.LibExeObjStep;
 const ScdocStep = @import("src/build/ScdocStep.zig");
 
 /// Use this with addAnonymousModule in your project.
-pub const module =  std.Build.CreateModuleOptions {
+pub const module = std.Build.CreateModuleOptions{
     .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
 };
 
