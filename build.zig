@@ -7,6 +7,14 @@ pub const module = std.Build.CreateModuleOptions{
     .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
 };
 
+/// DEPRECATED: This is the old std.build.Pkg for older versions of Zig.
+/// I won't keep this around too long but there is no harm in exposing it
+/// for now since our code works with older versions just fine (for now).
+pub const pkg = std.build.Pkg{
+    .name = "xev",
+    .source = .{ .path = thisDir() ++ "/src/main.zig" },
+};
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
