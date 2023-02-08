@@ -2,11 +2,6 @@ const std = @import("std");
 const LibExeObjStep = std.build.LibExeObjStep;
 const ScdocStep = @import("src/build/ScdocStep.zig");
 
-/// Use this with addAnonymousModule in your project.
-pub const module = std.Build.CreateModuleOptions{
-    .source_file = .{ .path = thisDir() ++ "/src/main.zig" },
-};
-
 /// DEPRECATED: This is the old std.build.Pkg for older versions of Zig.
 /// I won't keep this around too long but there is no harm in exposing it
 /// for now since our code works with older versions just fine (for now).
@@ -15,7 +10,23 @@ pub const pkg = std.build.Pkg{
     .source = .{ .path = thisDir() ++ "/src/main.zig" },
 };
 
+/// Returns the module for libxev. The recommended approach is to depend
+/// on libxev in your build.zig.zon file, then use
+/// `b.dependency("libxev").module("xev")`. But if you're not using
+/// a build.zig.zon yet this will work.
+pub fn module(b: *std.Build) *std.Build.Module {
+    return b.createModule(.{
+        .source_file = .{ .path = (comptime thisDir()) ++ "/src/main.zig" },
+    });
+}
+
 pub fn build(b: *std.Build) !void {
+    // Modules available to downstream dependencies
+    b.addModule(.{
+        .name = "xev",
+        .source_file = .{ .path = (comptime thisDir()) ++ "/src/main.zig" },
+    });
+
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -242,7 +253,7 @@ fn benchTargets(
             .target = target,
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
-        c_exe.addAnonymousModule("xev", module);
+        c_exe.addModule("xev", module(b));
         c_exe.setOutputDir("zig-out/bench");
         if (install) c_exe.install();
 
@@ -296,7 +307,7 @@ fn exampleTargets(
                 .target = target,
                 .optimize = optimize,
             });
-            c_exe.addAnonymousModule("xev", module);
+            c_exe.addModule("xev", module(b));
             c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         } else {
