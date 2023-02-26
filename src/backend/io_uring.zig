@@ -475,6 +475,8 @@ pub const Loop = struct {
                     @bitCast(u64, @as(i64, -1)),
                 ),
             },
+
+            .cancel => |v| linux.io_uring_prep_cancel(sqe, @intCast(u64, @ptrToInt(v.c)), 0),
         }
 
         // Our sqe user data always points back to the completion.
@@ -545,6 +547,7 @@ pub const Completion = struct {
                 .accept = if (res >= 0)
                     @intCast(std.os.socket_t, res)
                 else switch (@intToEnum(std.os.E, -res)) {
+                    .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -557,6 +560,7 @@ pub const Completion = struct {
 
             .connect => .{
                 .connect = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                    .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -577,6 +581,7 @@ pub const Completion = struct {
                 .send = if (res >= 0)
                     @intCast(usize, res)
                 else switch (@intToEnum(std.os.E, -res)) {
+                    .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -585,12 +590,14 @@ pub const Completion = struct {
                 .sendmsg = if (res >= 0)
                     @intCast(usize, res)
                 else switch (@intToEnum(std.os.E, -res)) {
+                    .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .shutdown => .{
                 .shutdown = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                    .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -635,6 +642,15 @@ pub const Completion = struct {
                 .write = if (res >= 0)
                     @intCast(usize, res)
                 else switch (@intToEnum(std.os.E, -res)) {
+                    .CANCELED => error.Canceled,
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
+            .cancel => .{
+                .cancel = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                    .NOENT => error.NotFound,
+                    .ALREADY => error.ExpirationInProgress,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -661,6 +677,7 @@ pub const Completion = struct {
         }
 
         return switch (@intToEnum(std.os.E, -res)) {
+            .CANCELED => error.Canceled,
             else => |errno| std.os.unexpectedErrno(errno),
         };
     }
@@ -708,6 +725,9 @@ pub const OperationType = enum {
 
     /// Cancel an existing timer.
     timer_remove,
+
+    /// Cancel an existing operation.
+    cancel,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -726,6 +746,7 @@ pub const Result = union(OperationType) {
     timer: TimerError!TimerTrigger,
     timer_remove: TimerRemoveError!void,
     write: WriteError!usize,
+    cancel: CancelError!void,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -806,6 +827,10 @@ pub const Operation = union(OperationType) {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
     },
+
+    cancel: struct {
+        c: *Completion,
+    },
 };
 
 /// ReadBuffer are the various options for reading.
@@ -845,31 +870,39 @@ pub const WriteBuffer = union(enum) {
 };
 
 pub const AcceptError = error{
+    Canceled,
     Unexpected,
 };
 
-pub const CancelError = TimerRemoveError || error{
+pub const CancelError = error{
+    NotFound,
+    ExpirationInProgress,
     Unexpected,
 };
 
 pub const CloseError = error{
+    Canceled,
     Unexpected,
 };
 
 pub const ConnectError = error{
+    Canceled,
     Unexpected,
 };
 
 pub const ReadError = error{
     EOF,
+    Canceled,
     Unexpected,
 };
 
 pub const ShutdownError = error{
+    Canceled,
     Unexpected,
 };
 
 pub const WriteError = error{
+    Canceled,
     Unexpected,
 };
 
@@ -1479,4 +1512,69 @@ test "io_uring: sendmsg/recvmsg" {
     try loop.run(.until_done);
     try testing.expect(recv_size == buffer_recv.len);
     try testing.expectEqualSlices(u8, buffer_send[0..buffer_recv.len], buffer_recv[0..]);
+}
+
+test "io_uring: socket read cancellation" {
+    const mem = std.mem;
+    const net = std.net;
+    const os = std.os;
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Create a UDP server socket
+    const address = try net.Address.parseIp4("127.0.0.1", 3131);
+    var socket = try os.socket(address.any.family, os.SOCK.DGRAM | os.SOCK.CLOEXEC, 0);
+    errdefer os.closeSocket(socket);
+    try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try os.bind(socket, &address.any, address.getOsSockLen());
+
+    // Read
+    var read_result: xev.Result = undefined;
+    var c_read: Completion = .{
+        .op = .{
+            .read = .{
+                .fd = socket,
+                .buffer = .{
+                    .array = undefined,
+                },
+            },
+        },
+        .userdata = &read_result,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
+                var ptr = @ptrCast(*xev.Result, @alignCast(@alignOf(xev.Result), ud));
+                ptr.* = r;
+                _ = c;
+                _ = l;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_read);
+
+    // Cancellation
+    var c_read_cancel: Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c_read,
+            },
+        },
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
+                _ = r;
+                _ = c;
+                _ = l;
+                _ = ud;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_read_cancel);
+
+    // Wait for the read to be cancelled
+    try loop.run(.until_done);
+    try testing.expectEqual(OperationType.read, @as(OperationType, read_result));
+    try testing.expectError(error.Canceled, read_result.read);
 }
