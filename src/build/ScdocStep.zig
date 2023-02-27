@@ -35,8 +35,7 @@ pub fn init(builder: *Builder) ScdocStep {
         .builder = builder,
         .step = Step.init(.custom, "generate man pages", builder.allocator, make),
         .src_path = builder.pathFromRoot("docs/"),
-        .out_path = fs.path.join(builder.allocator, &[_][]const u8{
-            builder.cache_root,
+        .out_path = builder.cache_root.join(builder.allocator, &[_][]const u8{
             "man",
         }) catch unreachable,
     };
