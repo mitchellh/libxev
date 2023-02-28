@@ -23,7 +23,7 @@ pub fn run(comptime thread_count: comptime_int) !void {
     var contexts: [thread_count]Thread = undefined;
     var threads: [contexts.len]std.Thread = undefined;
     var comps: [contexts.len]xev.Completion = undefined;
-    for (contexts, 0..) |*ctx, i| {
+    for (&contexts, 0..) |*ctx, i| {
         ctx.* = try Thread.init();
         ctx.main_async.wait(&loop, &comps[i], Thread, ctx, mainAsyncCallback);
         threads[i] = try std.Thread.spawn(.{}, Thread.threadMain, .{ctx});
@@ -31,7 +31,7 @@ pub fn run(comptime thread_count: comptime_int) !void {
 
     const start_time = try Instant.now();
     try loop.run(.until_done);
-    for (threads) |thr| thr.join();
+    for (&threads) |thr| thr.join();
     const end_time = try Instant.now();
 
     const elapsed = @intToFloat(f64, end_time.since(start_time));

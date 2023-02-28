@@ -36,13 +36,13 @@ pub fn run(comptime thread_count: comptime_int) !void {
 
     // Initialize all our threads
     var threads: [thread_count]std.Thread = undefined;
-    for (threads) |*thr| {
+    for (&threads) |*thr| {
         thr.* = try std.Thread.spawn(.{}, threadMain, .{});
     }
 
     const start_time = try Instant.now();
     try loop.run(.until_done);
-    for (threads) |thr| thr.join();
+    for (&threads) |thr| thr.join();
     const end_time = try Instant.now();
 
     const elapsed = @intToFloat(f64, end_time.since(start_time));

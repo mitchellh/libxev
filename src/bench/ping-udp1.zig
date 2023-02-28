@@ -26,7 +26,7 @@ pub fn run(comptime count: comptime_int) !void {
     const addr = try std.net.Address.parseIp4("127.0.0.1", 3131);
 
     var pingers: [count]Pinger = undefined;
-    for (pingers) |*p| {
+    for (&pingers) |*p| {
         p.* = try Pinger.init(addr);
         try p.start(&loop);
     }
@@ -37,7 +37,7 @@ pub fn run(comptime count: comptime_int) !void {
 
     const total: usize = total: {
         var total: usize = 0;
-        for (pingers) |p| total += p.pongs;
+        for (&pingers) |p| total += p.pongs;
         break :total total;
     };
 
