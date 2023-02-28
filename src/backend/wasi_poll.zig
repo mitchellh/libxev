@@ -1056,7 +1056,7 @@ const Batch = struct {
 
         var b: Batch = .{};
         var cs: [capacity - 1]Completion = undefined;
-        for (cs, 0..) |*c, i| {
+        for (&cs, 0..) |*c, i| {
             c.* = .{ .op = undefined, .callback = undefined };
             const sub = try b.get(c);
             sub.* = .{ .userdata = @ptrToInt(c), .u = undefined };
