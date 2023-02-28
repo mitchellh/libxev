@@ -34,7 +34,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
     defer loop.deinit();
 
     var receivers: [n_receivers]Receiver = undefined;
-    for (receivers) |*r, i| {
+    for (receivers, 0..) |*r, i| {
         const addr = try std.net.Address.parseIp4("0.0.0.0", @intCast(u16, base_port + i));
         r.* = .{ .udp = try xev.UDP.init(addr) };
         try r.udp.bind(addr);
@@ -50,7 +50,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
     }
 
     var senders: [n_senders]Sender = undefined;
-    for (senders) |*s, i| {
+    for (senders, 0..) |*s, i| {
         const addr = try std.net.Address.parseIp4(
             "0.0.0.0",
             @intCast(u16, base_port + (i % n_receivers)),

@@ -175,10 +175,7 @@ pub fn build(b: *std.Build) !void {
 
     // pkg-config
     {
-        const file = try b.cache_root.join(
-            b.allocator,
-            &[_][]const u8{"libxev.pc"}
-        );
+        const file = try b.cache_root.join(b.allocator, &[_][]const u8{"libxev.pc"});
         const pkgconfig_file = try std.fs.cwd().createFile(file, .{});
 
         const writer = pkgconfig_file.writer();
