@@ -22,8 +22,7 @@ pub fn module(b: *std.Build) *std.Build.Module {
 
 pub fn build(b: *std.Build) !void {
     // Modules available to downstream dependencies
-    b.addModule(.{
-        .name = "xev",
+    _ = b.addModule("xev", .{
         .source_file = .{ .path = (comptime thisDir()) ++ "/src/main.zig" },
     });
 
