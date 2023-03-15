@@ -206,6 +206,10 @@ fn AsyncMachPort(comptime xev: type) type {
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
+                        // Drain the mach port so that we only fire one
+                        // notification even if many are queued.
+                        drain(c_inner.op.machport.port);
+
                         return @call(.always_inline, cb, .{
                             @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                             l_inner,
@@ -217,6 +221,41 @@ fn AsyncMachPort(comptime xev: type) type {
             };
 
             loop.add(c);
+        }
+
+        /// Drain the given mach port. All message bodies are discarded.
+        fn drain(port: os.system.mach_port_name_t) void {
+            var message: struct {
+                header: os.system.mach_msg_header_t,
+            } = undefined;
+
+            while (true) {
+                switch (os.system.getMachMsgError(os.system.mach_msg(
+                    &message.header,
+                    os.system.MACH_RCV_MSG | os.system.MACH_RCV_TIMEOUT,
+                    0,
+                    @sizeOf(@TypeOf(message)),
+                    port,
+                    os.system.MACH_MSG_TIMEOUT_NONE,
+                    os.system.MACH_PORT_NULL,
+                ))) {
+                    // This means a read would've blocked, so we drained.
+                    .RCV_TIMED_OUT => return,
+
+                    // We dequeued, so we want to loop again.
+                    .SUCCESS => {},
+
+                    // We dequeued but the message had a body. We ignore
+                    // message bodies for async so we are happy to discard
+                    // it and continue.
+                    .RCV_TOO_LARGE => {},
+
+                    else => |err| {
+                        std.log.warn("mach msg drain err, may duplicate async wakeups err={}", .{err});
+                        return;
+                    },
+                }
+            }
         }
 
         /// Notify a loop to wake up synchronously. This should never block forever
@@ -412,6 +451,47 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
             // Wait for wake
             try loop.run(.until_done);
             try testing.expect(wake);
+        }
+
+        test "async batches multiple notifications" {
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var notifier = try Impl.init();
+            defer notifier.deinit();
+
+            // Send a notification many times
+            try notifier.notify();
+            try notifier.notify();
+            try notifier.notify();
+            try notifier.notify();
+            try notifier.notify();
+
+            // Wait
+            var count: u32 = 0;
+            var c_wait: xev.Completion = undefined;
+            notifier.wait(&loop, &c_wait, u32, &count, (struct {
+                fn callback(
+                    ud: ?*u32,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: Impl.WaitError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* += 1;
+                    return .rearm;
+                }
+            }).callback);
+
+            // Send a notification
+            try notifier.notify();
+
+            // Wait for wake
+            try loop.run(.once);
+            for (0..10) |_| try loop.run(.no_wait);
+            try testing.expectEqual(@as(u32, 1), count);
         }
     };
 }
