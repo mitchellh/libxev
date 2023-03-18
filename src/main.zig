@@ -19,6 +19,11 @@ pub const WasiPoll = Xev(.wasi_poll, @import("backend/wasi_poll.zig"));
 /// Generic thread pool implementation.
 pub const ThreadPool = @import("ThreadPool.zig");
 
+/// This stream (lowercase s) can be used as a namespace to access
+/// Closeable, Writeable, Readable, etc. so that custom streams
+/// can be constructed.
+pub const stream = @import("watcher/stream.zig");
+
 /// The backend types.
 pub const Backend = enum {
     io_uring,
@@ -94,7 +99,7 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const Async = @import("watcher/async.zig").Async(Self);
         pub const File = @import("watcher/file.zig").File(Self);
         pub const Process = @import("watcher/process.zig").Process(Self);
-        pub const Stream = @import("watcher/stream.zig").GenericStream(Self);
+        pub const Stream = stream.GenericStream(Self);
         pub const Timer = @import("watcher/timer.zig").Timer(Self);
         pub const TCP = @import("watcher/tcp.zig").TCP(Self);
         pub const UDP = @import("watcher/udp.zig").UDP(Self);
