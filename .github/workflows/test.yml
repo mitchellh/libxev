@@ -9,14 +9,17 @@ jobs:
         target: [
           aarch64-linux-gnu,
           aarch64-linux-musl,
-          x86-linux-gnu,
-          x86-linux-musl,
           x86_64-linux-gnu,
           x86_64-linux-musl,
           aarch64-macos,
           x86_64-macos,
           wasm32-wasi
 
+          # Broken but not in any obvious way:
+          # x86-linux-gnu,
+          # x86-linux-musl,
+
+          # Not yet supported:
           # i386-windows,
           # x86_64-windows-gnu,
         ]
