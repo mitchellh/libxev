@@ -6,15 +6,15 @@ const os = std.os;
 /// Process management, such as waiting for process exit.
 pub fn Process(comptime xev: type) type {
     return switch (xev.backend) {
-        // Supported, uses eventfd
+        // Supported, uses pidfd
         .io_uring,
         .epoll,
         => ProcessPidFd(xev),
 
+        .kqueue => ProcessKqueue(xev),
+
         // Unsupported
-        .wasi_poll,
-        .kqueue,
-        => struct {},
+        .wasi_poll => struct {},
     };
 }
 
@@ -28,7 +28,7 @@ fn ProcessPidFd(comptime xev: type) type {
             InvalidChild,
         };
 
-        /// eventfd file descriptor
+        /// pidfd file descriptor
         fd: os.fd_t,
 
         /// Create a new process watcher for the given pid.
@@ -51,8 +51,7 @@ fn ProcessPidFd(comptime xev: type) type {
             };
         }
 
-        /// Clean up the async. This will forcibly deinitialize any resources
-        /// and may result in erroneous wait callbacks to be fired.
+        /// Clean up the process watcher.
         pub fn deinit(self: *Self) void {
             std.os.close(self.fd);
         }
@@ -121,6 +120,76 @@ fn ProcessPidFd(comptime xev: type) type {
                             l_inner,
                             c_inner,
                             arg,
+                        });
+                    }
+                }).callback,
+            };
+            loop.add(c);
+        }
+
+        /// Common tests
+        pub usingnamespace ProcessTests(xev, Self);
+    };
+}
+
+fn ProcessKqueue(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The error that can come in the wait callback.
+        pub const WaitError = xev.Sys.ProcError;
+
+        /// The pid to watch.
+        pid: os.pid_t,
+
+        /// Create a new process watcher for the given pid.
+        pub fn init(pid: os.pid_t) !Self {
+            return .{
+                .pid = pid,
+            };
+        }
+
+        /// Does nothing for Kqueue.
+        pub fn deinit(self: *Self) void {
+            _ = self;
+        }
+
+        /// Wait for the process to exit. This will automatically call
+        /// `waitpid` or equivalent and report the exit status.
+        pub fn wait(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!u32,
+            ) xev.CallbackAction,
+        ) void {
+            c.* = .{
+                .op = .{
+                    .proc = .{
+                        .pid = self.pid,
+                        .flags = os.system.NOTE_EXIT | os.system.NOTE_EXITSTATUS,
+                    },
+                },
+
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            l_inner,
+                            c_inner,
+                            if (r.proc) |v| v else |err| err,
                         });
                     }
                 }).callback,

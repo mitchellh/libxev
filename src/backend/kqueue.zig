@@ -1124,7 +1124,7 @@ pub const Completion = struct {
 
     /// Perform the operation associated with this completion. This will
     /// perform the full blocking operation for the completion.
-    fn perform(self: *Completion, ev: ?*const Kevent) Result {
+    fn perform(self: *Completion, ev_: ?*const Kevent) Result {
         return switch (self.op) {
             .cancel,
             .close,
@@ -1224,10 +1224,17 @@ pub const Completion = struct {
 
             // For proc watching, it is identical to the syscall result.
             .proc => res: {
-                const ev_real = ev orelse break :res .{
-                    .proc = ProcError.MissingKevent,
-                };
-                break :res self.syscall_result(@intCast(i32, ev_real.data));
+                const ev = ev_ orelse break :res .{ .proc = ProcError.MissingKevent };
+
+                // If we have the exit status, we read it.
+                if (ev.fflags & (os.system.NOTE_EXIT | os.system.NOTE_EXITSTATUS) > 0) {
+                    const data = @intCast(u32, ev.data);
+                    if (os.W.IFEXITED(data)) break :res .{
+                        .proc = os.W.EXITSTATUS(data),
+                    };
+                }
+
+                break :res .{ .proc = 0 };
             },
         };
     }
@@ -1437,7 +1444,7 @@ pub const Operation = union(OperationType) {
 
     proc: struct {
         pid: std.os.pid_t,
-        flags: u32,
+        flags: u32 = os.system.NOTE_EXIT | os.system.NOTE_EXITSTATUS,
     },
 
     timer: Timer,
