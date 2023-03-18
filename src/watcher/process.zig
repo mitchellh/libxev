@@ -7,12 +7,10 @@ const os = std.os;
 pub fn Process(comptime xev: type) type {
     return switch (xev.backend) {
         // Supported, uses eventfd
-        .io_uring,
-        .epoll,
-        => ProcessPidFd(xev),
+        .io_uring => ProcessPidFd(xev),
 
         // Unsupported
-        .wasi_poll, .kqueue => struct {},
+        .epoll, .wasi_poll, .kqueue => struct {},
     };
 }
 
@@ -22,7 +20,9 @@ fn ProcessPidFd(comptime xev: type) type {
         const Self = @This();
 
         /// The error that can come in the wait callback.
-        pub const WaitError = xev.ReadError;
+        pub const WaitError = xev.Sys.PollError || error{
+            InvalidChild,
+        };
 
         /// eventfd file descriptor
         fd: os.fd_t,
@@ -53,7 +53,8 @@ fn ProcessPidFd(comptime xev: type) type {
             std.os.close(self.fd);
         }
 
-        /// Wait for the process to exit.
+        /// Wait for the process to exit. This will automatically call
+        /// `waitpid` or equivalent and report the exit status.
         pub fn wait(
             self: Self,
             loop: *xev.Loop,
@@ -64,15 +65,14 @@ fn ProcessPidFd(comptime xev: type) type {
                 ud: ?*Userdata,
                 l: *xev.Loop,
                 c: *xev.Completion,
-                r: WaitError!void,
+                r: WaitError!u32,
             ) xev.CallbackAction,
         ) void {
-            // TODO: READ IS NOT CORRECT HERE!
             c.* = .{
                 .op = .{
-                    .read = .{
+                    .poll = .{
                         .fd = self.fd,
-                        .buffer = .{ .array = undefined },
+                        .events = std.os.POLL.IN,
                     },
                 },
 
@@ -84,11 +84,33 @@ fn ProcessPidFd(comptime xev: type) type {
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
+                        const arg: WaitError!u32 = arg: {
+                            // If our poll failed, report that error.
+                            _ = r.poll catch |err| break :arg err;
+
+                            // We need to wait on the pidfd because it is noted as ready
+                            const fd = c_inner.op.poll.fd;
+                            var info: os.linux.siginfo_t = undefined;
+                            const res = os.linux.waitid(.PIDFD, fd, &info, os.linux.W.EXITED);
+
+                            break :arg switch (os.errno(res)) {
+                                .SUCCESS => @intCast(u32, info.fields.common.second.sigchld.status),
+                                .CHILD => error.InvalidChild,
+
+                                // The fd isn't ready to read, I guess?
+                                .AGAIN => return .rearm,
+                                else => |err| err: {
+                                    std.log.warn("unexpected process wait errno={}", .{err});
+                                    break :err error.Unexpected;
+                                },
+                            };
+                        };
+
                         return @call(.always_inline, cb, .{
                             @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
                             l_inner,
                             c_inner,
-                            if (r.read) |v| assert(v > 0) else |err| err,
+                            arg,
                         });
                     }
                 }).callback,
@@ -107,9 +129,8 @@ fn ProcessTests(comptime xev: type, comptime Impl: type) type {
             const testing = std.testing;
             const alloc = testing.allocator;
 
-            var child = std.ChildProcess.init(&.{ "sleep", "2" }, alloc);
+            var child = std.ChildProcess.init(&.{ "sh", "-c", "exit 0" }, alloc);
             try child.spawn();
-            errdefer _ = child.kill() catch {};
 
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
@@ -118,24 +139,56 @@ fn ProcessTests(comptime xev: type, comptime Impl: type) type {
             defer p.deinit();
 
             // Wait
-            var wake: bool = false;
+            var code: ?u32 = null;
             var c_wait: xev.Completion = undefined;
-            p.wait(&loop, &c_wait, bool, &wake, (struct {
+            p.wait(&loop, &c_wait, ?u32, &code, (struct {
                 fn callback(
-                    ud: ?*bool,
+                    ud: ?*?u32,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: Impl.WaitError!void,
+                    r: Impl.WaitError!u32,
                 ) xev.CallbackAction {
-                    _ = r catch unreachable;
-                    ud.?.* = true;
+                    ud.?.* = r catch unreachable;
                     return .disarm;
                 }
             }).callback);
 
             // Wait for wake
             try loop.run(.until_done);
-            try testing.expect(wake);
+            try testing.expectEqual(@as(u32, 0), code.?);
+        }
+
+        test "process wait with non-zero exit code" {
+            const testing = std.testing;
+            const alloc = testing.allocator;
+
+            var child = std.ChildProcess.init(&.{ "sh", "-c", "exit 42" }, alloc);
+            try child.spawn();
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var p = try Impl.init(child.id);
+            defer p.deinit();
+
+            // Wait
+            var code: ?u32 = null;
+            var c_wait: xev.Completion = undefined;
+            p.wait(&loop, &c_wait, ?u32, &code, (struct {
+                fn callback(
+                    ud: ?*?u32,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: Impl.WaitError!u32,
+                ) xev.CallbackAction {
+                    ud.?.* = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+
+            // Wait for wake
+            try loop.run(.until_done);
+            try testing.expectEqual(@as(u32, 42), code.?);
         }
     };
 }
