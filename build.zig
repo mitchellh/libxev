@@ -79,27 +79,17 @@ pub fn build(b: *std.Build) !void {
 
     // We always build our test exe as part of `zig build` so that
     // we can easily run it manually without digging through the cache.
-    if (test_install) {
-        const test_exe = b.addTest(.{
-            .name = "xev-test",
-            .kind = .test_exe,
-            .root_source_file = .{ .path = "src/main.zig" },
-            .target = target,
-            .optimize = optimize,
-        });
-        if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
-        test_exe.install();
-    }
-
-    // zig build test test binary and runner.
-    const tests_run = b.addTest(.{
+    const test_exe = b.addTest(.{
         .name = "xev-test",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
     });
-    if (test_libc) tests_run.linkLibC(); // Tests depend on libc, libxev does not
+    if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
+    if (test_install) test_exe.install();
 
+    // zig build test test binary and runner.
+    const tests_run = test_exe.run();
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests_run.step);
 

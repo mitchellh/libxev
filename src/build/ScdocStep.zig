@@ -2,7 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const fs = std.fs;
 const Step = std.build.Step;
-const Builder = std.build.Builder;
+const Build = std.Build;
 
 /// ScdocStep generates man pages using scdoc(1).
 ///
@@ -14,7 +14,7 @@ const Builder = std.build.Builder;
 const ScdocStep = @This();
 
 step: Step,
-builder: *Builder,
+builder: *Build,
 
 /// path to read man page sources from, defaults to the "doc/" subdirectory
 /// from the build.zig file. This must be an absolute path.
@@ -24,16 +24,21 @@ src_path: []const u8,
 /// defaults to build cache root.
 out_path: []const u8,
 
-pub fn create(builder: *Builder) *ScdocStep {
+pub fn create(builder: *Build) *ScdocStep {
     const self = builder.allocator.create(ScdocStep) catch unreachable;
     self.* = init(builder);
     return self;
 }
 
-pub fn init(builder: *Builder) ScdocStep {
+pub fn init(builder: *Build) ScdocStep {
     return ScdocStep{
         .builder = builder,
-        .step = Step.init(.custom, "generate man pages", builder.allocator, make),
+        .step = Step.init(.{
+            .id = .custom,
+            .name = "generate man pages",
+            .owner = builder,
+            .makeFn = make,
+        }),
         .src_path = builder.pathFromRoot("docs/"),
         .out_path = builder.cache_root.join(builder.allocator, &[_][]const u8{
             "man",
@@ -41,7 +46,9 @@ pub fn init(builder: *Builder) ScdocStep {
     };
 }
 
-fn make(step: *std.build.Step) !void {
+fn make(step: *std.build.Step, progress: *std.Progress.Node) !void {
+    _ = progress;
+
     const self = @fieldParentPtr(ScdocStep, "step", step);
 
     // Create our cache path
@@ -52,7 +59,7 @@ fn make(step: *std.build.Step) !void {
             "rm -f {[path]s}/* && mkdir -p {[path]s}",
             .{ .path = self.out_path },
         );
-        _ = try self.builder.exec(&[_][]const u8{ "sh", "-c", command });
+        _ = self.builder.exec(&[_][]const u8{ "sh", "-c", command });
     }
 
     // Find all our man pages which are in our src path ending with ".scd".
@@ -81,7 +88,7 @@ fn make(step: *std.build.Step) !void {
             "scdoc < {s} > {s}",
             .{ src, dst },
         );
-        _ = try self.builder.exec(&[_][]const u8{ "sh", "-c", command });
+        _ = self.builder.exec(&[_][]const u8{ "sh", "-c", command });
     }
 }
 
@@ -98,24 +105,29 @@ pub fn install(self: *ScdocStep) !void {
 /// Install man pages, create using install() on ScdocStep.
 const InstallStep = struct {
     step: Step,
-    builder: *Builder,
+    builder: *Build,
     scdoc: *ScdocStep,
 
-    pub fn create(builder: *Builder, scdoc: *ScdocStep) *InstallStep {
+    pub fn create(builder: *Build, scdoc: *ScdocStep) *InstallStep {
         const self = builder.allocator.create(InstallStep) catch unreachable;
         self.* = InstallStep.init(builder, scdoc);
         return self;
     }
 
-    pub fn init(builder: *Builder, scdoc: *ScdocStep) InstallStep {
+    pub fn init(builder: *Build, scdoc: *ScdocStep) InstallStep {
         return InstallStep{
             .builder = builder,
-            .step = Step.init(.custom, "generate man pages", builder.allocator, InstallStep.make),
+            .step = Step.init(.{
+                .id = .custom,
+                .name = "generate man pages",
+                .owner = builder,
+                .makeFn = InstallStep.make,
+            }),
             .scdoc = scdoc,
         };
     }
 
-    fn make(step: *Step) !void {
+    fn make(step: *Step, progress: *std.Progress.Node) !void {
         const self = @fieldParentPtr(InstallStep, "step", step);
 
         // Get our absolute output path
@@ -146,7 +158,7 @@ const InstallStep = struct {
                 .{ .path = src },
                 output,
             );
-            try fileStep.step.make();
+            try fileStep.step.make(progress);
         }
     }
 };
