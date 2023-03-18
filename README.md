@@ -40,10 +40,10 @@ work _completion_, as opposed to work _readiness_.
 **Zero runtime allocations.** This helps make runtime performance more
 predictable and makes libxev well suited for embedded environments.
 
-**Timers, TCP, UDP, Files.** High-level platform-agnostic APIs for interacting
-with timers, TCP/UDP sockets, files, and more. For platforms that don't
-support async IO, the file operations are automatically scheduled to
-a thread pool.
+**Timers, TCP, UDP, Files, Processes.** High-level platform-agnostic APIs for
+interacting with timers, TCP/UDP sockets, files, processes, and more. For
+platforms that don't support async IO, the file operations are automatically
+scheduled to a thread pool.
 
 **Generic Thread Pool (Optional).** You can create a generic thread pool,
 configure its resource utilization, and use this to perform custom background
@@ -265,22 +265,22 @@ $ zig build test
 This will run all the tests for all the supported features for the current
 host platform. For example, on Linux this will run both the full io_uring
 and epoll test suite.
- 
+
 **You can build and run tests for other platforms** by cross-compiling the
  test executable, copying it to a target machine and executing it. For example,
  the below shows how to cross-compile and build the tests for macOS from Linux:
- 
+
  ```sh
  $ zig build -Dtarget=aarch64-macos -Dinstall-tests
  ...
- 
+
  $ file zig-out/bin/xev-test
  zig-out/bin/xev-test: Mach-O 64-bit arm64 executable
  ```
 
- **WASI is a special-case.** You can run tests for WASI if you have 
+ **WASI is a special-case.** You can run tests for WASI if you have
  [wasmtime](https://wasmtime.dev/) installed:
- 
+
  ```
  $ zig build test -Dtarget=wasm32-wasi -Dwasmtime
  ...
