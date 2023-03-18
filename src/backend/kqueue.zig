@@ -234,7 +234,7 @@ pub const Loop = struct {
                     c.flags.state = .adding;
                 } else {
                     // No error, means that this completion is ready to work.
-                    c.result = c.perform();
+                    c.result = c.perform(&ev);
                 }
 
                 assert(c.result != null);
@@ -530,7 +530,7 @@ pub const Loop = struct {
                 // so we mark it as dead.
                 c.flags.state = .dead;
 
-                const result = c.perform();
+                const result = c.perform(&ev);
                 const action = c.callback(c.userdata, self, c, result);
                 switch (action) {
                     .disarm => {
@@ -773,6 +773,11 @@ pub const Loop = struct {
                 break :action .{ .kevent = {} };
             },
 
+            .proc => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
             .shutdown => |v| action: {
                 const result = os.system.shutdown(v.socket, switch (v.how) {
                     .recv => os.SHUT.RD,
@@ -922,7 +927,7 @@ pub const Loop = struct {
         const c = @fieldParentPtr(Completion, "task", t);
 
         // Do our task
-        c.result = c.perform();
+        c.result = c.perform(null);
 
         // Add to our completion queue
         c.task_loop.thread_pool_completions.push(c);
@@ -1088,6 +1093,15 @@ pub const Completion = struct {
                 };
             },
 
+            .proc => |v| kevent_init(.{
+                .ident = @intCast(usize, v.pid),
+                .filter = os.system.EVFILT_PROC,
+                .flags = os.system.EV_ADD | os.system.EV_ENABLE,
+                .fflags = v.flags,
+                .data = 0,
+                .udata = @ptrToInt(self),
+            }),
+
             inline .write, .send, .sendto => |v| kevent_init(.{
                 .ident = @intCast(usize, v.fd),
                 .filter = os.system.EVFILT_WRITE,
@@ -1110,7 +1124,7 @@ pub const Completion = struct {
 
     /// Perform the operation associated with this completion. This will
     /// perform the full blocking operation for the completion.
-    fn perform(self: *Completion) Result {
+    fn perform(self: *Completion, ev: ?*const Kevent) Result {
         return switch (self.op) {
             .cancel,
             .close,
@@ -1207,6 +1221,14 @@ pub const Completion = struct {
             .machport => .{
                 .machport = {},
             },
+
+            // For proc watching, it is identical to the syscall result.
+            .proc => res: {
+                const ev_real = ev orelse break :res .{
+                    .proc = ProcError.MissingKevent,
+                };
+                break :res self.syscall_result(@intCast(i32, ev_real.data));
+            },
         };
     }
 
@@ -1281,6 +1303,13 @@ pub const Completion = struct {
                 },
             },
 
+            .proc => .{
+                .proc = switch (errno) {
+                    .SUCCESS => @intCast(u32, r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
             .shutdown => .{
                 .shutdown = switch (errno) {
                     .SUCCESS => {},
@@ -1334,6 +1363,7 @@ pub const OperationType = enum {
     timer,
     cancel,
     machport,
+    proc,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -1405,6 +1435,11 @@ pub const Operation = union(OperationType) {
         fd: std.os.fd_t,
     },
 
+    proc: struct {
+        pid: std.os.pid_t,
+        flags: u32,
+    },
+
     timer: Timer,
 
     cancel: struct {
@@ -1424,6 +1459,7 @@ pub const Result = union(OperationType) {
     write: WriteError!usize,
     read: ReadError!usize,
     machport: MachPortError!void,
+    proc: ProcError!u32,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
     cancel: CancelError!void,
@@ -1457,6 +1493,11 @@ pub const WriteError = os.KEventError ||
 };
 
 pub const MachPortError = os.KEventError || error{
+    Unexpected,
+};
+
+pub const ProcError = os.KEventError || error{
+    MissingKevent,
     Unexpected,
 };
 
