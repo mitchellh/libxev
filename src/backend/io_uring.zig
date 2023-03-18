@@ -355,6 +355,12 @@ pub const Loop = struct {
                 v.addr.getOsSockLen(),
             ),
 
+            .poll => |v| linux.io_uring_prep_poll_add(
+                sqe,
+                v.fd,
+                v.events,
+            ),
+
             .read => |*v| switch (v.buffer) {
                 .array => |*buf| linux.io_uring_prep_read(
                     sqe,
@@ -565,6 +571,12 @@ pub const Completion = struct {
                 },
             },
 
+            .poll => .{
+                .poll = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .read => .{
                 .read = self.readResult(.read, res),
             },
@@ -698,6 +710,9 @@ pub const OperationType = enum {
     /// Initiate a connection on a socket.
     connect,
 
+    /// Poll a fd. Only oneshot mode is supported today.
+    poll,
+
     /// Read
     read,
 
@@ -737,6 +752,7 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     close: CloseError!void,
+    poll: PollError!void,
     read: ReadError!usize,
     recv: ReadError!usize,
     send: WriteError!usize,
@@ -770,6 +786,11 @@ pub const Operation = union(OperationType) {
 
     close: struct {
         fd: std.os.fd_t,
+    },
+
+    poll: struct {
+        fd: std.os.fd_t,
+        events: u32 = std.os.POLL.IN,
     },
 
     read: struct {
@@ -886,6 +907,11 @@ pub const CloseError = error{
 };
 
 pub const ConnectError = error{
+    Canceled,
+    Unexpected,
+};
+
+pub const PollError = error{
     Canceled,
     Unexpected,
 };
