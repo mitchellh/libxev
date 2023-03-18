@@ -1059,13 +1059,13 @@ pub const Operation = union(OperationType) {
 
     const Timer = struct {
         /// The absolute time to fire this timer next.
-        next: std.os.linux.kernel_timespec,
+        next: std.os.linux.timespec,
 
         /// Only used internally. If this is non-null and timer is
         /// CANCELLED, then the timer is rearmed automatically with this
         /// as the next time. The callback will not be called on the
         /// cancellation.
-        reset: ?std.os.linux.kernel_timespec = null,
+        reset: ?std.os.linux.timespec = null,
 
         /// Internal heap fields.
         heap: heap.IntrusiveField(Timer) = .{},
