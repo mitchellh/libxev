@@ -111,15 +111,16 @@ const InstallStep = struct {
     pub fn create(builder: *Build, scdoc: *ScdocStep) *InstallStep {
         const self = builder.allocator.create(InstallStep) catch unreachable;
         self.* = InstallStep.init(builder, scdoc);
+        self.step.dependOn(&scdoc.step);
         return self;
     }
 
-    pub fn init(builder: *Build, scdoc: *ScdocStep) InstallStep {
+    fn init(builder: *Build, scdoc: *ScdocStep) InstallStep {
         return InstallStep{
             .builder = builder,
             .step = Step.init(.{
                 .id = .custom,
-                .name = "generate man pages",
+                .name = "install man pages",
                 .owner = builder,
                 .makeFn = InstallStep.make,
             }),
