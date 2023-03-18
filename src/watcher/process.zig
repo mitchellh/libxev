@@ -7,10 +7,14 @@ const os = std.os;
 pub fn Process(comptime xev: type) type {
     return switch (xev.backend) {
         // Supported, uses eventfd
-        .io_uring => ProcessPidFd(xev),
+        .io_uring,
+        .epoll,
+        => ProcessPidFd(xev),
 
         // Unsupported
-        .epoll, .wasi_poll, .kqueue => struct {},
+        .wasi_poll,
+        .kqueue,
+        => struct {},
     };
 }
 
@@ -68,11 +72,17 @@ fn ProcessPidFd(comptime xev: type) type {
                 r: WaitError!u32,
             ) xev.CallbackAction,
         ) void {
+            const events: u32 = comptime switch (xev.backend) {
+                .io_uring => os.POLL.IN,
+                .epoll => os.linux.EPOLL.IN,
+                else => unreachable,
+            };
+
             c.* = .{
                 .op = .{
                     .poll = .{
                         .fd = self.fd,
-                        .events = std.os.POLL.IN,
+                        .events = events,
                     },
                 },
 
