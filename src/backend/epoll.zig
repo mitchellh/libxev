@@ -632,6 +632,21 @@ pub const Loop = struct {
                 // We always run timers
                 break :res null;
             },
+
+            .poll => |v| res: {
+                var ev: linux.epoll_event = .{
+                    .events = v.events,
+                    .data = .{ .ptr = @ptrToInt(completion) },
+                };
+
+                const fd = completion.fd_maybe_dup() catch |err| break :res .{ .poll = err };
+                break :res if (std.os.epoll_ctl(
+                    self.fd,
+                    linux.EPOLL.CTL_ADD,
+                    fd,
+                    &ev,
+                )) null else |err| .{ .poll = err };
+            },
         };
 
         // If we failed to add the completion then we call the callback
@@ -827,6 +842,8 @@ pub const Completion = struct {
                 .connect = if (std.os.getsockoptError(op.socket)) {} else |err| err,
             },
 
+            .poll => .{ .poll = {} },
+
             .read => |*op| res: {
                 const n_ = switch (op.buffer) {
                     .slice => |v| std.os.read(op.fd, v),
@@ -907,6 +924,7 @@ pub const Completion = struct {
         return switch (self.op) {
             .accept => |v| v.socket,
             .connect => |v| v.socket,
+            .poll => |v| v.fd,
             .read => |v| v.fd,
             .recv => |v| v.fd,
             .write => |v| v.fd,
@@ -929,6 +947,7 @@ pub const OperationType = enum {
     noop,
     accept,
     connect,
+    poll,
     read,
     write,
     send,
@@ -947,6 +966,7 @@ pub const Result = union(OperationType) {
     noop: void,
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
+    poll: PollError!void,
     read: ReadError!usize,
     write: WriteError!usize,
     send: WriteError!usize,
@@ -980,6 +1000,13 @@ pub const Operation = union(OperationType) {
     connect: struct {
         socket: std.os.socket_t,
         addr: std.net.Address,
+    },
+
+    /// Poll for events but do not perform any operations on them being
+    /// ready. The "events" field are a OR-ed list of EPOLL events.
+    poll: struct {
+        fd: std.os.fd_t,
+        events: u32,
     },
 
     read: struct {
@@ -1032,13 +1059,13 @@ pub const Operation = union(OperationType) {
 
     const Timer = struct {
         /// The absolute time to fire this timer next.
-        next: std.os.linux.kernel_timespec,
+        next: std.os.linux.timespec,
 
         /// Only used internally. If this is non-null and timer is
         /// CANCELLED, then the timer is rearmed automatically with this
         /// as the next time. The callback will not be called on the
         /// cancellation.
-        reset: ?std.os.linux.kernel_timespec = null,
+        reset: ?std.os.linux.timespec = null,
 
         /// Internal heap fields.
         heap: heap.IntrusiveField(Timer) = .{},
@@ -1123,6 +1150,11 @@ pub const AcceptError = std.os.EpollCtlError || error{
 };
 
 pub const CloseError = std.os.EpollCtlError || error{
+    Unknown,
+};
+
+pub const PollError = std.os.EpollCtlError || error{
+    DupFailed,
     Unknown,
 };
 

@@ -256,11 +256,11 @@ pub const Loop = struct {
         self.add(c_cancel);
     }
 
-    fn timer_next(self: *Loop, next_ms: u64) std.os.linux.kernel_timespec {
+    fn timer_next(self: *Loop, next_ms: u64) std.os.linux.timespec {
         // Get the timestamp of the absolute time that we'll execute this timer.
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
-        const max: std.os.linux.kernel_timespec = .{
+        const max: std.os.linux.timespec = .{
             .tv_sec = std.math.maxInt(isize),
             .tv_nsec = std.math.maxInt(isize),
         };
@@ -353,6 +353,12 @@ pub const Loop = struct {
                 v.socket,
                 &v.addr.any,
                 v.addr.getOsSockLen(),
+            ),
+
+            .poll => |v| linux.io_uring_prep_poll_add(
+                sqe,
+                v.fd,
+                v.events,
             ),
 
             .read => |*v| switch (v.buffer) {
@@ -565,6 +571,12 @@ pub const Completion = struct {
                 },
             },
 
+            .poll => .{
+                .poll = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .read => .{
                 .read = self.readResult(.read, res),
             },
@@ -698,6 +710,9 @@ pub const OperationType = enum {
     /// Initiate a connection on a socket.
     connect,
 
+    /// Poll a fd. Only oneshot mode is supported today.
+    poll,
+
     /// Read
     read,
 
@@ -737,6 +752,7 @@ pub const Result = union(OperationType) {
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     close: CloseError!void,
+    poll: PollError!void,
     read: ReadError!usize,
     recv: ReadError!usize,
     send: WriteError!usize,
@@ -770,6 +786,11 @@ pub const Operation = union(OperationType) {
 
     close: struct {
         fd: std.os.fd_t,
+    },
+
+    poll: struct {
+        fd: std.os.fd_t,
+        events: u32 = std.os.POLL.IN,
     },
 
     read: struct {
@@ -810,13 +831,13 @@ pub const Operation = union(OperationType) {
     },
 
     timer: struct {
-        next: std.os.linux.kernel_timespec,
+        next: std.os.linux.timespec,
 
         /// Only used internally. If this is non-null and timer is
         /// CANCELLED, then the timer is rearmed automatically with this
         /// as the next time. The callback will not be called on the
         /// cancellation.
-        reset: ?std.os.linux.kernel_timespec = null,
+        reset: ?std.os.linux.timespec = null,
     },
 
     timer_remove: struct {
@@ -886,6 +907,11 @@ pub const CloseError = error{
 };
 
 pub const ConnectError = error{
+    Canceled,
+    Unexpected,
+};
+
+pub const PollError = error{
     Canceled,
     Unexpected,
 };
