@@ -141,7 +141,7 @@ pub const Loop = struct {
             // Wait for completions...
             const count = self.ring.copy_cqes(&cqes, wait) catch |err| return err;
             for (cqes[0..count]) |cqe| {
-                const c = @intToPtr(*Completion, @intCast(usize, cqe.user_data));
+                const c = @intToPtr(?*Completion, @intCast(usize, cqe.user_data)) orelse continue;
                 self.active -= 1;
                 c.flags.state = .dead;
                 switch (c.invoke(self, cqe.res)) {
@@ -981,14 +981,28 @@ test "io_uring: default completion" {
     var loop = try Loop.init(.{});
     defer loop.deinit();
 
+    // Due to implementation details, we need to have an ongoing completion to test that the noop operation works properly
+    var timer_called = false;
+    var c1: Completion = undefined;
+    loop.timer(&c1, 1, &timer_called, (struct {
+        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
+            _ = l;
+            _ = r;
+            const b = @ptrCast(*bool, ud.?);
+            b.* = true;
+            return .disarm;
+        }
+    }).callback);
+
     var c: Completion = .{};
     loop.add(&c);
 
     // Tick
     try loop.run(.until_done);
 
-    // Completion should be dead.
+    // Completion should have been called and be dead.
     try testing.expect(c.state() == .dead);
+    try testing.expect(timer_called);
 }
 
 test "io_uring: timerfd" {
