@@ -24,6 +24,7 @@ pub fn UDP(comptime xev: type) type {
 
         // Noop
         .wasi_poll => struct {},
+        .iocp => struct {},
     };
 }
 

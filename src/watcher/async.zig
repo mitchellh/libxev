@@ -17,6 +17,7 @@ pub fn Async(comptime xev: type) type {
 
         // Supported, uses mach ports
         .kqueue => AsyncMachPort(xev),
+        .iocp => AsyncIOCP(xev),
     };
 }
 
@@ -383,6 +384,46 @@ fn AsyncLoopState(comptime xev: type, comptime threaded: bool) type {
 
         /// Common tests
         pub usingnamespace AsyncTests(xev, Self);
+    };
+}
+
+fn AsyncIOCP(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const WaitError = xev.Sys.AsyncError;
+
+        pub fn init() !Self {
+            return error.NotImplemented;
+        }
+
+        pub fn deinit(self: *Self) void {
+            _ = self;
+        }
+
+        pub fn wait(
+            self: *Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!void,
+            ) xev.CallbackAction,
+        ) void {
+            _ = cb;
+            _ = userdata;
+            _ = c;
+            _ = loop;
+            _ = self;
+        }
+
+        pub fn notify(self: *Self) !void {
+            _ = self;
+        }
     };
 }
 

@@ -16,6 +16,7 @@ pub fn Process(comptime xev: type) type {
 
         // Unsupported
         .wasi_poll => struct {},
+        .iocp => struct {},
     };
 }
 

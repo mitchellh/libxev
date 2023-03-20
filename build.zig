@@ -42,6 +42,7 @@ pub fn build(b: *std.Build) !void {
         "example",
         "Install the example binaries to zig-out/example",
     ) orelse (example_name != null);
+    _ = example_install;
 
     const test_install = b.option(
         bool,
@@ -73,7 +74,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&tests_run.step);
 
     // Static C lib
-    const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi) lib: {
+    const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi and !target.isWindows()) lib: {
         const static_lib = b.addStaticLibrary(.{
             .name = "xev",
             .root_source_file = .{ .path = "src/c_api.zig" },
@@ -103,10 +104,11 @@ pub fn build(b: *std.Build) !void {
 
         break :lib static_lib;
     } else null;
+    _ = static_c_lib;
 
     // Dynamic C lib. We only build this if this is the native target so we
     // can link to libxml2 on our native system.
-    if (target.isNative()) {
+    if (target.isNative() and !target.isWindows()) {
         const dynamic_lib_name = if (target.isWindows())
             "xev.dll"
         else
@@ -170,10 +172,12 @@ pub fn build(b: *std.Build) !void {
         b.installFile(file, "share/pkgconfig/libxev.pc");
     }
     // Benchmarks
-    _ = try benchTargets(b, target, optimize, bench_install, bench_name);
+    if (target.getOsTag() != .windows) {
+        _ = try benchTargets(b, target, optimize, bench_install, bench_name);
+    }
 
     // Examples
-    _ = try exampleTargets(b, target, optimize, static_c_lib, example_install, example_name);
+    //_ = try exampleTargets(b, target, optimize, static_c_lib, example_install, example_name);
 
     // Man pages
     if (man_pages) {

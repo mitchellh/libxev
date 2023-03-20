@@ -197,6 +197,7 @@ pub fn Timer(comptime xev: type) type {
                         }
                     }).callback,
                 },
+                .iocp => unreachable,
             };
 
             loop.add(c_cancel);
