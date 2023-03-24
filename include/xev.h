@@ -6,17 +6,25 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include <stddef.h>
 
 /* TODO(mitchellh): we should use platform detection to set the correct
  * byte sizes here. We choose some overly large values for now so that
  * we can retain ABI compatibility. */
-#define XEV_SIZEOF_LOOP 512
-#define XEV_SIZEOF_COMPLETION 320
-#define XEV_SIZEOF_WATCHER 256
-#define XEV_SIZEOF_THREADPOOL 64
-#define XEV_SIZEOF_THREADPOOL_BATCH 24
-#define XEV_SIZEOF_THREADPOOL_TASK 24
-#define XEV_SIZEOF_THREADPOOL_CONFIG 64
+const size_t XEV_SIZEOF_LOOP = 512;
+const size_t XEV_SIZEOF_COMPLETION = 320;
+const size_t XEV_SIZEOF_WATCHER = 256;
+const size_t XEV_SIZEOF_THREADPOOL = 64;
+const size_t XEV_SIZEOF_THREADPOOL_BATCH = 24;
+const size_t XEV_SIZEOF_THREADPOOL_TASK = 24;
+const size_t XEV_SIZEOF_THREADPOOL_CONFIG = 64;
+
+#if __STDC_VERSION__ >= 201112L || __cplusplus >= 201103L
+typedef max_align_t XEV_ALIGN_T;
+#else
+// max_align_t is usually synonymous with the largest scalar type, which is long double on most platforms, and its alignment requirement is either 8 or 16. 
+typedef long double XEV_ALIGN_T;
+#endif
 
 /* There's a ton of preprocessor directives missing here for real cross-platform
  * compatibility. I'm going to defer to the community or future issues to help
@@ -24,13 +32,14 @@ extern "C" {
 
 /* Opaque types. These types have a size defined so that they can be
  * statically allocated but they are not to be accessed. */
-typedef struct { uint8_t data[XEV_SIZEOF_LOOP]; } xev_loop;
-typedef struct { uint8_t data[XEV_SIZEOF_COMPLETION]; } xev_completion;
-typedef struct { uint8_t data[XEV_SIZEOF_WATCHER]; } xev_watcher;
-typedef struct { uint8_t data[XEV_SIZEOF_THREADPOOL]; } xev_threadpool;
-typedef struct { uint8_t data[XEV_SIZEOF_THREADPOOL_BATCH]; } xev_threadpool_batch;
-typedef struct { uint8_t data[XEV_SIZEOF_THREADPOOL_TASK]; } xev_threadpool_task;
-typedef struct { uint8_t data[XEV_SIZEOF_THREADPOOL_CONFIG]; } xev_threadpool_config;
+// todo: give struct individual alignment, instead of max alignment
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_LOOP - sizeof(XEV_ALIGN_T)]; } xev_loop;
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_COMPLETION - sizeof(XEV_ALIGN_T)]; } xev_completion;
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_WATCHER - sizeof(XEV_ALIGN_T)]; } xev_watcher;
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL - sizeof(XEV_ALIGN_T)]; } xev_threadpool;
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL_BATCH - sizeof(XEV_ALIGN_T)]; } xev_threadpool_batch;
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL_TASK - sizeof(XEV_ALIGN_T)]; } xev_threadpool_task;
+typedef struct { XEV_ALIGN_T _pad; uint8_t data[XEV_SIZEOF_THREADPOOL_CONFIG - sizeof(XEV_ALIGN_T)]; } xev_threadpool_config;
 
 /* Callback types. */
 typedef enum { XEV_DISARM = 0, XEV_REARM = 1 } xev_cb_action;
