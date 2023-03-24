@@ -316,6 +316,19 @@ fn exampleTargets(
             c_exe.setOutputDir("zig-out/example");
             if (install) c_exe.install();
         }
+        
+        // If we have specified a specific name, only install that one.
+        if (install_name) |_| break;
+    } else {
+        if (install_name) |n| {
+            std.debug.print("No example file named: {s}\n", .{n});
+            std.debug.print("Choices:\n", .{});
+            var c_dir_it2 = c_dir.iterate();
+            while (try c_dir_it2.next()) |entry| {
+                std.debug.print("\t{s}\n", .{entry.name});
+            }
+            return error.InvalidExampleName;
+        }
     }
 }
 
