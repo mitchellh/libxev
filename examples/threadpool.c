@@ -8,9 +8,6 @@
 // for our threadpool tasks. In this case, we only have a boolean to note
 // we're done but you can imagine any sort of user data here!
 typedef struct {
-    // IMPORTANT: the task has to be aligned to a power of 2 address.
-    // The easiest way to ensure this to make it first. If you don't do
-    // this then you should get a crash in debug modes.
     xev_threadpool_task pool_task;
 
     bool done;
