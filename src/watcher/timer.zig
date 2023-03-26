@@ -173,6 +173,7 @@ pub fn Timer(comptime xev: type) type {
                 .epoll,
                 .kqueue,
                 .wasi_poll,
+                .iocp,
                 => .{
                     .op = .{
                         .cancel = .{
@@ -197,7 +198,6 @@ pub fn Timer(comptime xev: type) type {
                         }
                     }).callback,
                 },
-                .iocp => unreachable,
             };
 
             loop.add(c_cancel);

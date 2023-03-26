@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
@@ -58,6 +59,7 @@ const Pinger = struct {
     c_write: xev.Completion = undefined,
     state_read: xev.UDP.State = undefined,
     state_write: xev.UDP.State = undefined,
+    op_count: u8 = 0,
 
     pub const PING = "PING\n";
 
@@ -109,6 +111,8 @@ const Pinger = struct {
         buf: xev.ReadBuffer,
         r: xev.UDP.ReadError!usize,
     ) xev.CallbackAction {
+        _ = c;
+        _ = socket;
         const self = self_.?;
         const n = r catch unreachable;
         const data = buf.slice[0..n];
@@ -122,12 +126,16 @@ const Pinger = struct {
 
                 // If we're done then exit
                 if (self.pongs > 500_000) {
-                    socket.close(loop, c, Pinger, self, closeCallback);
+                    self.udp.close(loop, &self.c_read, Pinger, self, closeCallback);
                     return .disarm;
                 }
 
-                // Send another ping
-                self.write(loop);
+                self.op_count += 1;
+                if (self.op_count == 2) {
+                    self.op_count = 0;
+                    // Send another ping
+                    self.write(loop);
+                }
             }
         }
 
@@ -135,14 +143,23 @@ const Pinger = struct {
     }
 
     pub fn writeCallback(
-        _: ?*Pinger,
-        _: *xev.Loop,
+        self_: ?*Pinger,
+        loop: *xev.Loop,
         _: *xev.Completion,
         _: *xev.UDP.State,
         _: xev.UDP,
         _: xev.WriteBuffer,
         r: xev.UDP.WriteError!usize,
     ) xev.CallbackAction {
+        const self = self_.?;
+
+        self.op_count += 1;
+        if (self.op_count == 2) {
+            self.op_count = 0;
+            // Send another ping
+            self.write(loop);
+        }
+
         _ = r catch unreachable;
         return .disarm;
     }

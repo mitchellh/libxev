@@ -15,8 +15,9 @@ const common = @import("common.zig");
 pub fn TCP(comptime xev: type) type {
     return struct {
         const Self = @This();
+        const FdType = if (xev.backend == .iocp) os.windows.HANDLE else os.socket_t;
 
-        fd: os.socket_t,
+        fd: FdType,
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
@@ -30,21 +31,26 @@ pub fn TCP(comptime xev: type) type {
         pub fn init(addr: std.net.Address) !Self {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            // On io_uring we don't use non-blocking sockets because we may
-            // just get EAGAIN over and over from completions.
-            const flags = flags: {
-                var flags: u32 = os.SOCK.STREAM | os.SOCK.CLOEXEC;
-                if (xev.backend != .io_uring) flags |= os.SOCK.NONBLOCK;
-                break :flags flags;
+            const fd = if (xev.backend == .iocp)
+                try os.windows.WSASocketW(addr.any.family, os.SOCK.STREAM, 0, null, 0, os.windows.ws2_32.WSA_FLAG_OVERLAPPED)
+            else fd: {
+                // On io_uring we don't use non-blocking sockets because we may
+                // just get EAGAIN over and over from completions.
+                const flags = flags: {
+                    var flags: u32 = os.SOCK.STREAM | os.SOCK.CLOEXEC;
+                    if (xev.backend != .io_uring) flags |= os.SOCK.NONBLOCK;
+                    break :flags flags;
+                };
+                break :fd try os.socket(addr.any.family, flags, 0);
             };
 
             return .{
-                .fd = try os.socket(addr.any.family, flags, 0),
+                .fd = fd,
             };
         }
 
         /// Initialize a TCP socket from a file descriptor.
-        pub fn initFd(fd: os.socket_t) Self {
+        pub fn initFd(fd: FdType) Self {
             return .{
                 .fd = fd,
             };
@@ -54,8 +60,10 @@ pub fn TCP(comptime xev: type) type {
         pub fn bind(self: Self, addr: std.net.Address) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(self.fd, &addr.any, addr.getOsSockLen());
+            const fd = if (xev.backend == .iocp) @as(os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
+
+            try os.setsockopt(fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try os.bind(fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Listen for connections on the socket. This puts the socket into passive
@@ -63,7 +71,9 @@ pub fn TCP(comptime xev: type) type {
         pub fn listen(self: Self, backlog: u31) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            try os.listen(self.fd, backlog);
+            const fd = if (xev.backend == .iocp) @as(os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
+
+            try os.listen(fd, backlog);
         }
 
         /// Accept a single connection.
@@ -110,6 +120,7 @@ pub fn TCP(comptime xev: type) type {
                 .io_uring,
                 .kqueue,
                 .wasi_poll,
+                .iocp,
                 => {},
 
                 .epoll => c.flags.dup = true,
@@ -237,6 +248,10 @@ pub fn TCP(comptime xev: type) type {
             var sock_len = address.getOsSockLen();
             try os.getsockname(server.fd, &address.any, &sock_len);
             const client = try Self.init(address);
+
+            //const address = try std.net.Address.parseIp4("127.0.0.1", 3132);
+            //var server = try Self.init(address);
+            //var client = try Self.init(address);
 
             // Completions we need
             var c_accept: xev.Completion = undefined;

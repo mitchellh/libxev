@@ -27,6 +27,7 @@ const stream = @import("stream.zig");
 pub fn File(comptime xev: type) type {
     return struct {
         const Self = @This();
+        const FdType = if (xev.backend == .iocp) os.windows.HANDLE else os.socket_t;
 
         /// The underlying file
         fd: std.os.fd_t,
@@ -290,6 +291,8 @@ pub fn File(comptime xev: type) type {
         test "read/write" {
             // wasi: local files don't work with poll (always ready)
             if (builtin.os.tag == .wasi) return error.SkipZigTest;
+            // windows: std.fs.File is not opened with OVERLAPPED flag.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
 
             const testing = std.testing;
 
@@ -432,6 +435,8 @@ pub fn File(comptime xev: type) type {
         test "queued writes" {
             // wasi: local files don't work with poll (always ready)
             if (builtin.os.tag == .wasi) return error.SkipZigTest;
+            // windows: std.fs.File is not opened with OVERLAPPED flag.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
 
             const testing = std.testing;
 

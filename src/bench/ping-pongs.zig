@@ -179,7 +179,7 @@ const Client = struct {
         socket: xev.TCP,
         r: xev.TCP.ShutdownError!void,
     ) xev.CallbackAction {
-        _ = r catch unreachable;
+        _ = r catch {};
 
         const self = self_.?;
         socket.close(l, c, Client, self, closeCallback);
@@ -231,7 +231,7 @@ const Server = struct {
     /// Must be called with stable self pointer.
     pub fn start(self: *Server) !void {
         const addr = try std.net.Address.parseIp4("127.0.0.1", 3131);
-        const socket = try xev.TCP.init(addr);
+        var socket = try xev.TCP.init(addr);
 
         const c = try self.completion_pool.create();
         try socket.bind(addr);
@@ -333,7 +333,7 @@ const Server = struct {
         s: xev.TCP,
         r: xev.TCP.ShutdownError!void,
     ) xev.CallbackAction {
-        _ = r catch unreachable;
+        _ = r catch {};
 
         const self = self_.?;
         s.close(l, c, Server, self, closeCallback);

@@ -12,7 +12,7 @@ pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
 
     /// The handle to the IO completion port.
-    iocp_handle: windows.HANDLE,
+    iocp_handle: windows.HANDLE = windows.INVALID_HANDLE_VALUE,
 
     active: usize = 0,
 
@@ -28,6 +28,9 @@ pub const Loop = struct {
     /// "result" field should be set on every completion. This is used to delay completion callbacks
     /// until the next tick.
     completions: queue.Intrusive(Completion) = .{},
+
+    /// Our queue of waiting completions
+    asyncs: queue.Intrusive(Completion) = .{},
 
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
@@ -55,7 +58,7 @@ pub const Loop = struct {
         // Get the duration of the QueryPerformanceCounter.
         // We should check if the division is lossless, but it returns 10_000_000 on my machine so
         // we'll handle that later.
-        var qpc_duration: u64 = 1_000_000_000 / windows.QueryPerformanceFrequency();
+        var qpc_duration = 1_000_000_000 / windows.QueryPerformanceFrequency();
 
         // This creates a new Completion Port
         const handle = try windows.CreateIoCompletionPort(windows.INVALID_HANDLE_VALUE, null, 0, 1);
@@ -86,9 +89,21 @@ pub const Loop = struct {
     /// Add a completion to the loop. The completion is not started until the loop is run (`run`) or
     /// an explicit submission request is made (`submit`).
     pub fn add(self: *Loop, completion: *Completion) void {
+        // If the completion is a cancel operation, we start it immediately.
         if (completion.op == .cancel) {
             self.start_completion(completion);
             return;
+        }
+
+        switch (completion.flags.state) {
+            // The completion is in an adding state already, nothing needs to be done.
+            .adding => return,
+
+            // The completion is dead, probably because it was canceled.
+            .dead => {},
+
+            // If we reach this point, we have a problem...
+            .active => unreachable,
         }
 
         completion.flags.state = .adding;
@@ -118,8 +133,8 @@ pub const Loop = struct {
         }
     }
 
-    /// Process the cancellations queue. This doesn't call any callbacks or perform any syscalls.
-    /// This just shuffles state around and sets things up for cancellation to occur.
+    /// Process the cancellations queue. This doesn't call any callbacks but can potentially make
+    /// system call to cancel active IO.
     fn process_cancellations(self: *Loop) void {
         while (self.cancellations.pop()) |c| {
             const target = c.op.cancel.c;
@@ -237,6 +252,35 @@ pub const Loop = struct {
                 }
             }
 
+            // Process asyncs
+            if (!self.asyncs.empty()) {
+                var asyncs = self.asyncs;
+                self.asyncs = .{};
+
+                while (asyncs.pop()) |c| {
+                    const c_wakeup = c.op.async_wait.wakeup.swap(false, .SeqCst);
+
+                    // If we aren't waking this one up, requeue
+                    if (!c_wakeup) {
+                        self.asyncs.push(c);
+                        continue;
+                    }
+
+                    // We are waking up, mark this as dead and call it.
+                    c.flags.state = .dead;
+                    self.active -= 1;
+
+                    // Lower our waiters
+                    wait_rem -|= 1;
+
+                    const action = c.callback(c.userdata, self, c, .{ .async_wait = {} });
+                    switch (action) {
+                        .disarm => {},
+                        .rearm => self.start_completion(c),
+                    }
+                }
+            }
+
             // If we have processed enough event, we break out of the loop.
             if (wait_rem == 0) break;
 
@@ -266,8 +310,12 @@ pub const Loop = struct {
             for (entries[0..count]) |entry| {
                 // We retrieve the Completion from the OVERLAPPED pointer as we know it's a part of
                 // the Completion struct.
-                const overlapped_ptr: *windows.OVERLAPPED = entry.lpOverlapped;
-                var completion = @fieldParentPtr(Completion, "overlapped", overlapped_ptr);
+                const overlapped_ptr: ?*windows.OVERLAPPED = @ptrCast(?*windows.OVERLAPPED, entry.lpOverlapped);
+                if (overlapped_ptr == null) {
+                    // Probably an async wakeup
+                    continue;
+                }
+                var completion = @fieldParentPtr(Completion, "overlapped", overlapped_ptr.?);
 
                 wait_rem -|= 1;
 
@@ -278,7 +326,17 @@ pub const Loop = struct {
                 const action = completion.callback(completion.userdata, self, completion, result);
                 switch (action) {
                     .disarm => {},
-                    .rearm => @panic("Uh oh"),
+                    .rearm => {
+                        // TODO(Corendos): Add a reset function to do that on rearm.
+                        completion.overlapped = .{
+                            .Internal = 0,
+                            .InternalHigh = 0,
+                            .DUMMYUNIONNAME = .{ .Pointer = null },
+                            .hEvent = null,
+                        };
+                        completion.result = null;
+                        self.start_completion(completion);
+                    },
                 }
             }
 
@@ -294,8 +352,8 @@ pub const Loop = struct {
     /// thread.
     ///
     /// QueryPerformanceCounter is used to get the current timestamp.
-    pub fn now(self: *Loop) u64 {
-        return self.cached_now;
+    pub fn now(self: *Loop) i64 {
+        return @intCast(i64, self.cached_now);
     }
 
     /// Update the cached time.
@@ -306,7 +364,7 @@ pub const Loop = struct {
     }
 
     /// Add a timer to the loop. The timer will execute in "next_ms". This is oneshot: the timer
-    /// will not repeat. To repeat a timer, either shcedule another in your callback or return rearm
+    /// will not repeat. To repeat a timer, either schedule another in your callback or return rearm
     /// from the callback.
     pub fn timer(
         self: *Loop,
@@ -390,6 +448,9 @@ pub const Loop = struct {
             // We are a cancellation.
             cancel: void,
 
+            // We are an async wait
+            async_wait: void,
+
             // We have a result code from making a system call now.
             result: Result,
         };
@@ -401,14 +462,34 @@ pub const Loop = struct {
             },
 
             .accept => |*v| action: {
+                if (v.internal_accept_socket == null) {
+                    var addr: std.os.sockaddr.storage = undefined;
+                    var addr_len: i32 = @sizeOf(std.os.sockaddr.storage);
+
+                    std.debug.assert(windows.ws2_32.getsockname(asSocket(v.socket), @ptrCast(*std.os.sockaddr, &addr), &addr_len) == 0);
+
+                    var socket_type: i32 = 0;
+                    var socket_type_bytes = std.mem.asBytes(&socket_type);
+                    var opt_len: i32 = @intCast(i32, socket_type_bytes.len);
+                    std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.socket), std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
+
+                    // TODO(Corendos): Maybe we should use the same parameter as the listening
+                    // socket.
+                    v.internal_accept_socket = windows.WSASocketW(addr.family, socket_type, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED) catch {
+                        break :action .{ .result = .{ .accept = error.Unexpected } };
+                    };
+                }
+
+                completion.associate(self);
+
                 var discard: u32 = undefined;
                 const result = windows.ws2_32.AcceptEx(
-                    v.listen_socket,
-                    v.accept_socket,
+                    asSocket(v.socket),
+                    asSocket(v.internal_accept_socket.?),
                     &v.storage,
                     0,
-                    @intCast(u32, @sizeOf(std.os.sockaddr.storage) + 16),
-                    @intCast(u32, @sizeOf(std.os.sockaddr.storage) + 16),
+                    0,
+                    @intCast(u32, @sizeOf(std.os.sockaddr.storage)),
                     &discard,
                     &completion.overlapped,
                 );
@@ -423,13 +504,10 @@ pub const Loop = struct {
                 break :action .{ .submitted = {} };
             },
 
-            .close => |v| switch (v) {
-                .socket => |s| .{ .result = .{ .close = windows.closesocket(s) catch error.Unexpected } },
-                .handle => |h| .{ .result = .{ .close = windows.CloseHandle(h) } },
-            },
+            .close => |v| .{ .result = .{ .close = windows.CloseHandle(v.fd) } },
 
             .connect => |*v| action: {
-                const result = windows.ws2_32.connect(v.socket, &v.addr.any, @intCast(i32, v.addr.getOsSockLen()));
+                const result = windows.ws2_32.connect(asSocket(v.socket), &v.addr.any, @intCast(i32, v.addr.getOsSockLen()));
                 if (result != 0) {
                     const err = windows.ws2_32.WSAGetLastError();
                     break :action switch (err) {
@@ -440,8 +518,9 @@ pub const Loop = struct {
             },
 
             .read => |*v| action: {
+                completion.associate(self);
                 var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
-                break :action if (windows.ReadFileW(v.handle, buffer, &completion.overlapped)) |_|
+                break :action if (windows.ReadFileW(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
                     }
@@ -451,11 +530,12 @@ pub const Loop = struct {
                     };
             },
 
-            .shutdown => |*v| .{ .result = .{ .shutdown = std.os.shutdown(v.socket, v.how) } },
+            .shutdown => |*v| .{ .result = .{ .shutdown = std.os.shutdown(asSocket(v.socket), v.how) } },
 
             .write => |*v| action: {
+                completion.associate(self);
                 var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
-                break :action if (windows.WriteFileW(v.handle, buffer, &completion.overlapped)) |_|
+                break :action if (windows.WriteFileW(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
                     }
@@ -466,10 +546,11 @@ pub const Loop = struct {
             },
 
             .send => |*v| action: {
+                completion.associate(self);
                 var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @intCast(u32, buffer.len) };
                 const result = windows.ws2_32.WSASend(
-                    v.socket,
+                    asSocket(v.fd),
                     @ptrCast([*]windows.ws2_32.WSABUF, &v.wsa_buffer),
                     1,
                     null,
@@ -481,20 +562,21 @@ pub const Loop = struct {
                     const err = windows.ws2_32.WSAGetLastError();
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
-                        else => .{ .result = .{ .accept = windows.unexpectedWSAError(err) } },
+                        else => .{ .result = .{ .send = windows.unexpectedWSAError(err) } },
                     };
                 }
                 break :action .{ .submitted = {} };
             },
 
             .recv => |*v| action: {
+                completion.associate(self);
                 var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 v.wsa_buffer = .{ .buf = buffer.ptr, .len = @intCast(u32, buffer.len) };
 
                 var flags: u32 = 0;
 
                 const result = windows.ws2_32.WSARecv(
-                    v.socket,
+                    asSocket(v.fd),
                     @ptrCast([*]windows.ws2_32.WSABUF, &v.wsa_buffer),
                     1,
                     null,
@@ -506,7 +588,60 @@ pub const Loop = struct {
                     const err = windows.ws2_32.WSAGetLastError();
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
-                        else => .{ .result = .{ .accept = windows.unexpectedWSAError(err) } },
+                        else => .{ .result = .{ .recv = windows.unexpectedWSAError(err) } },
+                    };
+                }
+                break :action .{ .submitted = {} };
+            },
+
+            .sendto => |*v| action: {
+                completion.associate(self);
+                var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @intCast(u32, buffer.len) };
+                const result = windows.ws2_32.WSASendTo(
+                    asSocket(v.fd),
+                    @ptrCast([*]windows.ws2_32.WSABUF, &v.wsa_buffer),
+                    1,
+                    null,
+                    0,
+                    &v.addr.any,
+                    @intCast(i32, v.addr.getOsSockLen()),
+                    &completion.overlapped,
+                    null,
+                );
+                if (result != 0) {
+                    const err = windows.ws2_32.WSAGetLastError();
+                    break :action switch (err) {
+                        windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
+                        else => .{ .result = .{ .sendto = windows.unexpectedWSAError(err) } },
+                    };
+                }
+                break :action .{ .submitted = {} };
+            },
+
+            .recvfrom => |*v| action: {
+                completion.associate(self);
+                var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                v.wsa_buffer = .{ .buf = buffer.ptr, .len = @intCast(u32, buffer.len) };
+
+                var flags: u32 = 0;
+
+                const result = windows.ws2_32.WSARecvFrom(
+                    asSocket(v.fd),
+                    @ptrCast([*]windows.ws2_32.WSABUF, &v.wsa_buffer),
+                    1,
+                    null,
+                    &flags,
+                    &v.addr,
+                    @ptrCast(*i32, &v.addr_size),
+                    &completion.overlapped,
+                    null,
+                );
+                if (result != 0) {
+                    const err = windows.ws2_32.WSAGetLastError();
+                    break :action switch (err) {
+                        windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
+                        else => .{ .result = .{ .recvfrom = windows.unexpectedWSAError(err) } },
                     };
                 }
                 break :action .{ .submitted = {} };
@@ -518,23 +653,29 @@ pub const Loop = struct {
                 break :action .{ .timer = {} };
             },
 
-            .cancel => .{ .cancel = {} },
+            .cancel => action: {
+                self.cancellations.push(completion);
+                break :action .{ .cancel = {} };
+            },
+
+            .async_wait => action: {
+                self.asyncs.push(completion);
+                break :action .{ .async_wait = {} };
+            },
         };
 
         switch (action) {
-            .timer, .submitted => {
+            .timer, .submitted, .cancel => {
                 // Increase our active count so we now wait for this. We assume it'll successfully
                 // queue. If it doesn't we handle that later (see submit).
                 self.active += 1;
                 completion.flags.state = .active;
             },
 
-            .cancel => {
+            .async_wait => {
                 // We are considered an active completion.
                 self.active += 1;
                 completion.flags.state = .active;
-
-                self.cancellations.push(completion);
             },
 
             // A result is immediately available. Queue the completion to be invoked.
@@ -561,6 +702,7 @@ pub const Loop = struct {
                     if (v.reset) |r| {
                         v.next = r;
                         v.reset = null;
+                        completion.flags.state = .dead;
                         self.active -= 1;
                         self.add(completion);
                         return;
@@ -575,15 +717,19 @@ pub const Loop = struct {
                 // when we process the completion we decrement the
                 // active count.
             },
-            inline .accept, .recv, .send => {
+
+            .accept => |*v| {
                 if (completion.flags.state == .active) {
-                    const handle: windows.HANDLE = switch (completion.op) {
-                        .accept => |*v2| v2.listen_socket,
-                        inline .recv, .send => |*v2| v2.socket,
-                        inline .read, .write => |*v2| v2.handle,
-                        else => unreachable,
-                    };
-                    const result = windows.kernel32.CancelIoEx(handle, &completion.overlapped);
+                    const result = windows.kernel32.CancelIoEx(asSocket(v.socket), &completion.overlapped);
+                    cancel_result.?.* = if (result == windows.FALSE)
+                        windows.unexpectedError(windows.kernel32.GetLastError())
+                    else {};
+                }
+            },
+
+            inline .read, .write, .recv, .send, .sendto, .recvfrom => |*v| {
+                if (completion.flags.state == .active) {
+                    const result = windows.kernel32.CancelIoEx(asSocket(v.fd), &completion.overlapped);
                     cancel_result.?.* = if (result == windows.FALSE)
                         windows.unexpectedError(windows.kernel32.GetLastError())
                     else {};
@@ -594,12 +740,41 @@ pub const Loop = struct {
         }
     }
 
+    pub fn async_notify(self: *Loop, completion: *Completion) void {
+        assert(completion.op == .async_wait);
+
+        completion.op.async_wait.wakeup.store(true, .SeqCst);
+
+        const result = windows.kernel32.PostQueuedCompletionStatus(
+            self.iocp_handle,
+            0,
+            0,
+            null,
+        );
+
+        // NOTE(Corendos): if something goes wrong, ignore it for the moment.
+        if (result == windows.FALSE) {
+            const err = windows.kernel32.GetLastError();
+            windows.unexpectedError(err) catch {};
+        }
+    }
+
     /// Associate a handler to the internal completion port.
     /// This has to be done only once per handle so we delegate the responsibility to the caller.
-    pub fn associate_handle(self: *Loop, handle: windows.HANDLE) !void {
-        _ = try windows.CreateIoCompletionPort(handle, self.iocp_handle, 0, 0);
+    pub fn associate_fd(self: Loop, fd: windows.HANDLE) !void {
+        try associateIoCompletionPort(fd, self.iocp_handle);
     }
 };
+
+fn associateIoCompletionPort(fd: windows.HANDLE, iocp: windows.HANDLE) !void {
+    if (fd == windows.INVALID_HANDLE_VALUE or iocp == windows.INVALID_HANDLE_VALUE) return error.InvalidParameter;
+    _ = windows.kernel32.CreateIoCompletionPort(fd, iocp, 0, 0);
+}
+
+/// Convenience to convert from windows.HANDLE to windows.ws2_32.SOCKET (which are the same thing).
+inline fn asSocket(h: windows.HANDLE) windows.ws2_32.SOCKET {
+    return @ptrCast(windows.ws2_32.SOCKET, h);
+}
 
 /// A completion is a request to perform some work with the loop.
 pub const Completion = struct {
@@ -637,7 +812,11 @@ pub const Completion = struct {
         .hEvent = null,
     },
 
-    const State = enum(u3) {
+    /// Loop associated with this completion. HANDLE are required to be associated with an I/O
+    /// Completion Port to work properly.
+    loop: ?*const xev.Loop = null,
+
+    const State = enum(u2) {
         /// completion is not part of any loop
         dead = 0,
 
@@ -645,7 +824,7 @@ pub const Completion = struct {
         adding = 1,
 
         /// completion is submitted successfully
-        active = 3,
+        active = 2,
     };
 
     /// Returns the state of this completion. There are some things to be cautious about when
@@ -667,6 +846,23 @@ pub const Completion = struct {
         };
     }
 
+    fn handle(self: Completion) ?windows.HANDLE {
+        return switch (self.op) {
+            inline .accept => |*v| v.socket,
+            inline .read, .write, .recv, .send, .recvfrom, .sendto => |*v| v.fd,
+            else => null,
+        };
+    }
+
+    pub fn associate(self: *Completion, loop: *const Loop) void {
+        if (self.loop == null or self.loop.? != loop) {
+            self.loop = loop;
+            if (self.handle()) |h| {
+                loop.associate_fd(h) catch {};
+            }
+        }
+    }
+
     /// Perform the operation associated with this completion. This will perform the full blocking
     /// operation for the completion.
     pub fn perform(self: *Completion) Result {
@@ -679,8 +875,9 @@ pub const Completion = struct {
             .accept => |*v| r: {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
-                const result = windows.ws2_32.WSAGetOverlappedResult(v.listen_socket, &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
+                const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.socket), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
 
+                // TODO(Corendos): maybe we should close the socket in case of error
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
                     break :r .{
@@ -691,32 +888,12 @@ pub const Completion = struct {
                     };
                 }
 
-                var local_address_ptr: *std.os.sockaddr = undefined;
-                var local_address_len: i32 = @sizeOf(std.os.sockaddr.storage);
-                var remote_address_ptr: *std.os.sockaddr = undefined;
-                var remote_address_len: i32 = @sizeOf(std.os.sockaddr.storage);
-
-                windows.ws2_32.GetAcceptExSockaddrs(
-                    &v.storage,
-                    0,
-                    @intCast(u32, @sizeOf(std.os.sockaddr.storage) + 16),
-                    @intCast(u32, @sizeOf(std.os.sockaddr.storage) + 16),
-                    &local_address_ptr,
-                    &local_address_len,
-                    &remote_address_ptr,
-                    &remote_address_len,
-                );
-
-                break :r .{ .accept = .{
-                    .accept_socket = self.op.accept.accept_socket,
-                    .local_address = std.net.Address.initPosix(@alignCast(4, local_address_ptr)),
-                    .remote_address = std.net.Address.initPosix(@alignCast(4, remote_address_ptr)),
-                } };
+                break :r .{ .accept = self.op.accept.internal_accept_socket.? };
             },
 
             .read => |*v| r: {
                 var bytes_transferred: windows.DWORD = 0;
-                const result = windows.kernel32.GetOverlappedResult(v.handle, &self.overlapped, &bytes_transferred, windows.FALSE);
+                const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
                     const err = windows.kernel32.GetLastError();
                     break :r .{ .read = switch (err) {
@@ -729,7 +906,7 @@ pub const Completion = struct {
 
             .write => |*v| r: {
                 var bytes_transferred: windows.DWORD = 0;
-                const result = windows.kernel32.GetOverlappedResult(v.handle, &self.overlapped, &bytes_transferred, windows.FALSE);
+                const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
                     const err = windows.kernel32.GetLastError();
                     break :r .{ .write = switch (err) {
@@ -744,7 +921,7 @@ pub const Completion = struct {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
 
-                const result = windows.ws2_32.WSAGetOverlappedResult(v.socket, &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
+                const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.fd), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
@@ -762,7 +939,7 @@ pub const Completion = struct {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
 
-                const result = windows.ws2_32.WSAGetOverlappedResult(v.socket, &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
+                const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.fd), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
@@ -774,15 +951,14 @@ pub const Completion = struct {
                     };
                 }
 
-                // NOTE(Corentin): according to Win32 documentation, EOF has to be detected using
-                // the socket type.
+                // NOTE(Corendos): according to Win32 documentation, EOF has to be detected using the socket type.
                 const socket_type = t: {
                     var socket_type: windows.DWORD = 0;
                     var socket_type_bytes = std.mem.asBytes(&socket_type);
                     var opt_len: i32 = @intCast(i32, socket_type_bytes.len);
 
                     // Here we assume the call will succeed because the socket should be valid.
-                    std.debug.assert(windows.ws2_32.getsockopt(v.socket, std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
+                    std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.fd), std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
                     break :t socket_type;
                 };
 
@@ -792,6 +968,44 @@ pub const Completion = struct {
 
                 break :r .{ .recv = @intCast(usize, bytes_transferred) };
             },
+
+            .sendto => |*v| r: {
+                var bytes_transferred: u32 = 0;
+                var flags: u32 = 0;
+
+                const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.fd), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
+
+                if (result != windows.TRUE) {
+                    const err = windows.ws2_32.WSAGetLastError();
+                    break :r .{
+                        .sendto = switch (err) {
+                            windows.ws2_32.WinsockError.WSA_OPERATION_ABORTED => error.Canceled,
+                            else => windows.unexpectedWSAError(err),
+                        },
+                    };
+                }
+                break :r .{ .sendto = @intCast(usize, bytes_transferred) };
+            },
+
+            .recvfrom => |*v| r: {
+                var bytes_transferred: u32 = 0;
+                var flags: u32 = 0;
+
+                const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.fd), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
+
+                if (result != windows.TRUE) {
+                    const err = windows.ws2_32.WSAGetLastError();
+                    break :r .{
+                        .recvfrom = switch (err) {
+                            windows.ws2_32.WinsockError.WSA_OPERATION_ABORTED => error.Canceled,
+                            else => windows.unexpectedWSAError(err),
+                        },
+                    };
+                }
+                break :r .{ .recvfrom = @intCast(usize, bytes_transferred) };
+            },
+
+            .async_wait => .{ .async_wait = {} },
         };
     }
 };
@@ -826,12 +1040,21 @@ pub const OperationType = enum {
     /// Recv
     recv,
 
+    /// Sendto
+    sendto,
+
+    /// Recvfrom
+    recvfrom,
+
     /// A oneshot or repeating timer. For io_uring, this is implemented
     /// using the timeout mechanism.
     timer,
 
     /// Cancel an existing operation.
     cancel,
+
+    /// Wait for an async event to be posted.
+    async_wait,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -842,52 +1065,71 @@ pub const Operation = union(OperationType) {
     noop: void,
 
     accept: struct {
-        listen_socket: windows.ws2_32.SOCKET,
-        accept_socket: windows.ws2_32.SOCKET,
-        storage: [256]u8 = undefined,
+        socket: windows.HANDLE,
+        storage: [@sizeOf(std.os.sockaddr.storage)]u8 = undefined,
+
+        internal_accept_socket: ?windows.HANDLE = null,
     },
 
     connect: struct {
-        socket: windows.ws2_32.SOCKET,
+        socket: windows.HANDLE,
         addr: std.net.Address,
     },
 
-    close: union(enum) {
-        socket: windows.ws2_32.SOCKET,
-        handle: windows.HANDLE,
+    close: struct {
+        fd: windows.HANDLE,
     },
 
     read: struct {
-        handle: windows.HANDLE,
+        fd: windows.HANDLE,
         buffer: ReadBuffer,
     },
 
     shutdown: struct {
-        socket: windows.ws2_32.SOCKET,
+        socket: windows.HANDLE,
         how: std.os.ShutdownHow = .both,
     },
 
     timer: Timer,
 
     write: struct {
-        handle: windows.HANDLE,
+        fd: windows.HANDLE,
         buffer: WriteBuffer,
     },
 
     send: struct {
-        socket: windows.ws2_32.SOCKET,
+        fd: windows.HANDLE,
         buffer: WriteBuffer,
         wsa_buffer: windows.ws2_32.WSABUF = undefined,
     },
 
     recv: struct {
-        socket: windows.ws2_32.SOCKET,
+        fd: windows.HANDLE,
         buffer: ReadBuffer,
+        wsa_buffer: windows.ws2_32.WSABUF = undefined,
+    },
+
+    sendto: struct {
+        fd: windows.HANDLE,
+        buffer: WriteBuffer,
+        addr: std.net.Address,
+        wsa_buffer: windows.ws2_32.WSABUF = undefined,
+    },
+
+    recvfrom: struct {
+        fd: windows.HANDLE,
+        buffer: ReadBuffer,
+        addr: std.os.sockaddr = undefined,
+        addr_size: std.os.socklen_t = @sizeOf(std.os.sockaddr),
         wsa_buffer: windows.ws2_32.WSABUF = undefined,
     },
 
     cancel: struct {
         c: *Completion,
+    },
+
+    async_wait: struct {
+        wakeup: std.atomic.Atomic(bool) = .{ .value = false },
     },
 };
 
@@ -895,11 +1137,7 @@ pub const Operation = union(OperationType) {
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
     noop: void,
-    accept: AcceptError!struct {
-        accept_socket: windows.ws2_32.SOCKET,
-        local_address: std.net.Address,
-        remote_address: std.net.Address,
-    },
+    accept: AcceptError!windows.HANDLE,
     connect: ConnectError!void,
     close: CloseError!void,
     read: ReadError!usize,
@@ -908,7 +1146,10 @@ pub const Result = union(OperationType) {
     write: WriteError!usize,
     send: WriteError!usize,
     recv: ReadError!usize,
+    sendto: WriteError!usize,
+    recvfrom: ReadError!usize,
     cancel: CancelError!void,
+    async_wait: AsyncError!void,
 };
 
 pub const CancelError = error{
@@ -949,10 +1190,6 @@ pub const AsyncError = error{
 };
 
 pub const TimerError = error{
-    Unexpected,
-};
-
-pub const TimerRemoveError = error{
     Unexpected,
 };
 
@@ -1398,14 +1635,12 @@ test "iocp: file IO" {
     defer windows.DeleteFileW(utf16_file_name) catch {};
     defer windows.CloseHandle(f_handle);
 
-    try loop.associate_handle(f_handle);
-
     // Perform a write and then a read
     var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
     var c_write: xev.Completion = .{
         .op = .{
             .write = .{
-                .handle = f_handle,
+                .fd = f_handle,
                 .buffer = .{ .slice = &write_buf },
             },
         },
@@ -1435,7 +1670,7 @@ test "iocp: file IO" {
     var c_read: xev.Completion = .{
         .op = .{
             .read = .{
-                .handle = f_handle,
+                .fd = f_handle,
                 .buffer = .{ .slice = &read_buf },
             },
         },
@@ -1484,19 +1719,11 @@ test "iocp: socket accept/connect/send/recv/close" {
     var client_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
     errdefer std.os.closeSocket(client_conn);
 
-    // Accept
-    var server_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-
-    try loop.associate_handle(@ptrCast(windows.HANDLE, ln));
-    try loop.associate_handle(@ptrCast(windows.HANDLE, client_conn));
-    try loop.associate_handle(@ptrCast(windows.HANDLE, server_conn));
-
     var server_conn_result: Result = undefined;
     var c_accept: Completion = .{
         .op = .{
             .accept = .{
-                .listen_socket = ln,
-                .accept_socket = server_conn,
+                .socket = ln,
             },
         },
 
@@ -1551,12 +1778,13 @@ test "iocp: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     //try testing.expect(server_conn > 0);
     try testing.expect(connected);
+    var server_conn = try server_conn_result.accept;
 
     // Send
     var c_send: xev.Completion = .{
         .op = .{
             .send = .{
-                .socket = client_conn,
+                .fd = client_conn,
                 .buffer = .{ .slice = &[_]u8{ 1, 1, 2, 3, 5, 8, 13 } },
             },
         },
@@ -1584,7 +1812,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     var c_recv: xev.Completion = .{
         .op = .{
             .recv = .{
-                .socket = server_conn,
+                .fd = server_conn,
                 .buffer = .{ .slice = &recv_buf },
             },
         },
@@ -1646,7 +1874,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     c_recv = .{
         .op = .{
             .recv = .{
-                .socket = server_conn,
+                .fd = server_conn,
                 .buffer = .{ .slice = &recv_buf },
             },
         },
@@ -1680,7 +1908,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     var c_client_close: xev.Completion = .{
         .op = .{
             .close = .{
-                .socket = client_conn,
+                .fd = client_conn,
             },
         },
 
@@ -1707,7 +1935,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     var c_server_close: xev.Completion = .{
         .op = .{
             .close = .{
-                .socket = ln,
+                .fd = ln,
             },
         },
 
@@ -1752,14 +1980,12 @@ test "iocp: recv cancellation" {
     try std.os.setsockopt(socket, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try std.os.bind(socket, &address.any, address.getOsSockLen());
 
-    try loop.associate_handle(@ptrCast(windows.HANDLE, socket));
-
     var recv_buf: [128]u8 = undefined;
     var recv_result: Result = undefined;
     var c_recv: xev.Completion = .{
         .op = .{
             .recv = .{
-                .socket = socket,
+                .fd = socket,
                 .buffer = .{ .slice = &recv_buf },
             },
         },
@@ -1828,18 +2054,11 @@ test "iocp: accept cancellation" {
     try std.os.bind(ln, &address.any, address.getOsSockLen());
     try std.os.listen(ln, kernel_backlog);
 
-    // Accept
-    var server_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-
-    try loop.associate_handle(@ptrCast(windows.HANDLE, ln));
-    try loop.associate_handle(@ptrCast(windows.HANDLE, server_conn));
-
     var server_conn_result: Result = undefined;
     var c_accept: Completion = .{
         .op = .{
             .accept = .{
-                .listen_socket = ln,
-                .accept_socket = server_conn,
+                .socket = ln,
             },
         },
 

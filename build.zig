@@ -42,7 +42,6 @@ pub fn build(b: *std.Build) !void {
         "example",
         "Install the example binaries to zig-out/example",
     ) orelse (example_name != null);
-    _ = example_install;
 
     const test_install = b.option(
         bool,
@@ -74,15 +73,23 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&tests_run.step);
 
     // Static C lib
-    const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi and !target.isWindows()) lib: {
+    const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi) lib: {
         const static_lib = b.addStaticLibrary(.{
             .name = "xev",
             .root_source_file = .{ .path = "src/c_api.zig" },
             .target = target,
             .optimize = optimize,
         });
-        b.installArtifact(static_lib);
+
         static_lib.linkLibC();
+
+        // Link required libraries if targeting Windows
+        if (target.getOsTag() == .windows) {
+            static_lib.linkSystemLibrary("ws2_32");
+            static_lib.linkSystemLibrary("mswsock");
+        }
+
+        b.installArtifact(static_lib);
         b.default_step.dependOn(&static_lib.step);
 
         const static_binding_test = b.addExecutable(.{
@@ -104,15 +111,11 @@ pub fn build(b: *std.Build) !void {
 
         break :lib static_lib;
     } else null;
-    _ = static_c_lib;
 
     // Dynamic C lib. We only build this if this is the native target so we
     // can link to libxml2 on our native system.
-    if (target.isNative() and !target.isWindows()) {
-        const dynamic_lib_name = if (target.isWindows())
-            "xev.dll"
-        else
-            "xev";
+    if (target.isNative()) {
+        const dynamic_lib_name = "xev";
 
         const dynamic_lib = b.addSharedLibrary(.{
             .name = dynamic_lib_name,
@@ -171,13 +174,12 @@ pub fn build(b: *std.Build) !void {
 
         b.installFile(file, "share/pkgconfig/libxev.pc");
     }
+
     // Benchmarks
-    if (target.getOsTag() != .windows) {
-        _ = try benchTargets(b, target, optimize, bench_install, bench_name);
-    }
+    _ = try benchTargets(b, target, optimize, bench_install, bench_name);
 
     // Examples
-    //_ = try exampleTargets(b, target, optimize, static_c_lib, example_install, example_name);
+    _ = try exampleTargets(b, target, optimize, static_c_lib, example_install, example_name);
 
     // Man pages
     if (man_pages) {

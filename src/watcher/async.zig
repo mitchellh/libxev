@@ -387,14 +387,23 @@ fn AsyncLoopState(comptime xev: type, comptime threaded: bool) type {
     };
 }
 
+/// Async implementation for IOCP.
 fn AsyncIOCP(comptime xev: type) type {
     return struct {
         const Self = @This();
+        const windows = std.os.windows;
 
         pub const WaitError = xev.Sys.AsyncError;
 
+        guard: std.Thread.Mutex = .{},
+        wakeup: bool = false,
+        waiter: ?struct {
+            loop: *xev.Loop,
+            c: *xev.Completion,
+        } = null,
+
         pub fn init() !Self {
-            return error.NotImplemented;
+            return Self{};
         }
 
         pub fn deinit(self: *Self) void {
@@ -414,16 +423,51 @@ fn AsyncIOCP(comptime xev: type) type {
                 r: WaitError!void,
             ) xev.CallbackAction,
         ) void {
-            _ = cb;
-            _ = userdata;
-            _ = c;
-            _ = loop;
-            _ = self;
+            c.* = xev.Completion{
+                .op = .{ .async_wait = .{} },
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            l_inner,
+                            c_inner,
+                            if (r.async_wait) |_| {} else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+            loop.add(c);
+
+            self.guard.lock();
+            defer self.guard.unlock();
+
+            self.waiter = .{
+                .loop = loop,
+                .c = c,
+            };
+
+            if (self.wakeup) loop.async_notify(c);
         }
 
         pub fn notify(self: *Self) !void {
-            _ = self;
+            self.guard.lock();
+            defer self.guard.unlock();
+
+            if (self.waiter) |w| {
+                w.loop.async_notify(w.c);
+            } else {
+                self.wakeup = true;
+            }
         }
+
+        /// Common tests
+        pub usingnamespace AsyncTests(xev, Self);
     };
 }
 
