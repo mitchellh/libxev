@@ -244,7 +244,7 @@ fn benchTargets(
         if (install) c_exe.install();
 
         // Store the mapping
-        try map.put(name, c_exe);
+        try map.put(try b.allocator.dupe(u8, name), c_exe);
     }
 
     return map;
