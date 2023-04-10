@@ -551,6 +551,7 @@ fn UDPSendMsg(comptime xev: type) type {
                 .io_uring,
                 .kqueue,
                 .wasi_poll,
+                .iocp,
                 => {},
 
                 .epoll => c.flags.dup = true,
@@ -660,6 +661,7 @@ fn UDPSendMsg(comptime xev: type) type {
                 .io_uring,
                 .kqueue,
                 .wasi_poll,
+                .iocp,
                 => {},
 
                 .epoll => c.flags.dup = true,

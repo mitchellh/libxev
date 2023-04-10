@@ -14,6 +14,8 @@ pub const Loop = struct {
     /// The handle to the IO completion port.
     iocp_handle: windows.HANDLE = windows.INVALID_HANDLE_VALUE,
 
+    /// The number of active completions. This DOES NOT include completions that are queued in the
+    /// submissions queue.
     active: usize = 0,
 
     /// Our queue of submissions that we want to enqueue on the next tick.
@@ -89,7 +91,8 @@ pub const Loop = struct {
     /// Add a completion to the loop. The completion is not started until the loop is run (`run`) or
     /// an explicit submission request is made (`submit`).
     pub fn add(self: *Loop, completion: *Completion) void {
-        // If the completion is a cancel operation, we start it immediately.
+        // If the completion is a cancel operation, we start it immediately as it will be put in the
+        // cancellations queue.
         if (completion.op == .cancel) {
             self.start_completion(completion);
             return;
@@ -106,6 +109,8 @@ pub const Loop = struct {
             .active => unreachable,
         }
 
+        // We just add the completion to the queue. Failures can happen
+        // at submission or tick time.
         completion.flags.state = .adding;
         self.submissions.push(completion);
     }
@@ -480,7 +485,7 @@ pub const Loop = struct {
                     };
                 }
 
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
 
                 var discard: u32 = undefined;
                 const result = windows.ws2_32.AcceptEx(
@@ -518,7 +523,7 @@ pub const Loop = struct {
             },
 
             .read => |*v| action: {
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 break :action if (windows.ReadFileW(v.fd, buffer, &completion.overlapped)) |_|
                     .{
@@ -533,7 +538,7 @@ pub const Loop = struct {
             .shutdown => |*v| .{ .result = .{ .shutdown = std.os.shutdown(asSocket(v.socket), v.how) } },
 
             .write => |*v| action: {
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 break :action if (windows.WriteFileW(v.fd, buffer, &completion.overlapped)) |_|
                     .{
@@ -546,7 +551,7 @@ pub const Loop = struct {
             },
 
             .send => |*v| action: {
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @intCast(u32, buffer.len) };
                 const result = windows.ws2_32.WSASend(
@@ -569,7 +574,7 @@ pub const Loop = struct {
             },
 
             .recv => |*v| action: {
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 v.wsa_buffer = .{ .buf = buffer.ptr, .len = @intCast(u32, buffer.len) };
 
@@ -595,7 +600,7 @@ pub const Loop = struct {
             },
 
             .sendto => |*v| action: {
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @intCast(u32, buffer.len) };
                 const result = windows.ws2_32.WSASendTo(
@@ -620,7 +625,7 @@ pub const Loop = struct {
             },
 
             .recvfrom => |*v| action: {
-                completion.associate(self);
+                self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 v.wsa_buffer = .{ .buf = buffer.ptr, .len = @intCast(u32, buffer.len) };
 
@@ -686,6 +691,7 @@ pub const Loop = struct {
         }
     }
 
+    /// Stop the completion. Fill `cancel_result` if it is non-null.
     fn stop_completion(self: *Loop, completion: *Completion, cancel_result: ?*CancelError!void) void {
         if (completion.flags.state == .active and completion.result != null) return;
 
@@ -740,9 +746,14 @@ pub const Loop = struct {
         }
     }
 
+    // Sens an empty Completion token so that the loop wakes up if it is waiting for a completion
+    // event.
     pub fn async_notify(self: *Loop, completion: *Completion) void {
+        // The completion must be in a waiting state.
         assert(completion.op == .async_wait);
 
+        // The completion has been wakeup, this is used to see which completion in the async queue
+        // needs to be removed.
         completion.op.async_wait.wakeup.store(true, .SeqCst);
 
         const result = windows.kernel32.PostQueuedCompletionStatus(
@@ -762,14 +773,13 @@ pub const Loop = struct {
     /// Associate a handler to the internal completion port.
     /// This has to be done only once per handle so we delegate the responsibility to the caller.
     pub fn associate_fd(self: Loop, fd: windows.HANDLE) !void {
-        try associateIoCompletionPort(fd, self.iocp_handle);
+        if (fd == windows.INVALID_HANDLE_VALUE or self.iocp_handle == windows.INVALID_HANDLE_VALUE) return error.InvalidParameter;
+        // We ignore the error here because multiple call to CreateIoCompletionPort with a HANDLE
+        // already registered triggers a INVALID_PARAMETER error and we have no way to see the cause
+        // of it.
+        _ = windows.kernel32.CreateIoCompletionPort(fd, self.iocp_handle, 0, 0);
     }
 };
-
-fn associateIoCompletionPort(fd: windows.HANDLE, iocp: windows.HANDLE) !void {
-    if (fd == windows.INVALID_HANDLE_VALUE or iocp == windows.INVALID_HANDLE_VALUE) return error.InvalidParameter;
-    _ = windows.kernel32.CreateIoCompletionPort(fd, iocp, 0, 0);
-}
 
 /// Convenience to convert from windows.HANDLE to windows.ws2_32.SOCKET (which are the same thing).
 inline fn asSocket(h: windows.HANDLE) windows.ws2_32.SOCKET {
@@ -846,21 +856,13 @@ pub const Completion = struct {
         };
     }
 
+    /// Returns a handle for the current operation if it makes sense.
     fn handle(self: Completion) ?windows.HANDLE {
         return switch (self.op) {
             inline .accept => |*v| v.socket,
             inline .read, .write, .recv, .send, .recvfrom, .sendto => |*v| v.fd,
             else => null,
         };
-    }
-
-    pub fn associate(self: *Completion, loop: *const Loop) void {
-        if (self.loop == null or self.loop.? != loop) {
-            self.loop = loop;
-            if (self.handle()) |h| {
-                loop.associate_fd(h) catch {};
-            }
-        }
     }
 
     /// Perform the operation associated with this completion. This will perform the full blocking
