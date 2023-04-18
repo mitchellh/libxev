@@ -86,10 +86,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
-    if (test_install) test_exe.install();
+    if (test_install) b.installArtifact(test_exe);
 
     // zig build test test binary and runner.
-    const tests_run = test_exe.run();
+    const tests_run = b.addRunArtifact(test_exe);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&tests_run.step);
 
@@ -101,7 +101,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
         });
-        static_lib.install();
+        b.installArtifact(static_lib);
         static_lib.linkLibC();
         b.default_step.dependOn(&static_lib.step);
 
@@ -114,9 +114,9 @@ pub fn build(b: *std.Build) !void {
         static_binding_test.addIncludePath("include");
         static_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" });
         static_binding_test.linkLibrary(static_lib);
-        if (test_install) static_binding_test.install();
+        if (test_install) b.installArtifact(static_binding_test);
 
-        const static_binding_test_run = static_binding_test.run();
+        const static_binding_test_run = b.addRunArtifact(static_binding_test);
         test_step.dependOn(&static_binding_test_run.step);
 
         break :lib static_lib;
@@ -136,7 +136,7 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
         });
-        dynamic_lib.install();
+        b.installArtifact(dynamic_lib);
         b.default_step.dependOn(&dynamic_lib.step);
 
         const dynamic_binding_test = b.addExecutable(.{
@@ -148,9 +148,9 @@ pub fn build(b: *std.Build) !void {
         dynamic_binding_test.addIncludePath("include");
         dynamic_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
         dynamic_binding_test.linkLibrary(dynamic_lib);
-        if (test_install) dynamic_binding_test.install();
+        if (test_install) b.installArtifact(dynamic_binding_test);
 
-        const dynamic_binding_test_run = dynamic_binding_test.run();
+        const dynamic_binding_test_run = b.addRunArtifact(dynamic_binding_test);
         test_step.dependOn(&dynamic_binding_test_run.step);
     }
 
@@ -240,8 +240,8 @@ fn benchTargets(
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
         c_exe.addModule("xev", module(b));
-        c_exe.setOutputDir("zig-out/bench");
-        if (install) c_exe.install();
+        c_exe.override_dest_dir = std.Build.InstallDir{ .custom = "bench" };
+        if (install) b.installArtifact(c_exe);
 
         // Store the mapping
         try map.put(try b.allocator.dupe(u8, name), c_exe);
@@ -294,8 +294,8 @@ fn exampleTargets(
                 .optimize = optimize,
             });
             c_exe.addModule("xev", module(b));
-            c_exe.setOutputDir("zig-out/example");
-            if (install) c_exe.install();
+            c_exe.override_dest_dir = std.Build.InstallDir{ .custom = "example" };
+            if (install) b.installArtifact(c_exe);
         } else {
             const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
             const c_exe = b.addExecutable(.{
@@ -313,8 +313,8 @@ fn exampleTargets(
                 "-D_POSIX_C_SOURCE=199309L",
             });
             c_exe.linkLibrary(c_lib);
-            c_exe.setOutputDir("zig-out/example");
-            if (install) c_exe.install();
+            c_exe.override_dest_dir = std.Build.InstallDir{ .custom = "example" };
+            if (install) b.installArtifact(c_exe);
         }
     }
 }
