@@ -554,6 +554,7 @@ pub const Completion = struct {
                     @intCast(std.os.socket_t, res)
                 else switch (@intToEnum(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
+                    .AGAIN => error.Again,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -892,6 +893,7 @@ pub const WriteBuffer = union(enum) {
 
 pub const AcceptError = error{
     Canceled,
+    Again,
     Unexpected,
 };
 
