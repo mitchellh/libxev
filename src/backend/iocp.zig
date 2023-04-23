@@ -332,14 +332,7 @@ pub const Loop = struct {
                 switch (action) {
                     .disarm => {},
                     .rearm => {
-                        // TODO(Corendos): Add a reset function to do that on rearm.
-                        completion.overlapped = .{
-                            .Internal = 0,
-                            .InternalHigh = 0,
-                            .DUMMYUNIONNAME = .{ .Pointer = null },
-                            .hEvent = null,
-                        };
-                        completion.result = null;
+                        completion.reset();
                         self.start_completion(completion);
                     },
                 }
@@ -478,10 +471,8 @@ pub const Loop = struct {
                     var opt_len: i32 = @intCast(i32, socket_type_bytes.len);
                     std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.socket), std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
 
-                    // TODO(Corendos): Maybe we should use the same parameter as the listening
-                    // socket.
-                    v.internal_accept_socket = windows.WSASocketW(addr.family, socket_type, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED) catch {
-                        break :action .{ .result = .{ .accept = error.Unexpected } };
+                    v.internal_accept_socket = windows.WSASocketW(addr.family, socket_type, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED) catch |err| {
+                        break :action .{ .result = .{ .accept = err } };
                     };
                 }
 
@@ -500,10 +491,13 @@ pub const Loop = struct {
                 );
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    break :action switch (err) {
-                        windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
-                        else => .{ .result = .{ .accept = windows.unexpectedWSAError(err) } },
-                    };
+                    switch (err) {
+                        windows.ws2_32.WinsockError.WSA_IO_PENDING => break :action .{ .submitted = {} },
+                        else => {
+                            windows.CloseHandle(v.internal_accept_socket.?);
+                            break :action .{ .result = .{ .accept = windows.unexpectedWSAError(err) } };
+                        },
+                    }
                 }
 
                 break :action .{ .submitted = {} };
@@ -525,7 +519,7 @@ pub const Loop = struct {
             .read => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
-                break :action if (windows.ReadFileW(v.fd, buffer, &completion.overlapped)) |_|
+                break :action if (windows.exp.ReadFile(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
                     }
@@ -540,7 +534,7 @@ pub const Loop = struct {
             .write => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
                 var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
-                break :action if (windows.WriteFileW(v.fd, buffer, &completion.overlapped)) |_|
+                break :action if (windows.exp.WriteFile(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
                     }
@@ -879,15 +873,16 @@ pub const Completion = struct {
                 var flags: u32 = 0;
                 const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.socket), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
 
-                // TODO(Corendos): maybe we should close the socket in case of error
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    break :r .{
+                    const r = .{
                         .accept = switch (err) {
                             windows.ws2_32.WinsockError.WSA_OPERATION_ABORTED => error.Canceled,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
+                    windows.CloseHandle(v.internal_accept_socket.?);
+                    break :r r;
                 }
 
                 break :r .{ .accept = self.op.accept.internal_accept_socket.? };
@@ -1009,6 +1004,17 @@ pub const Completion = struct {
 
             .async_wait => .{ .async_wait = {} },
         };
+    }
+
+    /// Reset the completion so it can be reused (in case of rearming for example).
+    pub fn reset(self: *Completion) void {
+        self.overlapped = .{
+            .Internal = 0,
+            .InternalHigh = 0,
+            .DUMMYUNIONNAME = .{ .Pointer = null },
+            .hEvent = null,
+        };
+        self.result = null;
     }
 };
 
@@ -1159,6 +1165,10 @@ pub const CancelError = error{
 };
 
 pub const AcceptError = error{
+    AddressFamilyNotSupported,
+    ProcessFdQuotaExceeded,
+    SystemResources,
+    ProtocolNotSupported,
     Canceled,
     Unexpected,
 };
@@ -1619,12 +1629,6 @@ test "iocp: noop" {
     try loop.run(.once);
 }
 
-fn openTempFile(name: [:0]const u16) !windows.HANDLE {
-    const result = windows.CreateFile(name, windows.GENERIC_READ | windows.GENERIC_WRITE, 0, null, windows.OPEN_ALWAYS, windows.FILE_FLAG_OVERLAPPED, null);
-
-    return result;
-}
-
 test "iocp: file IO" {
     const testing = std.testing;
 
@@ -1633,8 +1637,8 @@ test "iocp: file IO" {
 
     const utf16_file_name = (try windows.sliceToPrefixedFileW("test_watcher_file")).span();
 
-    const f_handle = try windows.CreateFile(utf16_file_name, windows.GENERIC_READ | windows.GENERIC_WRITE, 0, null, windows.OPEN_ALWAYS, windows.FILE_FLAG_OVERLAPPED, null);
-    defer windows.DeleteFileW(utf16_file_name) catch {};
+    const f_handle = try windows.exp.CreateFile(utf16_file_name, windows.GENERIC_READ | windows.GENERIC_WRITE, 0, null, windows.OPEN_ALWAYS, windows.FILE_FLAG_OVERLAPPED, null);
+    defer windows.exp.DeleteFile(utf16_file_name) catch {};
     defer windows.CloseHandle(f_handle);
 
     // Perform a write and then a read
