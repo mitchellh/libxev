@@ -386,3 +386,33 @@ test "dangling next pointer" {
 
     //printDotGraph(Elem, h.root.?);
 }
+
+// Use printDotGraph to get visual representation of the heap.
+// For example (run test with printDotGraph in it, remove start end lines, use dot cli to create image):
+// zig test --test-filter dangling heap.zig 2>&1 | cat | sed '/dangling/,/^OK/!d;//d' |  dot -Tsvg > out.svg && open out.svg
+//
+// Or just copy digraph and paste it to the https://dreampuf.github.io/GraphvizOnline/
+fn printDotGraph(comptime T: type, root: *T) void {
+    const print = std.debug.print;
+    print("\ndigraph {{\n", .{});
+    printPointers(T, root, null);
+    print("}}\n", .{});
+}
+
+fn printPointers(comptime T: type, e: *T, prev: ?*T) void {
+    const print = std.debug.print;
+    if (prev) |p| {
+        if (e.heap.prev != p) {
+            print("\t{d} -> {d} [label=\"prev missing\"];\n", .{ e.value, p.value });
+            print("\t{d} -> {d} [label=\"prev\"];\n", .{ e.value, e.heap.prev.?.value });
+        }
+    }
+    if (e.heap.child) |c| {
+        print("\t{d} -> {d} [label=\"child\"];\n", .{ e.value, c.value });
+        printPointers(T, c, e);
+    }
+    if (e.heap.next) |n| {
+        print("\t{d} -> {d} [label=\"next\"];\n", .{ e.value, n.value });
+        printPointers(T, n, e);
+    }
+}
