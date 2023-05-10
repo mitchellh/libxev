@@ -109,6 +109,7 @@ pub fn Intrusive(
                 if (b.heap.next) |b_next| {
                     a.heap.next = b_next;
                     b_next.heap.prev = a;
+                    b.heap.next = null;
                 }
 
                 // If A has a child, then B becomes the leftmost sibling
