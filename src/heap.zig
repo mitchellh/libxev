@@ -340,3 +340,49 @@ test "heap: million values" {
     try testing.expect(h.deleteMin() == null);
     try testing.expect(count == NUM_TIMERS);
 }
+test "dangling next pointer" {
+    const Elem = struct {
+        const Self = @This();
+        value: usize = 0,
+        heap: IntrusiveField(Self) = .{},
+    };
+
+    const Heap = Intrusive(Elem, void, (struct {
+        fn less(ctx: void, a: *Elem, b: *Elem) bool {
+            _ = ctx;
+            return a.value < b.value;
+        }
+    }).less);
+    var h: Heap = .{ .context = {} };
+
+    var e88: Elem = .{ .value = 88 };
+    var e94: Elem = .{ .value = 94 };
+    var e90: Elem = .{ .value = 90 };
+    var e97: Elem = .{ .value = 97 };
+    var e92: Elem = .{ .value = 92 };
+    var e93: Elem = .{ .value = 93 };
+    var e91: Elem = .{ .value = 91 };
+
+    h.root = &e88;
+    e88.heap.child = &e90;
+    e90.heap.prev = &e88;
+    e90.heap.next = &e94;
+    e94.heap.prev = &e90;
+    e94.heap.child = &e97;
+    e97.heap.prev = &e94;
+    e94.heap.next = &e92;
+    e92.heap.prev = &e94;
+    e92.heap.child = &e93;
+    e93.heap.prev = &e92;
+    e92.heap.next = &e91;
+    e91.heap.prev = &e92;
+
+    h.remove(&e88);
+    if ((e91.heap.child != null and e91.heap.child.? == &e92) and
+        (e94.heap.next != null and e94.heap.next.? == &e92))
+    {
+        return error.CantBeBothChildAndNext;
+    }
+
+    //printDotGraph(Elem, h.root.?);
+}
