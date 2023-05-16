@@ -882,6 +882,7 @@ pub const Loop = struct {
             // to the submission queue (because its the same syscall) but
             // setting the state to deleting.
             if (c.kevent() != null) {
+                self.active -= 1;
                 c.flags.state = .deleting;
                 self.submissions.push(c);
                 return;
