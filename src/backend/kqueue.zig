@@ -2473,3 +2473,83 @@ test "kqueue: mach port" {
     try loop.run(.no_wait);
     try testing.expect(!called);
 }
+
+test "kqueue: socket accept/cancel cancellation should decrease active count" {
+    const mem = std.mem;
+    const net = std.net;
+    const testing = std.testing;
+
+    //if (true) return error.SkipZigTest;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Create a TCP server socket
+    const address = try net.Address.parseIp4("127.0.0.1", 3131);
+    const kernel_backlog = 1;
+    var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer os.closeSocket(ln);
+    try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try os.bind(ln, &address.any, address.getOsSockLen());
+    try os.listen(ln, kernel_backlog);
+
+    // Accept
+    var server_conn: os.socket_t = 0;
+    var c_accept: Completion = .{
+        .op = .{
+            .accept = .{
+                .socket = ln,
+            },
+        },
+
+        .userdata = &server_conn,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                _: *xev.Loop,
+                _: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                conn.* = r.accept catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_accept);
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), loop.active);
+
+    var cancel_called = false;
+    var c_cancel: Completion = .{
+        .op = .{
+            .cancel = .{
+                .c = &c_accept,
+            },
+        },
+
+        .userdata = &cancel_called,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                _: *xev.Loop,
+                _: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = r.cancel catch unreachable;
+                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    try testing.expectEqual(@as(usize, 2), loop.active);
+    try loop.run(.once);
+    try testing.expect(cancel_called);
+    try testing.expect(server_conn == -89); // accept called
+
+    // Both callbacks are called active count should be 0
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
