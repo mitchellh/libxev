@@ -2552,4 +2552,34 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
 
     // Both callbacks are called active count should be 0
     try testing.expectEqual(@as(usize, 0), loop.active);
+
+    var c_server_close: xev.Completion = .{
+        .op = .{
+            .close = .{
+                .fd = ln,
+            },
+        },
+
+        .userdata = &ln,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.close catch unreachable;
+                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                ptr.* = 0;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_server_close);
+
+    // Wait for the sockets to close
+    try loop.run(.until_done);
+    try testing.expect(ln == 0);
 }
