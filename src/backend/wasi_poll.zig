@@ -267,7 +267,7 @@ pub const Loop = struct {
                 // A system event
                 if (ev.userdata == 0) continue;
 
-                const c = @intToPtr(*Completion, @intCast(usize, ev.userdata));
+                const c = @ptrFromInt(*Completion, @intCast(usize, ev.userdata));
 
                 // We assume disarm since this is the safest time to access
                 // the completion. It makes rearms slightly more expensive
@@ -639,7 +639,7 @@ pub const Completion = struct {
     fn subscription(self: *Completion) wasi.subscription_t {
         return switch (self.op) {
             .read => |v| .{
-                .userdata = @ptrToInt(self),
+                .userdata = @intFromPtr(self),
                 .u = .{
                     .tag = wasi.EVENTTYPE_FD_READ,
                     .u = .{
@@ -651,7 +651,7 @@ pub const Completion = struct {
             },
 
             .write => |v| .{
-                .userdata = @ptrToInt(self),
+                .userdata = @intFromPtr(self),
                 .u = .{
                     .tag = wasi.EVENTTYPE_FD_WRITE,
                     .u = .{
@@ -663,7 +663,7 @@ pub const Completion = struct {
             },
 
             .accept => |v| .{
-                .userdata = @ptrToInt(self),
+                .userdata = @intFromPtr(self),
                 .u = .{
                     .tag = wasi.EVENTTYPE_FD_READ,
                     .u = .{
@@ -675,7 +675,7 @@ pub const Completion = struct {
             },
 
             .recv => |v| .{
-                .userdata = @ptrToInt(self),
+                .userdata = @intFromPtr(self),
                 .u = .{
                     .tag = wasi.EVENTTYPE_FD_READ,
                     .u = .{
@@ -687,7 +687,7 @@ pub const Completion = struct {
             },
 
             .send => |v| .{
-                .userdata = @ptrToInt(self),
+                .userdata = @intFromPtr(self),
                 .u = .{
                     .tag = wasi.EVENTTYPE_FD_WRITE,
                     .u = .{
@@ -1047,7 +1047,7 @@ const Batch = struct {
         // We're not empty so swap the value we just removed with the
         // last one so our empty slot is always at the end.
         self.array[old_idx] = self.array[self.len];
-        const swapped = @intToPtr(*Completion, @intCast(usize, self.array[old_idx].userdata));
+        const swapped = @ptrFromInt(*Completion, @intCast(usize, self.array[old_idx].userdata));
         swapped.batch_idx = old_idx;
     }
 
@@ -1059,7 +1059,7 @@ const Batch = struct {
         for (&cs, 0..) |*c, i| {
             c.* = .{ .op = undefined, .callback = undefined };
             const sub = try b.get(c);
-            sub.* = .{ .userdata = @ptrToInt(c), .u = undefined };
+            sub.* = .{ .userdata = @intFromPtr(c), .u = undefined };
             try testing.expectEqual(@as(usize, i + 1), c.batch_idx);
         }
 
@@ -1071,12 +1071,12 @@ const Batch = struct {
         const replace = &cs[cs.len - 1];
         b.put(&cs[4]);
         try testing.expect(b.len == capacity - 1);
-        try testing.expect(b.array[old].userdata == @ptrToInt(replace));
+        try testing.expect(b.array[old].userdata == @intFromPtr(replace));
         try testing.expect(replace.batch_idx == old);
 
         // Put it back in
         const sub = try b.get(&cs[4]);
-        sub.* = .{ .userdata = @ptrToInt(&cs[4]), .u = undefined };
+        sub.* = .{ .userdata = @intFromPtr(&cs[4]), .u = undefined };
         try testing.expect(cs[4].batch_idx == capacity - 1);
     }
 };

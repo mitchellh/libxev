@@ -43,7 +43,7 @@ jobs:
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
     - name: test
-      run: nix develop -c zig build -fsummary -Dtarget=${{ matrix.target }}
+      run: nix develop -c zig build --summary all -Dtarget=${{ matrix.target }}
 
   test:
     strategy:
@@ -68,12 +68,12 @@ jobs:
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
     - name: test
-      run: nix develop -c zig build test -fsummary
+      run: nix develop -c zig build test --summary all
     - name: test wasi
-      run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime -fsummary
+      run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
     - name: build all benchmarks and examples
-      run: nix develop -c zig build -Dexample -Dbench -fsummary
+      run: nix develop -c zig build -Dexample -Dbench --summary all
 
     # Run a full build to ensure that works
     - run: nix build

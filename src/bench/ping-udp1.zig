@@ -41,10 +41,10 @@ pub fn run(comptime count: comptime_int) !void {
         break :total total;
     };
 
-    const elapsed = @intToFloat(f64, end_time.since(start_time));
+    const elapsed = @floatFromInt(f64, end_time.since(start_time));
     std.log.info("ping_pongs: {d} pingers, ~{d:.0} roundtrips/s", .{
         count,
-        @intToFloat(f64, total) / (elapsed / 1e9),
+        @floatFromInt(f64, total) / (elapsed / 1e9),
     });
 }
 

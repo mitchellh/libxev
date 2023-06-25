@@ -334,7 +334,7 @@ fn errorCode(err: anyerror) c_int {
     // TODO(mitchellh): This is a bad idea because its not stable across
     // code changes. For now we just document that error codes are not
     // stable but that is not useful at all!
-    return @errorToInt(err);
+    return @intFromError(err);
 }
 
 test "c-api sizes" {

@@ -37,10 +37,10 @@ pub fn main() !void {
     const after_run = try Instant.now();
     const after_all = try Instant.now();
 
-    std.log.info("{d:.2} seconds total", .{@intToFloat(f64, after_all.since(before_all)) / 1e9});
-    std.log.info("{d:.2} seconds init", .{@intToFloat(f64, before_run.since(before_all)) / 1e9});
-    std.log.info("{d:.2} seconds dispatch", .{@intToFloat(f64, after_run.since(before_run)) / 1e9});
-    std.log.info("{d:.2} seconds cleanup", .{@intToFloat(f64, after_all.since(after_run)) / 1e9});
+    std.log.info("{d:.2} seconds total", .{@floatFromInt(f64, after_all.since(before_all)) / 1e9});
+    std.log.info("{d:.2} seconds init", .{@floatFromInt(f64, before_run.since(before_all)) / 1e9});
+    std.log.info("{d:.2} seconds dispatch", .{@floatFromInt(f64, after_run.since(before_run)) / 1e9});
+    std.log.info("{d:.2} seconds cleanup", .{@floatFromInt(f64, after_all.since(after_run)) / 1e9});
 }
 
 pub const std_options = struct {

@@ -14,7 +14,7 @@ pub const Timerfd = struct {
 
     /// timerfd_create
     pub fn init(clock: Clock, flags: u32) !Timerfd {
-        const res = linux.timerfd_create(@enumToInt(clock), flags);
+        const res = linux.timerfd_create(@intFromEnum(clock), flags);
         return switch (linux.getErrno(res)) {
             .SUCCESS => .{ .fd = @intCast(i32, res) },
             else => error.UnknownError,
