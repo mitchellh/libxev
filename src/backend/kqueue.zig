@@ -85,7 +85,7 @@ pub const Loop = struct {
         var mach_port: os.system.mach_port_name_t = undefined;
         switch (os.system.getKernError(os.system.mach_port_allocate(
             mach_self,
-            @enumToInt(os.system.MACH_PORT_RIGHT.RECEIVE),
+            @intFromEnum(os.system.MACH_PORT_RIGHT.RECEIVE),
             &mach_port,
         ))) {
             .SUCCESS => {}, // Success
@@ -176,7 +176,7 @@ pub const Loop = struct {
                     // If we're deleting then we create a deletion event and
                     // queue the completion to notify cancellation.
                     .deleting => if (c.kevent()) |ev| {
-                        c.result = c.syscall_result(-1 * @intCast(i32, @enumToInt(os.system.E.CANCELED)));
+                        c.result = c.syscall_result(-1 * @intCast(i32, @intFromEnum(os.system.E.CANCELED)));
                         c.flags.state = .dead;
                         self.completions.push(c);
 
@@ -218,7 +218,7 @@ pub const Loop = struct {
             // event list to zero length) because it was leading to
             // memory corruption we need to investigate.
             for (events[0..completed]) |ev| {
-                const c = @intToPtr(*Completion, @intCast(usize, ev.udata));
+                const c = @ptrFromInt(*Completion, @intCast(usize, ev.udata));
 
                 // We handle deletions separately.
                 if (ev.flags & os.system.EV_DELETE != 0) continue;
@@ -310,7 +310,7 @@ pub const Loop = struct {
                 .data = 0,
                 .udata = 0,
                 .ext = .{
-                    @ptrToInt(&self.mach_port_buffer),
+                    @intFromPtr(&self.mach_port_buffer),
                     self.mach_port_buffer.len,
                 },
             }};
@@ -524,7 +524,7 @@ pub const Loop = struct {
                 }
                 wait_rem -|= 1;
 
-                const c = @intToPtr(*Completion, @intCast(usize, ev.udata));
+                const c = @ptrFromInt(*Completion, @intCast(usize, ev.udata));
 
                 // c is ready to be reused rigt away if we're dearming
                 // so we mark it as dead.
@@ -843,7 +843,7 @@ pub const Loop = struct {
                     // We use EPERM as a way to note there is no thread
                     // pool. We can change this in the future if there is
                     // a better choice.
-                    c.result = c.syscall_result(@enumToInt(os.E.PERM));
+                    c.result = c.syscall_result(@intFromEnum(os.E.PERM));
                     self.completions.push(c);
                     return false;
                 };
@@ -941,7 +941,7 @@ pub const Loop = struct {
     fn wakeup(self: *Loop) !void {
         // This constructs an empty mach message. It has no data.
         var msg: os.system.mach_msg_header_t = .{
-            .msgh_bits = @enumToInt(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+            .msgh_bits = @intFromEnum(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
             .msgh_size = @sizeOf(os.system.mach_msg_header_t),
             .msgh_remote_port = self.mach_port,
             .msgh_local_port = os.system.MACH_PORT_NULL,
@@ -1058,7 +1058,7 @@ pub const Completion = struct {
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
-                .udata = @ptrToInt(self),
+                .udata = @intFromPtr(self),
             }),
 
             .connect => |v| kevent_init(.{
@@ -1067,7 +1067,7 @@ pub const Completion = struct {
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
-                .udata = @ptrToInt(self),
+                .udata = @intFromPtr(self),
             }),
 
             .machport => kevent: {
@@ -1088,8 +1088,8 @@ pub const Completion = struct {
                     .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                     .fflags = os.system.MACH_RCV_MSG,
                     .data = 0,
-                    .udata = @ptrToInt(self),
-                    .ext = .{ @ptrToInt(slice.ptr), slice.len },
+                    .udata = @intFromPtr(self),
+                    .ext = .{ @intFromPtr(slice.ptr), slice.len },
                 };
             },
 
@@ -1099,7 +1099,7 @@ pub const Completion = struct {
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = v.flags,
                 .data = 0,
-                .udata = @ptrToInt(self),
+                .udata = @intFromPtr(self),
             }),
 
             inline .write, .send, .sendto => |v| kevent_init(.{
@@ -1108,7 +1108,7 @@ pub const Completion = struct {
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
-                .udata = @ptrToInt(self),
+                .udata = @intFromPtr(self),
             }),
 
             inline .read, .recv, .recvfrom => |v| kevent_init(.{
@@ -1117,7 +1117,7 @@ pub const Completion = struct {
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
                 .data = 0,
-                .udata = @ptrToInt(self),
+                .udata = @intFromPtr(self),
             }),
         };
     }
@@ -2401,7 +2401,7 @@ test "kqueue: mach port" {
         os.system.KernE.SUCCESS,
         os.system.getKernError(os.system.mach_port_allocate(
             mach_self,
-            @enumToInt(os.system.MACH_PORT_RIGHT.RECEIVE),
+            @intFromEnum(os.system.MACH_PORT_RIGHT.RECEIVE),
             &mach_port,
         )),
     );
@@ -2442,7 +2442,7 @@ test "kqueue: mach port" {
 
     // Send a message to the port
     var msg: os.system.mach_msg_header_t = .{
-        .msgh_bits = @enumToInt(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+        .msgh_bits = @intFromEnum(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
         .msgh_size = @sizeOf(os.system.mach_msg_header_t),
         .msgh_remote_port = mach_port,
         .msgh_local_port = os.system.MACH_PORT_NULL,

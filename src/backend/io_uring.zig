@@ -141,7 +141,7 @@ pub const Loop = struct {
             // Wait for completions...
             const count = self.ring.copy_cqes(&cqes, wait) catch |err| return err;
             for (cqes[0..count]) |cqe| {
-                const c = @intToPtr(?*Completion, @intCast(usize, cqe.user_data)) orelse continue;
+                const c = @ptrFromInt(?*Completion, @intCast(usize, cqe.user_data)) orelse continue;
                 self.active -= 1;
                 c.flags.state = .dead;
                 switch (c.invoke(self, cqe.res)) {
@@ -456,7 +456,7 @@ pub const Loop = struct {
 
             .timer_remove => |v| linux.io_uring_prep_timeout_remove(
                 sqe,
-                @ptrToInt(v.timer),
+                @intFromPtr(v.timer),
                 0,
             ),
 
@@ -482,13 +482,13 @@ pub const Loop = struct {
                 ),
             },
 
-            .cancel => |v| linux.io_uring_prep_cancel(sqe, @intCast(u64, @ptrToInt(v.c)), 0),
+            .cancel => |v| linux.io_uring_prep_cancel(sqe, @intCast(u64, @intFromPtr(v.c)), 0),
         }
 
         // Our sqe user data always points back to the completion.
         // The prep functions above reset the user data so we have to do this
         // here.
-        sqe.user_data = @ptrToInt(completion);
+        sqe.user_data = @intFromPtr(completion);
     }
 };
 
@@ -552,7 +552,7 @@ pub const Completion = struct {
             .accept => .{
                 .accept = if (res >= 0)
                     @intCast(std.os.socket_t, res)
-                else switch (@intToEnum(std.os.E, -res)) {
+                else switch (@enumFromInt(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
                     .AGAIN => error.Again,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -560,20 +560,20 @@ pub const Completion = struct {
             },
 
             .close => .{
-                .close = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                .close = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .connect => .{
-                .connect = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                .connect = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .poll => .{
-                .poll = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                .poll = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -593,7 +593,7 @@ pub const Completion = struct {
             .send => .{
                 .send = if (res >= 0)
                     @intCast(usize, res)
-                else switch (@intToEnum(std.os.E, -res)) {
+                else switch (@enumFromInt(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
@@ -602,21 +602,21 @@ pub const Completion = struct {
             .sendmsg => .{
                 .sendmsg = if (res >= 0)
                     @intCast(usize, res)
-                else switch (@intToEnum(std.os.E, -res)) {
+                else switch (@enumFromInt(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .shutdown => .{
-                .shutdown = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                .shutdown = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .timer => |*op| timer: {
-                const e = @intToEnum(std.os.E, -res);
+                const e = @enumFromInt(std.os.E, -res);
 
                 // If we have reset set, that means that we were canceled so
                 // that we can update our expiration time.
@@ -636,7 +636,7 @@ pub const Completion = struct {
             },
 
             .timer_remove => .{
-                .timer_remove = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                .timer_remove = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
                     .NOENT => error.NotFound,
                     .BUSY => error.ExpirationInProgress,
 
@@ -654,14 +654,14 @@ pub const Completion = struct {
             .write => .{
                 .write = if (res >= 0)
                     @intCast(usize, res)
-                else switch (@intToEnum(std.os.E, -res)) {
+                else switch (@enumFromInt(std.os.E, -res)) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .cancel => .{
-                .cancel = if (res >= 0) {} else switch (@intToEnum(std.os.E, -res)) {
+                .cancel = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
                     .NOENT => error.NotFound,
                     .ALREADY => error.ExpirationInProgress,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -689,7 +689,7 @@ pub const Completion = struct {
             };
         }
 
-        return switch (@intToEnum(std.os.E, -res)) {
+        return switch (@enumFromInt(std.os.E, -res)) {
             .CANCELED => error.Canceled,
             else => |errno| std.os.unexpectedErrno(errno),
         };

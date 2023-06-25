@@ -34,7 +34,7 @@ pub fn run(comptime thread_count: comptime_int) !void {
     for (&threads) |thr| thr.join();
     const end_time = try Instant.now();
 
-    const elapsed = @intToFloat(f64, end_time.since(start_time));
+    const elapsed = @floatFromInt(f64, end_time.since(start_time));
     std.log.info("async{d}: {d:.2} seconds ({d:.2}/sec)", .{
         thread_count,
         elapsed / 1e9,

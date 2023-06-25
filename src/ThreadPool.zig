@@ -82,7 +82,7 @@ pub const Config = struct {
 /// Statically initialize the thread pool using the configuration.
 pub fn init(config: Config) ThreadPool {
     return .{
-        .stack_size = std.math.max(1, config.stack_size),
+        .stack_size = @max(1, config.stack_size),
         .max_threads = if (config.max_threads > 0)
             config.max_threads
         else
@@ -547,11 +547,11 @@ const Node = struct {
             var stack = self.stack.load(.Monotonic);
             while (true) {
                 // Attach the list to the stack (pt. 1)
-                list.tail.next = @intToPtr(?*Node, stack & PTR_MASK);
+                list.tail.next = @ptrFromInt(?*Node, stack & PTR_MASK);
 
                 // Update the stack with the list (pt. 2).
                 // Don't change the HAS_CACHE and IS_CONSUMING bits of the consumer.
-                var new_stack = @ptrToInt(list.head);
+                var new_stack = @intFromPtr(list.head);
                 assert(new_stack & ~PTR_MASK == 0);
                 new_stack |= (stack & ~PTR_MASK);
 
@@ -587,7 +587,7 @@ const Node = struct {
                     new_stack,
                     .Acquire,
                     .Monotonic,
-                ) orelse return self.cache orelse @intToPtr(*Node, stack & PTR_MASK);
+                ) orelse return self.cache orelse @ptrFromInt(*Node, stack & PTR_MASK);
             }
         }
 
@@ -624,7 +624,7 @@ const Node = struct {
             assert(stack & IS_CONSUMING != 0);
             assert(stack & PTR_MASK != 0);
 
-            const node = @intToPtr(*Node, stack & PTR_MASK);
+            const node = @ptrFromInt(*Node, stack & PTR_MASK);
             consumer_ref.* = node.next;
             return node;
         }

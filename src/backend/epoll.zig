@@ -368,7 +368,7 @@ pub const Loop = struct {
 
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
-                const c = @intToPtr(*Completion, @intCast(usize, ev.data.ptr));
+                const c = @ptrFromInt(*Completion, @intCast(usize, ev.data.ptr));
 
                 // We get the fd and mark this as in progress we can properly
                 // clean this up late.r
@@ -464,7 +464,7 @@ pub const Loop = struct {
             .accept => res: {
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.IN,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .accept = err };
@@ -493,7 +493,7 @@ pub const Loop = struct {
                 // and are notified of connection completion that way.
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.OUT,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 break :res if (std.os.epoll_ctl(
@@ -514,7 +514,7 @@ pub const Loop = struct {
 
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
@@ -536,7 +536,7 @@ pub const Loop = struct {
 
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.OUT,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
@@ -551,7 +551,7 @@ pub const Loop = struct {
             .send => res: {
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.OUT,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .send = err };
@@ -566,7 +566,7 @@ pub const Loop = struct {
             .recv => res: {
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recv = err };
@@ -585,7 +585,7 @@ pub const Loop = struct {
 
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.OUT,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .sendmsg = err };
@@ -600,7 +600,7 @@ pub const Loop = struct {
             .recvmsg => res: {
                 var ev: linux.epoll_event = .{
                     .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recvmsg = err };
@@ -636,7 +636,7 @@ pub const Loop = struct {
             .poll => |v| res: {
                 var ev: linux.epoll_event = .{
                     .events = v.events,
-                    .data = .{ .ptr = @ptrToInt(completion) },
+                    .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .poll = err };

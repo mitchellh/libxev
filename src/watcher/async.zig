@@ -145,7 +145,7 @@ fn AsyncMachPort(comptime xev: type) type {
             var mach_port: os.system.mach_port_name_t = undefined;
             switch (os.system.getKernError(os.system.mach_port_allocate(
                 mach_self,
-                @enumToInt(os.system.MACH_PORT_RIGHT.RECEIVE),
+                @intFromEnum(os.system.MACH_PORT_RIGHT.RECEIVE),
                 &mach_port,
             ))) {
                 .SUCCESS => {}, // Success
@@ -264,7 +264,7 @@ fn AsyncMachPort(comptime xev: type) type {
         pub fn notify(self: Self) !void {
             // This constructs an empty mach message. It has no data.
             var msg: os.system.mach_msg_header_t = .{
-                .msgh_bits = @enumToInt(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+                .msgh_bits = @intFromEnum(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
                 .msgh_size = @sizeOf(os.system.mach_msg_header_t),
                 .msgh_remote_port = self.port,
                 .msgh_local_port = os.system.MACH_PORT_NULL,
