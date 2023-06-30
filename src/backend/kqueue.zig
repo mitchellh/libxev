@@ -218,7 +218,7 @@ pub const Loop = struct {
             // event list to zero length) because it was leading to
             // memory corruption we need to investigate.
             for (events[0..completed]) |ev| {
-                const c = @as(*Completion, @ptrFromInt(@as(usize, @intCast(ev.udata))));
+                const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
 
                 // We handle deletions separately.
                 if (ev.flags & os.system.EV_DELETE != 0) continue;
@@ -471,8 +471,8 @@ pub const Loop = struct {
                 const ms = ms_next -| ms_now;
 
                 break :timeout .{
-                    .tv_sec = @as(isize, @intCast(ms / std.time.ms_per_s)),
-                    .tv_nsec = @as(isize, @intCast(ms % std.time.ms_per_s)),
+                    .tv_sec = @intCast(ms / std.time.ms_per_s),
+                    .tv_nsec = @intCast(ms % std.time.ms_per_s),
                 };
             };
 
@@ -524,7 +524,7 @@ pub const Loop = struct {
                 }
                 wait_rem -|= 1;
 
-                const c = @as(*Completion, @ptrFromInt(@as(usize, @intCast(ev.udata))));
+                const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
 
                 // c is ready to be reused rigt away if we're dearming
                 // so we mark it as dead.
@@ -1053,7 +1053,7 @@ pub const Completion = struct {
             => null,
 
             .accept => |v| kevent_init(.{
-                .ident = @as(usize, @intCast(v.socket)),
+                .ident = @intCast(v.socket),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
@@ -1062,7 +1062,7 @@ pub const Completion = struct {
             }),
 
             .connect => |v| kevent_init(.{
-                .ident = @as(usize, @intCast(v.socket)),
+                .ident = @intCast(v.socket),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
@@ -1083,7 +1083,7 @@ pub const Completion = struct {
                 // available AND automatically reads the message into the
                 // buffer since MACH_RCV_MSG is set.
                 break :kevent .{
-                    .ident = @as(usize, @intCast(v.port)),
+                    .ident = @intCast(v.port),
                     .filter = os.system.EVFILT_MACHPORT,
                     .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                     .fflags = os.system.MACH_RCV_MSG,
@@ -1094,7 +1094,7 @@ pub const Completion = struct {
             },
 
             .proc => |v| kevent_init(.{
-                .ident = @as(usize, @intCast(v.pid)),
+                .ident = @intCast(v.pid),
                 .filter = os.system.EVFILT_PROC,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = v.flags,
@@ -1103,7 +1103,7 @@ pub const Completion = struct {
             }),
 
             inline .write, .send, .sendto => |v| kevent_init(.{
-                .ident = @as(usize, @intCast(v.fd)),
+                .ident = @intCast(v.fd),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
@@ -1112,7 +1112,7 @@ pub const Completion = struct {
             }),
 
             inline .read, .recv, .recvfrom => |v| kevent_init(.{
-                .ident = @as(usize, @intCast(v.fd)),
+                .ident = @intCast(v.fd),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
                 .fflags = 0,
@@ -1228,7 +1228,7 @@ pub const Completion = struct {
 
                 // If we have the exit status, we read it.
                 if (ev.fflags & (os.system.NOTE_EXIT | os.system.NOTE_EXITSTATUS) > 0) {
-                    const data = @as(u32, @intCast(ev.data));
+                    const data: u32 = @intCast(ev.data);
                     if (os.W.IFEXITED(data)) break :res .{
                         .proc = os.W.EXITSTATUS(data),
                     };
@@ -1263,42 +1263,42 @@ pub const Completion = struct {
 
             .write => .{
                 .write = switch (errno) {
-                    .SUCCESS => @as(usize, @intCast(r)),
+                    .SUCCESS => @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
 
             .read => .{
                 .read = switch (errno) {
-                    .SUCCESS => if (r == 0) error.EOF else @as(usize, @intCast(r)),
+                    .SUCCESS => if (r == 0) error.EOF else @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
 
             .send => .{
                 .send = switch (errno) {
-                    .SUCCESS => @as(usize, @intCast(r)),
+                    .SUCCESS => @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
 
             .recv => .{
                 .recv = switch (errno) {
-                    .SUCCESS => if (r == 0) error.EOF else @as(usize, @intCast(r)),
+                    .SUCCESS => if (r == 0) error.EOF else @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
 
             .sendto => .{
                 .sendto = switch (errno) {
-                    .SUCCESS => @as(usize, @intCast(r)),
+                    .SUCCESS => @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
 
             .recvfrom => .{
                 .recvfrom = switch (errno) {
-                    .SUCCESS => @as(usize, @intCast(r)),
+                    .SUCCESS => @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1312,7 +1312,7 @@ pub const Completion = struct {
 
             .proc => .{
                 .proc = switch (errno) {
-                    .SUCCESS => @as(u32, @intCast(r)),
+                    .SUCCESS => @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1644,7 +1644,7 @@ fn kevent_syscall(
             timeout,
         );
         switch (os.errno(rc)) {
-            .SUCCESS => return @as(usize, @intCast(rc)),
+            .SUCCESS => return @intCast(rc),
             .ACCES => return error.AccessDenied,
             .FAULT => unreachable,
             .BADF => unreachable, // Always a race condition.
@@ -1708,7 +1708,7 @@ test "kqueue: stop" {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @as(*bool, @ptrCast(ud.?));
+            const b: *bool = @ptrCast(ud.?);
             b.* = true;
             return .disarm;
         }
@@ -1742,7 +1742,7 @@ test "kqueue: timer" {
         ) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @as(*bool, @ptrCast(ud.?));
+            const b: *bool = @ptrCast(ud.?);
             b.* = true;
             return .disarm;
         }
@@ -1760,7 +1760,7 @@ test "kqueue: timer" {
         ) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @as(*bool, @ptrCast(ud.?));
+            const b: *bool = @ptrCast(ud.?);
             b.* = true;
             return .disarm;
         }
@@ -1794,7 +1794,7 @@ test "kqueue: timer reset" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
+            const v: *?TimerTrigger = @ptrCast(ud.?);
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1836,7 +1836,7 @@ test "kqueue: timer reset before tick" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
+            const v: *?TimerTrigger = @ptrCast(ud.?);
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1874,7 +1874,7 @@ test "kqueue: timer reset after trigger" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
+            const v: *?TimerTrigger = @ptrCast(ud.?);
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1921,7 +1921,7 @@ test "kqueue: timer cancellation" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const ptr = @as(*?TimerTrigger, @ptrCast(@alignCast(ud.?)));
+            const ptr: *?TimerTrigger = @ptrCast(@alignCast(ud.?));
             ptr.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1951,7 +1951,7 @@ test "kqueue: timer cancellation" {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
-                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
+                const ptr: *bool = @ptrCast(@alignCast(ud.?));
                 ptr.* = true;
                 return .disarm;
             }
@@ -1982,7 +1982,7 @@ test "kqueue: canceling a completed operation" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const ptr = @as(*?TimerTrigger, @ptrCast(@alignCast(ud.?)));
+            const ptr: *?TimerTrigger = @ptrCast(@alignCast(ud.?));
             ptr.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -2012,7 +2012,7 @@ test "kqueue: canceling a completed operation" {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
-                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
+                const ptr: *bool = @ptrCast(@alignCast(ud.?));
                 ptr.* = true;
                 return .disarm;
             }
