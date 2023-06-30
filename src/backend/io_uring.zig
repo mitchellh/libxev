@@ -369,7 +369,7 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @as(u64, @bitCast(@as(i64, -1))),
+                    @bitCast(@as(i64, -1)),
                 ),
 
                 .slice => |buf| linux.io_uring_prep_read(
@@ -379,7 +379,7 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @as(u64, @bitCast(@as(i64, -1))),
+                    @bitCast(@as(i64, -1)),
                 ),
             },
 
@@ -468,7 +468,7 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @as(u64, @bitCast(@as(i64, -1))),
+                    @bitCast(@as(i64, -1)),
                 ),
 
                 .slice => |buf| linux.io_uring_prep_write(
@@ -478,11 +478,11 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @as(u64, @bitCast(@as(i64, -1))),
+                    @bitCast(@as(i64, -1)),
                 ),
             },
 
-            .cancel => |v| linux.io_uring_prep_cancel(sqe, @as(u64, @intCast(@intFromPtr(v.c))), 0),
+            .cancel => |v| linux.io_uring_prep_cancel(sqe, @intCast(@intFromPtr(v.c)), 0),
         }
 
         // Our sqe user data always points back to the completion.
@@ -551,7 +551,7 @@ pub const Completion = struct {
 
             .accept => .{
                 .accept = if (res >= 0)
-                    @as(std.os.socket_t, @intCast(res))
+                    @intCast(res)
                 else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     .AGAIN => error.Again,
@@ -592,7 +592,7 @@ pub const Completion = struct {
 
             .send => .{
                 .send = if (res >= 0)
-                    @as(usize, @intCast(res))
+                    @intCast(res)
                 else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -601,7 +601,7 @@ pub const Completion = struct {
 
             .sendmsg => .{
                 .sendmsg = if (res >= 0)
-                    @as(usize, @intCast(res))
+                    @intCast(res)
                 else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -653,7 +653,7 @@ pub const Completion = struct {
 
             .write => .{
                 .write = if (res >= 0)
-                    @as(usize, @intCast(res))
+                    @intCast(res)
                 else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -674,7 +674,7 @@ pub const Completion = struct {
 
     fn readResult(self: *Completion, comptime op: OperationType, res: i32) ReadError!usize {
         if (res > 0) {
-            return @as(usize, @intCast(res));
+            return @intCast(res);
         }
 
         if (res == 0) {

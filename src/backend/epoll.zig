@@ -293,7 +293,7 @@ pub const Loop = struct {
 
         // Wait and process events. We only do this if we have any active.
         var events: [1024]linux.epoll_event = undefined;
-        var wait_rem = @as(usize, @intCast(wait));
+        var wait_rem: usize = @intCast(wait);
         while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
             self.update_now();
             const now_timer: Operation.Timer = .{ .next = self.cached_now };
@@ -368,7 +368,7 @@ pub const Loop = struct {
 
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
-                const c = @as(*Completion, @ptrFromInt(@as(usize, @intCast(ev.data.ptr))));
+                const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.data.ptr)));
 
                 // We get the fd and mark this as in progress we can properly
                 // clean this up late.r
