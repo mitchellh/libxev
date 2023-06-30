@@ -45,12 +45,12 @@ pub fn run(comptime thread_count: comptime_int) !void {
     for (&threads) |thr| thr.join();
     const end_time = try Instant.now();
 
-    const elapsed = @floatFromInt(f64, end_time.since(start_time));
+    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
     std.log.info("async_pummel_{d}: {d} callbacks in {d:.2} seconds ({d:.2}/sec)", .{
         thread_count,
         callbacks,
         elapsed / 1e9,
-        @floatFromInt(f64, callbacks) / (elapsed / 1e9),
+        @as(f64, @floatFromInt(callbacks)) / (elapsed / 1e9),
     });
 }
 

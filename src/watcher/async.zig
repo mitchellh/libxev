@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
+const common = @import("common.zig");
 
 pub fn Async(comptime xev: type) type {
     return switch (xev.backend) {
@@ -84,7 +85,7 @@ fn AsyncEventFd(comptime xev: type) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             if (r.read) |v| assert(v > 0) else |err| err,
@@ -110,7 +111,7 @@ fn AsyncEventFd(comptime xev: type) type {
         ///
         pub fn notify(self: Self) !void {
             // We want to just write "1" in the correct byte order as our host.
-            const val = @bitCast([8]u8, @as(u64, 1));
+            const val = @as([8]u8, @bitCast(@as(u64, 1)));
             _ = os.write(self.fd, &val) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return err,
@@ -211,7 +212,7 @@ fn AsyncMachPort(comptime xev: type) type {
                         drain(c_inner.op.machport.port);
 
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             if (r.machport) |_| {} else |err| err,
@@ -355,7 +356,7 @@ fn AsyncLoopState(comptime xev: type, comptime threaded: bool) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             if (r.async_wait) |_| {} else |err| err,

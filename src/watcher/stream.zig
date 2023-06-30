@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const common = @import("common.zig");
 const queue = @import("../queue.zig");
 
 /// Options for creating a stream type. Each of the options makes the
@@ -72,7 +73,7 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             T.initFd(c_inner.op.close.fd),
@@ -145,10 +146,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                                     .none => unreachable,
 
                                     .recv => @call(.always_inline, cb, .{
-                                        @ptrCast(?*Userdata, @alignCast(
-                                            @max(1, @alignOf(Userdata)),
-                                            ud,
-                                        )),
+                                        common.userdataValue(Userdata, ud),
                                         l_inner,
                                         c_inner,
                                         T.initFd(c_inner.op.recv.fd),
@@ -157,10 +155,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                                     }),
 
                                     .read => @call(.always_inline, cb, .{
-                                        @ptrCast(?*Userdata, @alignCast(
-                                            @max(1, @alignOf(Userdata)),
-                                            ud,
-                                        )),
+                                        common.userdataValue(Userdata, ud),
                                         l_inner,
                                         c_inner,
                                         T.initFd(c_inner.op.read.fd),
@@ -265,7 +260,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     c_inner: *xev.Completion,
                     r: xev.Result,
                 ) xev.CallbackAction {
-                    const q_inner = @ptrCast(?*WriteQueue, @alignCast(@alignOf(WriteQueue), ud)).?;
+                    const q_inner = @as(?*WriteQueue, @ptrCast(@alignCast(ud))).?;
 
                     // The queue MUST have a request because a completion
                     // can only be added if the queue is not empty, and
@@ -274,10 +269,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
 
                     const cb_res = write_result(c_inner, r);
                     const action = @call(.always_inline, cb, .{
-                        @ptrCast(?*Userdata, @alignCast(
-                            @max(1, @alignOf(Userdata)),
-                            req_inner.userdata,
-                        )),
+                        common.userdataValue(Userdata, req_inner.userdata),
                         l_inner,
                         c_inner,
                         cb_res.writer,
@@ -301,10 +293,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             // The userdata as to go on the WriteRequest because we need
             // our actual completion userdata to be the WriteQueue so that
             // we can process the queue.
-            req.userdata = @ptrCast(
-                ?*anyopaque,
-                @alignCast(@alignOf(anyopaque), userdata),
-            );
+            req.userdata = @as(?*anyopaque, @ptrCast(@alignCast(userdata)));
 
             // If the queue is empty, then we add our completion. Otherwise,
             // the previously queued writes will trigger this one.
@@ -350,10 +339,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 ) xev.CallbackAction {
                     const cb_res = write_result(c_inner, r);
                     return @call(.always_inline, cb, .{
-                        @ptrCast(?*Userdata, @alignCast(
-                            @max(1, @alignOf(Userdata)),
-                            ud,
-                        )),
+                        common.userdataValue(Userdata, ud),
                         l_inner,
                         c_inner,
                         cb_res.writer,

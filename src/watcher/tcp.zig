@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const os = std.os;
 const stream = @import("stream.zig");
+const common = @import("common.zig");
 
 /// TCP client and server.
 ///
@@ -95,7 +96,7 @@ pub fn TCP(comptime xev: type) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             if (r.accept) |fd| initFd(fd) else |err| err,
@@ -152,7 +153,7 @@ pub fn TCP(comptime xev: type) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             initFd(c_inner.op.connect.socket),
@@ -198,7 +199,7 @@ pub fn TCP(comptime xev: type) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             initFd(c_inner.op.shutdown.socket),

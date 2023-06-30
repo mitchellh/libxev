@@ -53,8 +53,8 @@ pub fn main() !void {
     server_thr.join();
     const end_time = try Instant.now();
 
-    const elapsed = @floatFromInt(f64, end_time.since(start_time));
-    std.log.info("{d:.2} roundtrips/s", .{@floatFromInt(f64, client.pongs) / (elapsed / 1e9)});
+    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
+    std.log.info("{d:.2} roundtrips/s", .{@as(f64, @floatFromInt(client.pongs)) / (elapsed / 1e9)});
     std.log.info("{d:.2} seconds total", .{elapsed / 1e9});
 }
 
@@ -246,8 +246,7 @@ const Server = struct {
     fn destroyBuf(self: *Server, buf: []const u8) void {
         self.buffer_pool.destroy(
             @alignCast(
-                BufferPool.item_alignment,
-                @ptrFromInt(*[4096]u8, @intFromPtr(buf.ptr)),
+                @as(*[4096]u8, @ptrFromInt(@intFromPtr(buf.ptr))),
             ),
         );
     }
@@ -321,8 +320,7 @@ const Server = struct {
         self.completion_pool.destroy(c);
         self.buffer_pool.destroy(
             @alignCast(
-                BufferPool.item_alignment,
-                @ptrFromInt(*[4096]u8, @intFromPtr(buf.slice.ptr)),
+                @as(*[4096]u8, @ptrFromInt(@intFromPtr(buf.slice.ptr))),
             ),
         );
         return .disarm;
