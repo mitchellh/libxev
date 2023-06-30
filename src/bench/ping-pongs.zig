@@ -246,7 +246,6 @@ const Server = struct {
     fn destroyBuf(self: *Server, buf: []const u8) void {
         self.buffer_pool.destroy(
             @alignCast(
-                BufferPool.item_alignment,
                 @as(*[4096]u8, @ptrFromInt(@intFromPtr(buf.ptr))),
             ),
         );
@@ -321,7 +320,6 @@ const Server = struct {
         self.completion_pool.destroy(c);
         self.buffer_pool.destroy(
             @alignCast(
-                BufferPool.item_alignment,
                 @as(*[4096]u8, @ptrFromInt(@intFromPtr(buf.slice.ptr))),
             ),
         );
