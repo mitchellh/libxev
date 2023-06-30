@@ -293,7 +293,7 @@ pub const Loop = struct {
 
         // Wait and process events. We only do this if we have any active.
         var events: [1024]linux.epoll_event = undefined;
-        var wait_rem = @intCast(usize, wait);
+        var wait_rem = @as(usize, @intCast(wait));
         while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
             self.update_now();
             const now_timer: Operation.Timer = .{ .next = self.cached_now };
@@ -351,11 +351,11 @@ pub const Loop = struct {
                 const t = self.timers.peek() orelse break :timeout 100;
 
                 // Determine the time in milliseconds.
-                const ms_now = @intCast(u64, self.cached_now.tv_sec) * std.time.ms_per_s +
-                    @intCast(u64, self.cached_now.tv_nsec) / std.time.ns_per_ms;
-                const ms_next = @intCast(u64, t.next.tv_sec) * std.time.ms_per_s +
-                    @intCast(u64, t.next.tv_nsec) / std.time.ns_per_ms;
-                break :timeout @intCast(i32, ms_next -| ms_now);
+                const ms_now = @as(u64, @intCast(self.cached_now.tv_sec)) * std.time.ms_per_s +
+                    @as(u64, @intCast(self.cached_now.tv_nsec)) / std.time.ns_per_ms;
+                const ms_next = @as(u64, @intCast(t.next.tv_sec)) * std.time.ms_per_s +
+                    @as(u64, @intCast(t.next.tv_nsec)) / std.time.ns_per_ms;
+                break :timeout @as(i32, @intCast(ms_next -| ms_now));
             };
 
             const n = std.os.epoll_wait(self.fd, &events, timeout);
@@ -368,7 +368,7 @@ pub const Loop = struct {
 
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
-                const c = @ptrFromInt(*Completion, @intCast(usize, ev.data.ptr));
+                const c = @as(*Completion, @ptrFromInt(@as(usize, @intCast(ev.data.ptr))));
 
                 // We get the fd and mark this as in progress we can properly
                 // clean this up late.r
@@ -1090,10 +1090,10 @@ pub const Operation = union(OperationType) {
             const max = std.math.maxInt(u64);
             const s_ns = std.math.mul(
                 u64,
-                @intCast(u64, self.next.tv_sec),
+                @as(u64, @intCast(self.next.tv_sec)),
                 std.time.ns_per_s,
             ) catch return max;
-            return std.math.add(u64, s_ns, @intCast(u64, self.next.tv_nsec)) catch
+            return std.math.add(u64, s_ns, @as(u64, @intCast(self.next.tv_nsec))) catch
                 return max;
         }
     };
@@ -1250,7 +1250,7 @@ test "epoll: stop" {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1284,7 +1284,7 @@ test "epoll: timer" {
         ) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1302,7 +1302,7 @@ test "epoll: timer" {
         ) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1336,7 +1336,7 @@ test "epoll: timer reset" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1378,7 +1378,7 @@ test "epoll: timer reset before tick" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1416,7 +1416,7 @@ test "epoll: timer reset after trigger" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1479,7 +1479,7 @@ test "epoll: timerfd" {
                 _ = r.read catch unreachable;
                 _ = c;
                 _ = l;
-                const b = @ptrCast(*bool, ud.?);
+                const b = @as(*bool, @ptrCast(ud.?));
                 b.* = true;
                 return .disarm;
             }
@@ -1537,7 +1537,7 @@ test "epoll: socket accept/connect/send/recv/close" {
             ) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const conn = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 conn.* = r.accept catch unreachable;
                 return .disarm;
             }
@@ -1566,7 +1566,7 @@ test "epoll: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.connect catch unreachable;
-                const b = @ptrCast(*bool, ud.?);
+                const b = @as(*bool, @ptrCast(ud.?));
                 b.* = true;
                 return .disarm;
             }
@@ -1626,7 +1626,7 @@ test "epoll: socket accept/connect/send/recv/close" {
             ) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                const ptr = @as(*usize, @ptrCast(@alignCast(ud.?)));
                 ptr.* = r.recv catch unreachable;
                 return .disarm;
             }
@@ -1658,7 +1658,7 @@ test "epoll: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.shutdown catch unreachable;
-                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }
@@ -1688,7 +1688,7 @@ test "epoll: socket accept/connect/send/recv/close" {
             ) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                const ptr = @as(*?bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = if (r.recv) |_| false else |err| switch (err) {
                     error.EOF => true,
                     else => false,
@@ -1721,7 +1721,7 @@ test "epoll: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
-                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const ptr = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 ptr.* = 0;
                 return .disarm;
             }
@@ -1747,7 +1747,7 @@ test "epoll: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
-                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const ptr = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 ptr.* = 0;
                 return .disarm;
             }
@@ -1778,7 +1778,7 @@ test "epoll: timer cancellation" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            const ptr = @as(*?TimerTrigger, @ptrCast(@alignCast(ud.?)));
             ptr.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1808,7 +1808,7 @@ test "epoll: timer cancellation" {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
-                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }
@@ -1839,7 +1839,7 @@ test "epoll: canceling a completed operation" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            const ptr = @as(*?TimerTrigger, @ptrCast(@alignCast(ud.?)));
             ptr.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1869,7 +1869,7 @@ test "epoll: canceling a completed operation" {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
-                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }

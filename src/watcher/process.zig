@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
+const common = @import("common.zig");
 
 /// Process management, such as waiting for process exit.
 pub fn Process(comptime xev: type) type {
@@ -37,7 +38,7 @@ fn ProcessPidFd(comptime xev: type) type {
             // over to Zig.
             const res = os.linux.pidfd_open(pid, os.SOCK.NONBLOCK);
             const fd = switch (os.errno(res)) {
-                .SUCCESS => @intCast(os.fd_t, res),
+                .SUCCESS => @as(os.fd_t, @intCast(res)),
                 .INVAL => return error.InvalidArgument,
                 .MFILE => return error.ProcessFdQuotaExceeded,
                 .NFILE => return error.SystemFdQuotaExceeded,
@@ -103,7 +104,7 @@ fn ProcessPidFd(comptime xev: type) type {
                             const res = os.linux.waitid(.PIDFD, fd, &info, os.linux.W.EXITED);
 
                             break :arg switch (os.errno(res)) {
-                                .SUCCESS => @intCast(u32, info.fields.common.second.sigchld.status),
+                                .SUCCESS => @as(u32, @intCast(info.fields.common.second.sigchld.status)),
                                 .CHILD => error.InvalidChild,
 
                                 // The fd isn't ready to read, I guess?
@@ -116,7 +117,7 @@ fn ProcessPidFd(comptime xev: type) type {
                         };
 
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             arg,
@@ -186,7 +187,7 @@ fn ProcessKqueue(comptime xev: type) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             if (r.proc) |v| v else |err| err,

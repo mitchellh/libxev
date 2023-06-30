@@ -61,7 +61,7 @@ pub fn Timer(comptime xev: type) type {
                     r: xev.Result,
                 ) xev.CallbackAction {
                     return @call(.always_inline, cb, .{
-                        @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                        @as(?*Userdata, if (Userdata == void) null else @ptrCast(@alignCast(ud))),
                         l_inner,
                         c_inner,
                         if (r.timer) |trigger| @as(RunError!void, switch (trigger) {
@@ -110,7 +110,7 @@ pub fn Timer(comptime xev: type) type {
                     r: xev.Result,
                 ) xev.CallbackAction {
                     return @call(.always_inline, cb, .{
-                        @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                        @as(?*Userdata, if (Userdata == void) null else @ptrCast(@alignCast(ud))),
                         l_inner,
                         c_inner,
                         if (r.timer) |trigger| @as(RunError!void, switch (trigger) {
@@ -161,7 +161,7 @@ pub fn Timer(comptime xev: type) type {
                             r: xev.Result,
                         ) xev.CallbackAction {
                             return @call(.always_inline, cb, .{
-                                @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                                @as(?*Userdata, if (Userdata == void) null else @ptrCast(@alignCast(ud))),
                                 l_inner,
                                 c_inner,
                                 if (r.timer_remove) |_| {} else |err| err,
@@ -189,7 +189,7 @@ pub fn Timer(comptime xev: type) type {
                             r: xev.Result,
                         ) xev.CallbackAction {
                             return @call(.always_inline, cb, .{
-                                @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                                @as(?*Userdata, if (Userdata == void) null else @ptrCast(@alignCast(ud))),
                                 l_inner,
                                 c_inner,
                                 if (r.cancel) |_| {} else |err| err,

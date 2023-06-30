@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const os = std.os;
 const stream = @import("stream.zig");
+const common = @import("common.zig");
 
 /// UDP client and server.
 ///
@@ -116,9 +117,9 @@ fn UDPSendto(comptime xev: type) type {
                                 c_inner: *xev.Completion,
                                 r: xev.Result,
                             ) xev.CallbackAction {
-                                const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                                const s_inner = @as(?*State, @ptrCast(@alignCast(ud))).?;
                                 return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                                    common.userdataValue(Userdata, s_inner.userdata),
                                     l_inner,
                                     c_inner,
                                     s_inner,
@@ -179,9 +180,9 @@ fn UDPSendto(comptime xev: type) type {
                                 c_inner: *xev.Completion,
                                 r: xev.Result,
                             ) xev.CallbackAction {
-                                const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                                const s_inner = @as(?*State, @ptrCast(@alignCast(ud))).?;
                                 return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                                    common.userdataValue(Userdata, s_inner.userdata),
                                     l_inner,
                                     c_inner,
                                     s_inner,
@@ -350,9 +351,9 @@ fn UDPSendMsg(comptime xev: type) type {
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
-                        const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                        const s_inner = @as(?*State, @ptrCast(@alignCast(ud))).?;
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                            common.userdataValue(Userdata, s_inner.userdata),
                             l_inner,
                             c_inner,
                             s_inner,
@@ -459,9 +460,9 @@ fn UDPSendMsg(comptime xev: type) type {
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
-                        const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                        const s_inner = @as(?*State, @ptrCast(@alignCast(ud))).?;
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                            common.userdataValue(Userdata, s_inner.userdata),
                             l_inner,
                             c_inner,
                             s_inner,

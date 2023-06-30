@@ -35,7 +35,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
 
     var receivers: [n_receivers]Receiver = undefined;
     for (&receivers, 0..) |*r, i| {
-        const addr = try std.net.Address.parseIp4("0.0.0.0", @intCast(u16, base_port + i));
+        const addr = try std.net.Address.parseIp4("0.0.0.0", @as(u16, @intCast(base_port + i)));
         r.* = .{ .udp = try xev.UDP.init(addr) };
         try r.udp.bind(addr);
         r.udp.read(
@@ -53,7 +53,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
     for (&senders, 0..) |*s, i| {
         const addr = try std.net.Address.parseIp4(
             "0.0.0.0",
-            @intCast(u16, base_port + (i % n_receivers)),
+            @as(u16, @intCast(base_port + (i % n_receivers))),
         );
         s.* = .{ .udp = try xev.UDP.init(addr) };
         s.udp.write(
@@ -72,12 +72,12 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
     try loop.run(.until_done);
     const end_time = try Instant.now();
 
-    const elapsed = @floatFromInt(f64, end_time.since(start_time));
+    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
     std.log.info("udp_pummel_{d}v{d}: {d:.0}f/s received, {d:.0}f/s sent, {d} received, {d} sent in {d:.1} seconds", .{
         n_senders,
         n_receivers,
-        @floatFromInt(f64, recv_cb_called) / (elapsed / std.time.ns_per_s),
-        @floatFromInt(f64, send_cb_called) / (elapsed / std.time.ns_per_s),
+        @as(f64, @floatFromInt(recv_cb_called)) / (elapsed / std.time.ns_per_s),
+        @as(f64, @floatFromInt(send_cb_called)) / (elapsed / std.time.ns_per_s),
         recv_cb_called,
         send_cb_called,
         elapsed / std.time.ns_per_s,

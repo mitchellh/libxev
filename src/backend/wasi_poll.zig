@@ -135,7 +135,7 @@ pub const Loop = struct {
         }
 
         // Wait and process events. We only do this if we have any active.
-        var wait_rem = @intCast(usize, wait);
+        var wait_rem = @as(usize, @intCast(wait));
         while (true) {
             // If we're stopped then the loop is fully over.
             if (self.flags.stopped) return;
@@ -243,7 +243,7 @@ pub const Loop = struct {
                     .tag = wasi.EVENTTYPE_CLOCK,
                     .u = .{
                         .clock = .{
-                            .id = @bitCast(u32, std.os.CLOCK.MONOTONIC),
+                            .id = @as(u32, @bitCast(std.os.CLOCK.MONOTONIC)),
                             .timeout = timeout,
                             .precision = 1 * std.time.ns_per_ms,
                             .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
@@ -267,7 +267,7 @@ pub const Loop = struct {
                 // A system event
                 if (ev.userdata == 0) continue;
 
-                const c = @ptrFromInt(*Completion, @intCast(usize, ev.userdata));
+                const c = @as(*Completion, @ptrFromInt(@as(usize, @intCast(ev.userdata))));
 
                 // We assume disarm since this is the safest time to access
                 // the completion. It makes rearms slightly more expensive
@@ -556,7 +556,7 @@ pub const Loop = struct {
     fn timer_next(next_ms: u64) wasi.timestamp_t {
         // Get the absolute time we'll execute this timer next.
         var now_ts: wasi.timestamp_t = undefined;
-        switch (wasi.clock_time_get(@bitCast(u32, std.os.CLOCK.MONOTONIC), 1, &now_ts)) {
+        switch (wasi.clock_time_get(@as(u32, @bitCast(std.os.CLOCK.MONOTONIC)), 1, &now_ts)) {
             .SUCCESS => {},
             .INVAL => unreachable,
             else => unreachable,
@@ -569,7 +569,7 @@ pub const Loop = struct {
 
     fn get_now() !wasi.timestamp_t {
         var ts: wasi.timestamp_t = undefined;
-        return switch (wasi.clock_time_get(@bitCast(u32, std.os.CLOCK.MONOTONIC), 1, &ts)) {
+        return switch (wasi.clock_time_get(@as(u32, @bitCast(std.os.CLOCK.MONOTONIC)), 1, &ts)) {
             .SUCCESS => ts,
             .INVAL => error.UnsupportedClock,
             else => |err| std.os.unexpectedErrno(err),
@@ -1047,7 +1047,7 @@ const Batch = struct {
         // We're not empty so swap the value we just removed with the
         // last one so our empty slot is always at the end.
         self.array[old_idx] = self.array[self.len];
-        const swapped = @ptrFromInt(*Completion, @intCast(usize, self.array[old_idx].userdata));
+        const swapped = @as(*Completion, @ptrFromInt(@as(usize, @intCast(self.array[old_idx].userdata))));
         swapped.batch_idx = old_idx;
     }
 
@@ -1113,7 +1113,7 @@ test "wasi: timer" {
         ) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1131,7 +1131,7 @@ test "wasi: timer" {
         ) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1165,7 +1165,7 @@ test "wasi: timer reset" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1207,7 +1207,7 @@ test "wasi: timer reset before tick" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1245,7 +1245,7 @@ test "wasi: timer reset after trigger" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1292,7 +1292,7 @@ test "wasi: timer cancellation" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            const ptr = @as(*?TimerTrigger, @ptrCast(@alignCast(ud.?)));
             ptr.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1322,7 +1322,7 @@ test "wasi: timer cancellation" {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
-                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }
@@ -1353,7 +1353,7 @@ test "wasi: canceling a completed operation" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const ptr = @ptrCast(*?TimerTrigger, @alignCast(@alignOf(?TimerTrigger), ud.?));
+            const ptr = @as(*?TimerTrigger, @ptrCast(@alignCast(ud.?)));
             ptr.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1383,7 +1383,7 @@ test "wasi: canceling a completed operation" {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
-                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }
@@ -1451,7 +1451,7 @@ test "wasi: file" {
             ) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*?usize, @alignCast(@alignOf(?usize), ud.?));
+                const ptr = @as(*?usize, @ptrCast(@alignCast(ud.?)));
                 ptr.* = r.read catch |err| switch (err) {
                     error.EOF => 0,
                     else => unreachable,
@@ -1487,7 +1487,7 @@ test "wasi: file" {
             ) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*?usize, @alignCast(@alignOf(?usize), ud.?));
+                const ptr = @as(*?usize, @ptrCast(@alignCast(ud.?)));
                 ptr.* = r.write catch unreachable;
                 return .disarm;
             }

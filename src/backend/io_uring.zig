@@ -141,7 +141,7 @@ pub const Loop = struct {
             // Wait for completions...
             const count = self.ring.copy_cqes(&cqes, wait) catch |err| return err;
             for (cqes[0..count]) |cqe| {
-                const c = @ptrFromInt(?*Completion, @intCast(usize, cqe.user_data)) orelse continue;
+                const c = @as(?*Completion, @ptrFromInt(@as(usize, @intCast(cqe.user_data)))) orelse continue;
                 self.active -= 1;
                 c.flags.state = .dead;
                 switch (c.invoke(self, cqe.res)) {
@@ -369,7 +369,7 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @bitCast(u64, @as(i64, -1)),
+                    @as(u64, @bitCast(@as(i64, -1))),
                 ),
 
                 .slice => |buf| linux.io_uring_prep_read(
@@ -379,7 +379,7 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @bitCast(u64, @as(i64, -1)),
+                    @as(u64, @bitCast(@as(i64, -1))),
                 ),
             },
 
@@ -468,7 +468,7 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @bitCast(u64, @as(i64, -1)),
+                    @as(u64, @bitCast(@as(i64, -1))),
                 ),
 
                 .slice => |buf| linux.io_uring_prep_write(
@@ -478,11 +478,11 @@ pub const Loop = struct {
 
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
-                    @bitCast(u64, @as(i64, -1)),
+                    @as(u64, @bitCast(@as(i64, -1))),
                 ),
             },
 
-            .cancel => |v| linux.io_uring_prep_cancel(sqe, @intCast(u64, @intFromPtr(v.c)), 0),
+            .cancel => |v| linux.io_uring_prep_cancel(sqe, @as(u64, @intCast(@intFromPtr(v.c))), 0),
         }
 
         // Our sqe user data always points back to the completion.
@@ -551,8 +551,8 @@ pub const Completion = struct {
 
             .accept => .{
                 .accept = if (res >= 0)
-                    @intCast(std.os.socket_t, res)
-                else switch (@enumFromInt(std.os.E, -res)) {
+                    @as(std.os.socket_t, @intCast(res))
+                else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     .AGAIN => error.Again,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -560,20 +560,20 @@ pub const Completion = struct {
             },
 
             .close => .{
-                .close = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
+                .close = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .connect => .{
-                .connect = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
+                .connect = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .poll => .{
-                .poll = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
+                .poll = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -592,8 +592,8 @@ pub const Completion = struct {
 
             .send => .{
                 .send = if (res >= 0)
-                    @intCast(usize, res)
-                else switch (@enumFromInt(std.os.E, -res)) {
+                    @as(usize, @intCast(res))
+                else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
@@ -601,22 +601,22 @@ pub const Completion = struct {
 
             .sendmsg => .{
                 .sendmsg = if (res >= 0)
-                    @intCast(usize, res)
-                else switch (@enumFromInt(std.os.E, -res)) {
+                    @as(usize, @intCast(res))
+                else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .shutdown => .{
-                .shutdown = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
+                .shutdown = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .timer => |*op| timer: {
-                const e = @enumFromInt(std.os.E, -res);
+                const e = @as(std.os.E, @enumFromInt(-res));
 
                 // If we have reset set, that means that we were canceled so
                 // that we can update our expiration time.
@@ -636,7 +636,7 @@ pub const Completion = struct {
             },
 
             .timer_remove => .{
-                .timer_remove = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
+                .timer_remove = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .NOENT => error.NotFound,
                     .BUSY => error.ExpirationInProgress,
 
@@ -653,15 +653,15 @@ pub const Completion = struct {
 
             .write => .{
                 .write = if (res >= 0)
-                    @intCast(usize, res)
-                else switch (@enumFromInt(std.os.E, -res)) {
+                    @as(usize, @intCast(res))
+                else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
 
             .cancel => .{
-                .cancel = if (res >= 0) {} else switch (@enumFromInt(std.os.E, -res)) {
+                .cancel = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .NOENT => error.NotFound,
                     .ALREADY => error.ExpirationInProgress,
                     else => |errno| std.os.unexpectedErrno(errno),
@@ -674,7 +674,7 @@ pub const Completion = struct {
 
     fn readResult(self: *Completion, comptime op: OperationType, res: i32) ReadError!usize {
         if (res > 0) {
-            return @intCast(usize, res);
+            return @as(usize, @intCast(res));
         }
 
         if (res == 0) {
@@ -689,7 +689,7 @@ pub const Completion = struct {
             };
         }
 
-        return switch (@enumFromInt(std.os.E, -res)) {
+        return switch (@as(std.os.E, @enumFromInt(-res))) {
             .CANCELED => error.Canceled,
             else => |errno| std.os.unexpectedErrno(errno),
         };
@@ -990,7 +990,7 @@ test "io_uring: default completion" {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1040,7 +1040,7 @@ test "io_uring: timerfd" {
                 _ = c;
                 _ = r;
                 _ = l;
-                const b = @ptrCast(*bool, ud.?);
+                const b = @as(*bool, @ptrCast(ud.?));
                 b.* = true;
                 return .disarm;
             }
@@ -1070,7 +1070,7 @@ test "io_uring: timer" {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1083,7 +1083,7 @@ test "io_uring: timer" {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1117,7 +1117,7 @@ test "io_uring: timer reset" {
             r: xev.Result,
         ) xev.CallbackAction {
             _ = l;
-            const v = @ptrCast(*?TimerTrigger, ud.?);
+            const v = @as(*?TimerTrigger, @ptrCast(ud.?));
             v.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1158,7 +1158,7 @@ test "io_uring: stop" {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
             _ = r;
-            const b = @ptrCast(*bool, ud.?);
+            const b = @as(*bool, @ptrCast(ud.?));
             b.* = true;
             return .disarm;
         }
@@ -1200,7 +1200,7 @@ test "io_uring: timer remove" {
     loop.timer(&c1, 100_000, &trigger, (struct {
         fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
             _ = l;
-            const b = @ptrCast(*?TimerTrigger, ud.?);
+            const b = @as(*?TimerTrigger, @ptrCast(ud.?));
             b.* = r.timer catch unreachable;
             return .disarm;
         }
@@ -1268,7 +1268,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
             fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const conn = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 conn.* = r.accept catch unreachable;
                 return .disarm;
             }
@@ -1292,7 +1292,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.connect catch unreachable;
-                const b = @ptrCast(*bool, ud.?);
+                const b = @as(*bool, @ptrCast(ud.?));
                 b.* = true;
                 return .disarm;
             }
@@ -1342,7 +1342,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
             fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                const ptr = @as(*usize, @ptrCast(@alignCast(ud.?)));
                 ptr.* = r.recv catch unreachable;
                 return .disarm;
             }
@@ -1369,7 +1369,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.shutdown catch unreachable;
-                const ptr = @ptrCast(*bool, @alignCast(@alignOf(bool), ud.?));
+                const ptr = @as(*bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }
@@ -1394,7 +1394,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
             fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                const ptr = @as(*?bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = if (r.recv) |_| false else |err| switch (err) {
                     error.EOF => true,
                     else => false,
@@ -1422,7 +1422,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
-                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const ptr = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 ptr.* = 0;
                 return .disarm;
             }
@@ -1443,7 +1443,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
-                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const ptr = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 ptr.* = 0;
                 return .disarm;
             }
@@ -1542,7 +1542,7 @@ test "io_uring: sendmsg/recvmsg" {
             fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
                 _ = l;
                 _ = c;
-                const ptr = @ptrCast(*usize, @alignCast(@alignOf(usize), ud.?));
+                const ptr = @as(*usize, @ptrCast(@alignCast(ud.?)));
                 ptr.* = r.recvmsg catch unreachable;
                 return .disarm;
             }
@@ -1586,7 +1586,7 @@ test "io_uring: socket read cancellation" {
         .userdata = &read_result,
         .callback = (struct {
             fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
-                var ptr = @ptrCast(*xev.Result, @alignCast(@alignOf(xev.Result), ud));
+                var ptr = @as(*xev.Result, @ptrCast(@alignCast(ud)));
                 ptr.* = r;
                 _ = c;
                 _ = l;

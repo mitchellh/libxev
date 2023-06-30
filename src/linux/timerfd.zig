@@ -16,7 +16,7 @@ pub const Timerfd = struct {
     pub fn init(clock: Clock, flags: u32) !Timerfd {
         const res = linux.timerfd_create(@intFromEnum(clock), flags);
         return switch (linux.getErrno(res)) {
-            .SUCCESS => .{ .fd = @intCast(i32, res) },
+            .SUCCESS => .{ .fd = @as(i32, @intCast(res)) },
             else => error.UnknownError,
         };
     }
@@ -35,8 +35,8 @@ pub const Timerfd = struct {
         const res = linux.timerfd_settime(
             self.fd,
             flags,
-            @ptrCast(*const linux.itimerspec, new_value),
-            @ptrCast(?*linux.itimerspec, old_value),
+            @as(*const linux.itimerspec, @ptrCast(new_value)),
+            @as(?*linux.itimerspec, @ptrCast(old_value)),
         );
 
         return switch (linux.getErrno(res)) {
@@ -48,7 +48,7 @@ pub const Timerfd = struct {
     /// timerfd_gettime
     pub fn get(self: *const Timerfd) !Spec {
         var out: Spec = undefined;
-        const res = linux.timerfd_gettime(self.fd, @ptrCast(*linux.itimerspec, &out));
+        const res = linux.timerfd_gettime(self.fd, @as(*linux.itimerspec, @ptrCast(&out)));
         return switch (linux.getErrno(res)) {
             .SUCCESS => out,
             else => error.UnknownError,
