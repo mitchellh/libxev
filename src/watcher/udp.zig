@@ -122,7 +122,7 @@ fn UDPSendto(comptime xev: type) type {
                                     l_inner,
                                     c_inner,
                                     s_inner,
-                                    std.net.Address.initPosix(c_inner.op.recvfrom.addr),
+                                    std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)),
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
