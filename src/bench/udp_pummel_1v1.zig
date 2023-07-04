@@ -123,6 +123,7 @@ const Receiver = struct {
         _: *xev.Loop,
         _: *xev.Completion,
         _: *xev.UDP.State,
+        _: std.net.Address,
         _: xev.UDP,
         b: xev.ReadBuffer,
         r: xev.UDP.ReadError!usize,

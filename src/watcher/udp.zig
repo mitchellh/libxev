@@ -76,8 +76,6 @@ fn UDPSendto(comptime xev: type) type {
         /// requeue the read if additional reads want to be performed. Additional
         /// reads simultaneously can be queued by calling this multiple times. Note
         /// that depending on the backend, the reads can happen out of order.
-        ///
-        /// TODO(mitchellh): a way to receive the remote addr
         pub fn read(
             self: Self,
             loop: *xev.Loop,
@@ -91,6 +89,7 @@ fn UDPSendto(comptime xev: type) type {
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: *State,
+                addr: std.net.Address,
                 s: Self,
                 b: xev.ReadBuffer,
                 r: ReadError!usize,
@@ -123,6 +122,7 @@ fn UDPSendto(comptime xev: type) type {
                                     l_inner,
                                     c_inner,
                                     s_inner,
+                                    std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)),
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
@@ -223,7 +223,7 @@ fn UDPSendMsg(comptime xev: type) type {
             op: union {
                 recv: struct {
                     buf: xev.ReadBuffer,
-                    addr: ?*std.net.Address,
+                    addr_buffer: std.os.sockaddr.storage = undefined,
                     msghdr: std.os.msghdr,
                     iov: [1]std.os.iovec,
                 },
@@ -278,8 +278,6 @@ fn UDPSendMsg(comptime xev: type) type {
         /// requeue the read if additional reads want to be performed. Additional
         /// reads simultaneously can be queued by calling this multiple times. Note
         /// that depending on the backend, the reads can happen out of order.
-        ///
-        /// TODO(mitchellh): a way to receive the remote addr
         pub fn read(
             self: Self,
             loop: *xev.Loop,
@@ -293,6 +291,7 @@ fn UDPSendMsg(comptime xev: type) type {
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: *State,
+                addr: std.net.Address,
                 s: Self,
                 b: xev.ReadBuffer,
                 r: ReadError!usize,
@@ -303,11 +302,10 @@ fn UDPSendMsg(comptime xev: type) type {
                 .userdata = userdata,
                 .op = .{
                     .recv = .{
-                        .addr = null,
                         .buf = buf,
                         .msghdr = .{
-                            .name = null,
-                            .namelen = 0,
+                            .name = @ptrCast(&s.op.recv.addr_buffer),
+                            .namelen = @sizeOf(@TypeOf(s.op.recv.addr_buffer)),
                             .iov = &s.op.recv.iov,
                             .iovlen = 1,
                             .control = null,
@@ -357,6 +355,7 @@ fn UDPSendMsg(comptime xev: type) type {
                             l_inner,
                             c_inner,
                             s_inner,
+                            std.net.Address.initPosix(@ptrCast(&s_inner.op.recv.addr_buffer)),
                             initFd(c_inner.op.recvmsg.fd),
                             s_inner.op.recv.buf,
                             if (r.recvmsg) |v| v else |err| err,
@@ -519,6 +518,7 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: *Impl.State,
+                    _: std.net.Address,
                     _: Impl,
                     _: xev.ReadBuffer,
                     r: Impl.ReadError!usize,

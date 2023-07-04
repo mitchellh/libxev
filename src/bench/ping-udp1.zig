@@ -104,6 +104,7 @@ const Pinger = struct {
         loop: *xev.Loop,
         c: *xev.Completion,
         _: *xev.UDP.State,
+        _: std.net.Address,
         socket: xev.UDP,
         buf: xev.ReadBuffer,
         r: xev.UDP.ReadError!usize,
