@@ -159,9 +159,25 @@ pub const Loop = struct {
         }
     }
 
+    /// The errors that can come from submit. This has to be explicit
+    /// for now since Zig 0.11 has issues with the inferred error set.
+    /// We should try again someday.
+    pub const SubmitError = error{
+        Unexpected,
+        SystemResources,
+        FileDescriptorInvalid,
+        FileDescriptorInBadState,
+        CompletionQueueOvercommitted,
+        SubmissionQueueEntryInvalid,
+        BufferInvalid,
+        RingShuttingDown,
+        OpcodeNotSupported,
+        SignalInterrupt,
+    };
+
     /// Submit all queued operations. This never does an io_uring submit
     /// and wait operation.
-    pub fn submit(self: *Loop) !void {
+    pub fn submit(self: *Loop) SubmitError!void {
         _ = try self.ring.submit();
 
         // If we have any submissions that failed to submit, we try to
