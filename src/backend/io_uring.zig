@@ -616,6 +616,9 @@ pub const Completion = struct {
             .connect => .{
                 .connect = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
+                    .CONNREFUSED => error.ConnectionRefused,
+                    .TIMEDOUT => error.TimedOut,
+                    .HOSTUNREACH => error.HostUnreachable,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -992,6 +995,9 @@ pub const CloseError = error{
 pub const ConnectError = error{
     Canceled,
     Unexpected,
+    ConnectionRefused,
+    HostUnreachable,
+    TimedOut,
 };
 
 pub const PollError = error{
