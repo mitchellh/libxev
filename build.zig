@@ -2,32 +2,11 @@ const std = @import("std");
 const LibExeObjStep = std.build.LibExeObjStep;
 const ScdocStep = @import("src/build/ScdocStep.zig");
 
-/// DEPRECATED: This is the old std.build.Pkg for older versions of Zig.
-/// I won't keep this around too long but there is no harm in exposing it
-/// for now since our code works with older versions just fine (for now).
-pub const pkg = std.build.Pkg{
-    .name = "xev",
-    .source = .{ .path = thisDir() ++ "/src/main.zig" },
-};
-
-/// Returns the module for libxev. The recommended approach is to depend
-/// on libxev in your build.zig.zon file, then use
-/// `b.dependency("libxev").module("xev")`. But if you're not using
-/// a build.zig.zon yet this will work.
-pub fn module(b: *std.Build) *std.Build.Module {
-    return b.createModule(.{
-        .source_file = .{ .path = (comptime thisDir()) ++ "/src/main.zig" },
-    });
-}
-
 pub fn build(b: *std.Build) !void {
-    // Modules available to downstream dependencies
-    _ = b.addModule("xev", .{
-        .source_file = .{ .path = (comptime thisDir()) ++ "/src/main.zig" },
-    });
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    _ = b.addModule("xev", .{ .source_file = .{ .path = "src/main.zig" } });
 
     const man_pages = b.option(
         bool,
@@ -245,7 +224,7 @@ fn benchTargets(
             .target = target,
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
-        c_exe.addModule("xev", module(b));
+        c_exe.addModule("xev", b.modules.get("xev").?);
         if (install) {
             const install_step = b.addInstallArtifact(c_exe, .{
                 .dest_dir = .{ .override = .{ .custom = "bench" } },
@@ -303,7 +282,7 @@ fn exampleTargets(
                 .target = target,
                 .optimize = optimize,
             });
-            c_exe.addModule("xev", module(b));
+            c_exe.addModule("xev", b.modules.get("xev").?);
             if (install) {
                 const install_step = b.addInstallArtifact(c_exe, .{
                     .dest_dir = .{ .override = .{ .custom = "example" } },
