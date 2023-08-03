@@ -183,6 +183,34 @@ int main(void) {
 </tr>
 </table>
 
+## Installation (Zig)
+
+**These instructions are for Zig downstream users only.** If you are
+using the C API to libxev, see the "Build" section.
+
+This package works with Zig package manager introduces in Zig 0.11.
+Create a `build.zig.zon` file like this:
+
+```zig
+.{
+    .name = "my-project",
+    .version = "0.0.0",
+    .dependencies = .{
+        .libxev = .{
+            .url = "https://github.com/mitchellh/libxev/archive/<git-ref-here>.tar.gz",
+            .hash = "12208070233b17de6be05e32af096a6760682b48598323234824def41789e993432c",
+        },
+    },
+}
+```
+
+And in your `build.zig`:
+
+```zig
+const xev = b.dependency("libxev", .{ .target = target, .optimize = optimize });
+exe.addModule("xev", xev.module("xev"));
+```
+
 ## Documentation
 
 🚧 Documentation is a work-in-progress. 🚧
