@@ -111,8 +111,11 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         });
         static_binding_test.linkLibC();
-        static_binding_test.addIncludePath("include");
-        static_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" });
+        static_binding_test.addIncludePath(.{ .path = "include" });
+        static_binding_test.addCSourceFile(.{
+            .file = .{ .path = "examples/_basic.c" },
+            .flags = &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" },
+        });
         static_binding_test.linkLibrary(static_lib);
         if (test_install) b.installArtifact(static_binding_test);
 
@@ -145,8 +148,11 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         });
         dynamic_binding_test.linkLibC();
-        dynamic_binding_test.addIncludePath("include");
-        dynamic_binding_test.addCSourceFile("examples/_basic.c", &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" });
+        dynamic_binding_test.addIncludePath(.{ .path = "include" });
+        dynamic_binding_test.addCSourceFile(.{
+            .file = .{ .path = "examples/_basic.c" },
+            .flags = &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" },
+        });
         dynamic_binding_test.linkLibrary(dynamic_lib);
         if (test_install) b.installArtifact(dynamic_binding_test);
 
@@ -240,8 +246,12 @@ fn benchTargets(
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
         c_exe.addModule("xev", module(b));
-        c_exe.override_dest_dir = std.Build.InstallDir{ .custom = "bench" };
-        if (install) b.installArtifact(c_exe);
+        if (install) {
+            const install_step = b.addInstallArtifact(c_exe, .{
+                .dest_dir = .{ .override = .{ .custom = "bench" } },
+            });
+            b.getInstallStep().dependOn(&install_step.step);
+        }
 
         // Store the mapping
         try map.put(try b.allocator.dupe(u8, name), c_exe);
@@ -294,8 +304,12 @@ fn exampleTargets(
                 .optimize = optimize,
             });
             c_exe.addModule("xev", module(b));
-            c_exe.override_dest_dir = std.Build.InstallDir{ .custom = "example" };
-            if (install) b.installArtifact(c_exe);
+            if (install) {
+                const install_step = b.addInstallArtifact(c_exe, .{
+                    .dest_dir = .{ .override = .{ .custom = "example" } },
+                });
+                b.getInstallStep().dependOn(&install_step.step);
+            }
         } else {
             const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
             const c_exe = b.addExecutable(.{
@@ -304,17 +318,24 @@ fn exampleTargets(
                 .optimize = optimize,
             });
             c_exe.linkLibC();
-            c_exe.addIncludePath("include");
-            c_exe.addCSourceFile(path, &[_][]const u8{
-                "-Wall",
-                "-Wextra",
-                "-pedantic",
-                "-std=c99",
-                "-D_POSIX_C_SOURCE=199309L",
+            c_exe.addIncludePath(.{ .path = "include" });
+            c_exe.addCSourceFile(.{
+                .file = .{ .path = path },
+                .flags = &[_][]const u8{
+                    "-Wall",
+                    "-Wextra",
+                    "-pedantic",
+                    "-std=c99",
+                    "-D_POSIX_C_SOURCE=199309L",
+                },
             });
             c_exe.linkLibrary(c_lib);
-            c_exe.override_dest_dir = std.Build.InstallDir{ .custom = "example" };
-            if (install) b.installArtifact(c_exe);
+            if (install) {
+                const install_step = b.addInstallArtifact(c_exe, .{
+                    .dest_dir = .{ .override = .{ .custom = "example" } },
+                });
+                b.getInstallStep().dependOn(&install_step.step);
+            }
         }
 
         // If we have specified a specific name, only install that one.
