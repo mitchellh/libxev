@@ -538,6 +538,48 @@ pub const Loop = struct {
         // here.
         sqe.user_data = @intFromPtr(completion);
     }
+
+    /// Submits a completion cancelation request.
+    /// Results in error.NotFound if the completion couldn't be located because
+    /// it was already completed or an invalid Completion was provided.
+    pub fn cancel(
+        self: *Loop,
+        c: *Completion,
+        c_cancel: *Completion,
+        comptime Userdata: type,
+        userdata: ?*Userdata,
+        comptime cb: *const fn (
+            ud: ?*Userdata,
+            l: *xev.Loop,
+            c: *xev.Completion,
+            r: CancelError!void,
+        ) xev.CallbackAction,
+    ) void {
+        c_cancel.* = .{
+            .op = .{
+                .cancel = .{
+                    .c = c,
+                },
+            },
+            .userdata = userdata,
+            .callback = (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    return @call(.always_inline, cb, .{
+                        @as(?*Userdata, if (Userdata == void) null else @ptrCast(@alignCast(ud))),
+                        l_inner,
+                        c_inner,
+                        if (r.cancel) |_| {} else |err| err,
+                    });
+                }
+            }).callback,
+        };
+        self.add(c_cancel);
+    }
 };
 
 /// A completion represents a single queued request in the ring.
@@ -1684,22 +1726,22 @@ test "io_uring: socket read cancellation" {
     loop.add(&c_read);
 
     // Cancellation
-    var c_read_cancel: Completion = .{
-        .op = .{
-            .cancel = .{
-                .c = &c_read,
-            },
-        },
-        .callback = (struct {
-            fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
-                _ = r;
+    var c_read_cancel = Completion{};
+    loop.cancel(
+        &c_read,
+        &c_read_cancel,
+        void,
+        null,
+        (struct {
+            fn callback(ud: ?*void, l: *xev.Loop, c: *xev.Completion, r: xev.CancelError!void) xev.CallbackAction {
+                r catch unreachable;
                 _ = c;
                 _ = l;
                 _ = ud;
                 return .disarm;
             }
         }).callback,
-    };
+    );
     loop.add(&c_read_cancel);
 
     // Wait for the read to be cancelled
