@@ -355,6 +355,7 @@ pub fn File(comptime xev: type) type {
             }).callback);
 
             try loop.run(.until_done);
+            try testing.expectEqual(read_len, write_buf.len);
             try testing.expectEqualSlices(u8, &write_buf, read_buf[0..read_len]);
         }
 

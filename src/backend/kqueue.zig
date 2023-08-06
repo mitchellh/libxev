@@ -176,7 +176,8 @@ pub const Loop = struct {
                     // If we're deleting then we create a deletion event and
                     // queue the completion to notify cancellation.
                     .deleting => if (c.kevent()) |ev| {
-                        c.result = c.syscall_result(-1 * @as(i32, @intCast(@intFromEnum(os.system.E.CANCELED))));
+                        const ecanceled = -1 * @as(i32, @intCast(@intFromEnum(os.system.E.CANCELED)));
+                        c.result = c.syscall_result(ecanceled);
                         c.flags.state = .dead;
                         self.completions.push(c);
 
@@ -853,7 +854,8 @@ pub const Loop = struct {
                     // We use EPERM as a way to note there is no thread
                     // pool. We can change this in the future if there is
                     // a better choice.
-                    c.result = c.syscall_result(@intFromEnum(os.E.PERM));
+                    const eperm = -1 * @as(i32, @intCast(@intFromEnum(os.system.E.PERM)));
+                    c.result = c.syscall_result(eperm);
                     self.completions.push(c);
                     return false;
                 };
@@ -1275,13 +1277,14 @@ pub const Completion = struct {
     /// in the situation that kqueue fails to enqueue the completion or
     /// a raw syscall fails.
     fn syscall_result(c: *Completion, r: i32) Result {
-        const errno = os.errno(r);
+        const errno: std.os.E = if (r >= 0) .SUCCESS else @enumFromInt(-r);
         return switch (c.op) {
             .noop => unreachable,
 
             .accept => .{
                 .accept = switch (errno) {
                     .SUCCESS => r,
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1289,6 +1292,7 @@ pub const Completion = struct {
             .connect => .{
                 .connect = switch (errno) {
                     .SUCCESS => {},
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1296,6 +1300,8 @@ pub const Completion = struct {
             .write => .{
                 .write = switch (errno) {
                     .SUCCESS => @intCast(r),
+                    .CANCELED => error.Canceled,
+                    .PERM => error.PermissionDenied,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1303,6 +1309,7 @@ pub const Completion = struct {
             .pwrite => .{
                 .pwrite = switch (errno) {
                     .SUCCESS => @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1310,6 +1317,8 @@ pub const Completion = struct {
             .read => .{
                 .read = switch (errno) {
                     .SUCCESS => if (r == 0) error.EOF else @intCast(r),
+                    .CANCELED => error.Canceled,
+                    .PERM => error.PermissionDenied,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1317,6 +1326,7 @@ pub const Completion = struct {
             .pread => .{
                 .pread = switch (errno) {
                     .SUCCESS => if (r == 0) error.EOF else @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1324,6 +1334,7 @@ pub const Completion = struct {
             .send => .{
                 .send = switch (errno) {
                     .SUCCESS => @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1331,6 +1342,7 @@ pub const Completion = struct {
             .recv => .{
                 .recv = switch (errno) {
                     .SUCCESS => if (r == 0) error.EOF else @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1338,6 +1350,7 @@ pub const Completion = struct {
             .sendto => .{
                 .sendto = switch (errno) {
                     .SUCCESS => @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1345,6 +1358,7 @@ pub const Completion = struct {
             .recvfrom => .{
                 .recvfrom = switch (errno) {
                     .SUCCESS => @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1352,6 +1366,7 @@ pub const Completion = struct {
             .machport => .{
                 .machport = switch (errno) {
                     .SUCCESS => {},
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1359,6 +1374,7 @@ pub const Completion = struct {
             .proc => .{
                 .proc = switch (errno) {
                     .SUCCESS => @intCast(r),
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1366,6 +1382,7 @@ pub const Completion = struct {
             .shutdown => .{
                 .shutdown = switch (errno) {
                     .SUCCESS => {},
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1373,6 +1390,7 @@ pub const Completion = struct {
             .close => .{
                 .close = switch (errno) {
                     .SUCCESS => {},
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1381,6 +1399,7 @@ pub const Completion = struct {
                 .timer = switch (errno) {
                     // Success is impossible because timers don't execute syscalls.
                     .SUCCESS => unreachable,
+                    .CANCELED => error.Canceled,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1388,6 +1407,7 @@ pub const Completion = struct {
             .cancel => .{
                 .cancel = switch (errno) {
                     .SUCCESS => {},
+                    .CANCELED => error.Canceled,
 
                     // Syscall errors should not be possible since cancel
                     // doesn't run any syscalls.
@@ -1534,13 +1554,17 @@ pub const Result = union(OperationType) {
     cancel: CancelError!void,
 };
 
-pub const CancelError = error{};
+pub const CancelError = error{
+    Canceled,
+};
 
 pub const AcceptError = os.KEventError || os.AcceptError || error{
+    Canceled,
     Unexpected,
 };
 
 pub const ConnectError = os.KEventError || os.ConnectError || error{
+    Canceled,
     Unexpected,
 };
 
@@ -1550,6 +1574,8 @@ pub const ReadError = os.KEventError ||
     os.RecvFromError ||
     error{
     EOF,
+    Canceled,
+    PermissionDenied,
     Unexpected,
 };
 
@@ -1560,27 +1586,34 @@ pub const WriteError = os.KEventError ||
     os.SendMsgError ||
     os.SendToError ||
     error{
+    Canceled,
+    PermissionDenied,
     Unexpected,
 };
 
 pub const MachPortError = os.KEventError || error{
+    Canceled,
     Unexpected,
 };
 
 pub const ProcError = os.KEventError || error{
+    Canceled,
     MissingKevent,
     Unexpected,
 };
 
 pub const ShutdownError = os.ShutdownError || error{
+    Canceled,
     Unexpected,
 };
 
 pub const CloseError = error{
+    Canceled,
     Unexpected,
 };
 
 pub const TimerError = error{
+    Canceled,
     Unexpected,
 };
 
@@ -2574,8 +2607,11 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
                 _: *xev.Completion,
                 r: xev.Result,
             ) xev.CallbackAction {
-                const conn = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
-                conn.* = r.accept catch unreachable;
+                _ = ud;
+                _ = r.accept catch |err| switch (err) {
+                    error.Canceled => {},
+                    else => @panic("wrong"),
+                };
                 return .disarm;
             }
         }).callback,
@@ -2612,7 +2648,6 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
     try testing.expectEqual(@as(usize, 2), loop.active);
     try loop.run(.once);
     try testing.expect(cancel_called);
-    try testing.expect(server_conn == -89); // accept called
 
     // Both callbacks are called active count should be 0
     try testing.expectEqual(@as(usize, 0), loop.active);
