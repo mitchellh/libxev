@@ -109,6 +109,7 @@ pub fn Intrusive(
                 if (b.heap.next) |b_next| {
                     a.heap.next = b_next;
                     b_next.heap.prev = a;
+                    b.heap.next = null;
                 }
 
                 // If A has a child, then B becomes the leftmost sibling
@@ -339,4 +340,40 @@ test "heap: million values" {
     }
     try testing.expect(h.deleteMin() == null);
     try testing.expect(count == NUM_TIMERS);
+}
+
+test "heap: dangling next pointer" {
+    const testing = std.testing;
+    const Elem = struct {
+        const Self = @This();
+        value: usize = 0,
+        heap: IntrusiveField(Self) = .{},
+    };
+
+    const Heap = Intrusive(Elem, void, (struct {
+        fn less(ctx: void, a: *Elem, b: *Elem) bool {
+            _ = ctx;
+            return a.value < b.value;
+        }
+    }).less);
+
+    var a: Elem = .{ .value = 2 };
+    var b: Elem = .{ .value = 4 };
+    var c: Elem = .{ .value = 5 };
+    var d: Elem = .{ .value = 1 };
+    var e: Elem = .{ .value = 3 };
+
+    var h: Heap = .{ .context = {} };
+    h.insert(&a);
+    h.insert(&b);
+    h.insert(&c);
+    h.insert(&d);
+    h.insert(&e);
+
+    try testing.expect(h.deleteMin().?.value == 1);
+    try testing.expect(h.deleteMin().?.value == 2);
+    try testing.expect(h.deleteMin().?.value == 3);
+    try testing.expect(h.deleteMin().?.value == 4);
+    try testing.expect(h.deleteMin().?.value == 5);
+    try testing.expect(h.deleteMin() == null);
 }
