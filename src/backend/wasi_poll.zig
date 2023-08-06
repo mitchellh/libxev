@@ -324,8 +324,20 @@ pub const Loop = struct {
                 break :res null;
             },
 
+            .pread => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .pread = err };
+                sub.* = completion.subscription();
+                break :res null;
+            },
+
             .write => res: {
                 const sub = self.batch.get(completion) catch |err| break :res .{ .write = err };
+                sub.* = completion.subscription();
+                break :res null;
+            },
+
+            .pwrite => res: {
+                const sub = self.batch.get(completion) catch |err| break :res .{ .pwrite = err };
                 sub.* = completion.subscription();
                 break :res null;
             },
@@ -650,7 +662,31 @@ pub const Completion = struct {
                 },
             },
 
+            .pread => |v| .{
+                .userdata = @intFromPtr(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .u = .{
+                        .fd_read = .{
+                            .fd = v.fd,
+                        },
+                    },
+                },
+            },
+
             .write => |v| .{
+                .userdata = @intFromPtr(self),
+                .u = .{
+                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .u = .{
+                        .fd_write = .{
+                            .fd = v.fd,
+                        },
+                    },
+                },
+            },
+
+            .pwrite => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
                     .tag = wasi.EVENTTYPE_FD_WRITE,
@@ -746,6 +782,20 @@ pub const Completion = struct {
                 };
             },
 
+            .pread => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| std.os.pread(op.fd, v, op.offset),
+                    .array => |*v| std.os.pread(op.fd, v, op.offset),
+                };
+
+                break :res .{
+                    .pread = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
+            },
+
             .write => |*op| res: {
                 const n_ = switch (op.buffer) {
                     .slice => |v| std.os.write(op.fd, v),
@@ -754,6 +804,17 @@ pub const Completion = struct {
 
                 break :res .{
                     .write = if (n_) |n| n else |err| err,
+                };
+            },
+
+            .pwrite => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| std.os.pwrite(op.fd, v, op.offset),
+                    .array => |*v| std.os.pwrite(op.fd, v.array[0..v.len], op.offset),
+                };
+
+                break :res .{
+                    .pwrite = if (n_) |n| n else |err| err,
                 };
             },
 
@@ -826,7 +887,9 @@ pub const OperationType = enum {
     cancel,
     accept,
     read,
+    pread,
     write,
+    pwrite,
     recv,
     send,
     shutdown,
@@ -842,7 +905,9 @@ pub const Result = union(OperationType) {
     cancel: CancelError!void,
     accept: AcceptError!std.os.fd_t,
     read: ReadError!usize,
+    pread: ReadError!usize,
     write: WriteError!usize,
+    pwrite: WriteError!usize,
     recv: ReadError!usize,
     send: WriteError!usize,
     shutdown: ShutdownError!void,
@@ -871,9 +936,21 @@ pub const Operation = union(OperationType) {
         buffer: ReadBuffer,
     },
 
+    pread: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
+    },
+
     write: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
+    },
+
+    pwrite: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
     },
 
     send: struct {
@@ -944,13 +1021,13 @@ pub const ShutdownError = error{
     Unexpected,
 };
 
-pub const ReadError = Batch.Error || std.os.ReadError ||
+pub const ReadError = Batch.Error || std.os.ReadError || std.os.PReadError ||
     error{
     EOF,
     Unknown,
 };
 
-pub const WriteError = Batch.Error || std.os.WriteError ||
+pub const WriteError = Batch.Error || std.os.WriteError || std.os.PWriteError ||
     error{
     Unknown,
 };

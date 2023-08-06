@@ -743,7 +743,17 @@ pub const Loop = struct {
                 break :action .{ .kevent = {} };
             },
 
+            .pwrite => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
             .read => action: {
+                ev.* = c.kevent().?;
+                break :action .{ .kevent = {} };
+            },
+
+            .pread => action: {
                 ev.* = c.kevent().?;
                 break :action .{ .kevent = {} };
             },
@@ -1102,7 +1112,7 @@ pub const Completion = struct {
                 .udata = @intFromPtr(self),
             }),
 
-            inline .write, .send, .sendto => |v| kevent_init(.{
+            inline .write, .pwrite, .send, .sendto => |v| kevent_init(.{
                 .ident = @intCast(v.fd),
                 .filter = os.system.EVFILT_WRITE,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
@@ -1111,7 +1121,7 @@ pub const Completion = struct {
                 .udata = @intFromPtr(self),
             }),
 
-            inline .read, .recv, .recvfrom => |v| kevent_init(.{
+            inline .read, .pread, .recv, .recvfrom => |v| kevent_init(.{
                 .ident = @intCast(v.fd),
                 .filter = os.system.EVFILT_READ,
                 .flags = os.system.EV_ADD | os.system.EV_ENABLE,
@@ -1159,6 +1169,13 @@ pub const Completion = struct {
                 },
             },
 
+            .pwrite => |*op| .{
+                .pwrite = switch (op.buffer) {
+                    .slice => |v| os.pwrite(op.fd, v, op.offset),
+                    .array => |*v| os.pwrite(op.fd, v.array[0..v.len], op.offset),
+                },
+            },
+
             .send => |*op| .{
                 .send = switch (op.buffer) {
                     .slice => |v| os.send(op.fd, v, 0),
@@ -1181,6 +1198,20 @@ pub const Completion = struct {
 
                 break :res .{
                     .read = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
+            },
+
+            .pread => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| os.pread(op.fd, v, op.offset),
+                    .array => |*v| os.pread(op.fd, v, op.offset),
+                };
+
+                break :res .{
+                    .pread = if (n_) |n|
                         if (n == 0) error.EOF else n
                     else |err|
                         err,
@@ -1268,8 +1299,22 @@ pub const Completion = struct {
                 },
             },
 
+            .pwrite => .{
+                .pwrite = switch (errno) {
+                    .SUCCESS => @intCast(r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
             .read => .{
                 .read = switch (errno) {
+                    .SUCCESS => if (r == 0) error.EOF else @intCast(r),
+                    else => |err| os.unexpectedErrno(err),
+                },
+            },
+
+            .pread => .{
+                .pread = switch (errno) {
                     .SUCCESS => if (r == 0) error.EOF else @intCast(r),
                     else => |err| os.unexpectedErrno(err),
                 },
@@ -1361,6 +1406,8 @@ pub const OperationType = enum {
     connect,
     read,
     write,
+    pread,
+    pwrite,
     send,
     recv,
     sendto,
@@ -1423,9 +1470,21 @@ pub const Operation = union(OperationType) {
         buffer: WriteBuffer,
     },
 
+    pwrite: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
+    },
+
     read: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
+    },
+
+    pread: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
     },
 
     machport: struct {
@@ -1464,7 +1523,9 @@ pub const Result = union(OperationType) {
     sendto: WriteError!usize,
     recvfrom: ReadError!usize,
     write: WriteError!usize,
+    pwrite: WriteError!usize,
     read: ReadError!usize,
+    pread: ReadError!usize,
     machport: MachPortError!void,
     proc: ProcError!u32,
     shutdown: ShutdownError!void,
@@ -1484,6 +1545,7 @@ pub const ConnectError = os.KEventError || os.ConnectError || error{
 
 pub const ReadError = os.KEventError ||
     os.ReadError ||
+    os.PReadError ||
     os.RecvFromError ||
     error{
     EOF,
@@ -1492,6 +1554,7 @@ pub const ReadError = os.KEventError ||
 
 pub const WriteError = os.KEventError ||
     os.WriteError ||
+    os.PWriteError ||
     os.SendError ||
     os.SendMsgError ||
     os.SendToError ||

@@ -399,6 +399,22 @@ pub const Loop = struct {
                 ),
             },
 
+            .pread => |*v| switch (v.buffer) {
+                .array => |*buf| linux.io_uring_prep_read(
+                    sqe,
+                    v.fd,
+                    buf,
+                    v.offset,
+                ),
+
+                .slice => |buf| linux.io_uring_prep_read(
+                    sqe,
+                    v.fd,
+                    buf,
+                    v.offset,
+                ),
+            },
+
             .recv => |*v| switch (v.buffer) {
                 .array => |*buf| linux.io_uring_prep_recv(
                     sqe,
@@ -495,6 +511,22 @@ pub const Loop = struct {
                     // offset is a u64 but if the value is -1 then it uses
                     // the offset in the fd.
                     @bitCast(@as(i64, -1)),
+                ),
+            },
+
+            .pwrite => |*v| switch (v.buffer) {
+                .array => |*buf| linux.io_uring_prep_write(
+                    sqe,
+                    v.fd,
+                    buf.array[0..buf.len],
+                    v.offset,
+                ),
+
+                .slice => |buf| linux.io_uring_prep_write(
+                    sqe,
+                    v.fd,
+                    buf,
+                    v.offset,
                 ),
             },
 
@@ -598,6 +630,10 @@ pub const Completion = struct {
                 .read = self.readResult(.read, res),
             },
 
+            .pread => .{
+                .pread = self.readResult(.pread, res),
+            },
+
             .recv => .{
                 .recv = self.readResult(.recv, res),
             },
@@ -676,6 +712,15 @@ pub const Completion = struct {
                 },
             },
 
+            .pwrite => .{
+                .pwrite = if (res >= 0)
+                    @intCast(res)
+                else switch (@as(std.os.E, @enumFromInt(-res))) {
+                    .CANCELED => error.Canceled,
+                    else => |errno| std.os.unexpectedErrno(errno),
+                },
+            },
+
             .cancel => .{
                 .cancel = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .NOENT => error.NotFound,
@@ -733,6 +778,9 @@ pub const OperationType = enum {
     /// Read
     read,
 
+    /// PRead
+    pread,
+
     /// Receive a message from a socket.
     recv,
 
@@ -747,6 +795,9 @@ pub const OperationType = enum {
 
     /// Shutdown all or part of a full-duplex connection.
     shutdown,
+
+    /// PWrite
+    pwrite,
 
     /// Write
     write,
@@ -771,6 +822,7 @@ pub const Result = union(OperationType) {
     close: CloseError!void,
     poll: PollError!void,
     read: ReadError!usize,
+    pread: ReadError!usize,
     recv: ReadError!usize,
     send: WriteError!usize,
     sendmsg: WriteError!usize,
@@ -779,6 +831,7 @@ pub const Result = union(OperationType) {
     timer: TimerError!TimerTrigger,
     timer_remove: TimerRemoveError!void,
     write: WriteError!usize,
+    pwrite: WriteError!usize,
     cancel: CancelError!void,
 };
 
@@ -813,6 +866,12 @@ pub const Operation = union(OperationType) {
     read: struct {
         fd: std.os.fd_t,
         buffer: ReadBuffer,
+    },
+
+    pread: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
     },
 
     recv: struct {
@@ -864,6 +923,12 @@ pub const Operation = union(OperationType) {
     write: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
+    },
+
+    pwrite: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
     },
 
     cancel: struct {
