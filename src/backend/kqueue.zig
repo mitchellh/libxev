@@ -2574,7 +2574,7 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
                 _: *xev.Completion,
                 r: xev.Result,
             ) xev.CallbackAction {
-                const conn = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const conn = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 conn.* = r.accept catch unreachable;
                 return .disarm;
             }
@@ -2601,7 +2601,7 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
                 r: xev.Result,
             ) xev.CallbackAction {
                 _ = r.cancel catch unreachable;
-                const ptr = @ptrCast(*?bool, @alignCast(@alignOf(?bool), ud.?));
+                const ptr = @as(*?bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
                 return .disarm;
             }
@@ -2635,7 +2635,7 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
-                const ptr = @ptrCast(*os.socket_t, @alignCast(@alignOf(os.socket_t), ud.?));
+                const ptr = @as(*os.socket_t, @ptrCast(@alignCast(ud.?)));
                 ptr.* = 0;
                 return .disarm;
             }
