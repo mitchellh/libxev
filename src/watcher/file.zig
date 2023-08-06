@@ -37,9 +37,7 @@ pub fn File(comptime xev: type) type {
             .threadpool = true,
         });
 
-        /// Initialize a new TCP with the family from the given address. Only
-        /// the family is used, the actual address has no impact on the created
-        /// resource.
+        /// Initialize a File from a std.fs.File.
         pub fn init(file: std.fs.File) !Self {
             return .{
                 .fd = file.handle,
