@@ -526,7 +526,51 @@ pub const Loop = struct {
                 )) null else |err| .{ .read = err };
             },
 
+            .pread => res: {
+                if (completion.flags.threadpool) {
+                    if (self.thread_schedule(completion)) |_|
+                        return
+                    else |err|
+                        break :res .{ .read = err };
+                }
+
+                var ev: linux.epoll_event = .{
+                    .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
+                    .data = .{ .ptr = @intFromPtr(completion) },
+                };
+
+                const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
+                break :res if (std.os.epoll_ctl(
+                    self.fd,
+                    linux.EPOLL.CTL_ADD,
+                    fd,
+                    &ev,
+                )) null else |err| .{ .read = err };
+            },
+
             .write => res: {
+                if (completion.flags.threadpool) {
+                    if (self.thread_schedule(completion)) |_|
+                        return
+                    else |err|
+                        break :res .{ .write = err };
+                }
+
+                var ev: linux.epoll_event = .{
+                    .events = linux.EPOLL.OUT,
+                    .data = .{ .ptr = @intFromPtr(completion) },
+                };
+
+                const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
+                break :res if (std.os.epoll_ctl(
+                    self.fd,
+                    linux.EPOLL.CTL_ADD,
+                    fd,
+                    &ev,
+                )) null else |err| .{ .write = err };
+            },
+
+            .pwrite => res: {
                 if (completion.flags.threadpool) {
                     if (self.thread_schedule(completion)) |_|
                         return
@@ -858,10 +902,31 @@ pub const Completion = struct {
                 };
             },
 
+            .pread => |*op| res: {
+                const n_ = switch (op.buffer) {
+                    .slice => |v| std.os.pread(op.fd, v, op.offset),
+                    .array => |*v| std.os.pread(op.fd, v, op.offset),
+                };
+
+                break :res .{
+                    .pread = if (n_) |n|
+                        if (n == 0) error.EOF else n
+                    else |err|
+                        err,
+                };
+            },
+
             .write => |*op| .{
                 .write = switch (op.buffer) {
                     .slice => |v| std.os.write(op.fd, v),
                     .array => |*v| std.os.write(op.fd, v.array[0..v.len]),
+                },
+            },
+
+            .pwrite => |*op| .{
+                .pwrite = switch (op.buffer) {
+                    .slice => |v| std.os.pwrite(op.fd, v, op.offset),
+                    .array => |*v| std.os.pwrite(op.fd, v.array[0..v.len], op.offset),
                 },
             },
 
@@ -926,8 +991,10 @@ pub const Completion = struct {
             .connect => |v| v.socket,
             .poll => |v| v.fd,
             .read => |v| v.fd,
+            .pread => |v| v.fd,
             .recv => |v| v.fd,
             .write => |v| v.fd,
+            .pwrite => |v| v.fd,
             .send => |v| v.fd,
             .sendmsg => |v| v.fd,
             .recvmsg => |v| v.fd,
@@ -949,7 +1016,9 @@ pub const OperationType = enum {
     connect,
     poll,
     read,
+    pread,
     write,
+    pwrite,
     send,
     recv,
     sendmsg,
@@ -968,7 +1037,9 @@ pub const Result = union(OperationType) {
     connect: ConnectError!void,
     poll: PollError!void,
     read: ReadError!usize,
+    pread: ReadError!usize,
     write: WriteError!usize,
+    pwrite: WriteError!usize,
     send: WriteError!usize,
     recv: ReadError!usize,
     sendmsg: WriteError!usize,
@@ -1014,9 +1085,21 @@ pub const Operation = union(OperationType) {
         buffer: ReadBuffer,
     },
 
+    pread: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
+    },
+
     write: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
+    },
+
+    pwrite: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
     },
 
     send: struct {
@@ -1169,6 +1252,7 @@ pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
 
 pub const ReadError = ThreadPoolError || std.os.EpollCtlError ||
     std.os.ReadError ||
+    std.os.PReadError ||
     std.os.RecvFromError ||
     error{
     DupFailed,
@@ -1178,6 +1262,7 @@ pub const ReadError = ThreadPoolError || std.os.EpollCtlError ||
 
 pub const WriteError = ThreadPoolError || std.os.EpollCtlError ||
     std.os.WriteError ||
+    std.os.PWriteError ||
     std.os.SendError ||
     std.os.SendMsgError ||
     error{
