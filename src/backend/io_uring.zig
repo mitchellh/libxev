@@ -692,6 +692,8 @@ pub const Completion = struct {
                     @intCast(res)
                 else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
+                    .PIPE => error.BrokenPipe,
+                    .CONNRESET => error.ConnectionReset,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -701,6 +703,8 @@ pub const Completion = struct {
                     @intCast(res)
                 else switch (@as(std.os.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
+                    .PIPE => error.BrokenPipe,
+                    .CONNRESET => error.ConnectionReset,
                     else => |errno| std.os.unexpectedErrno(errno),
                 },
             },
@@ -797,6 +801,7 @@ pub const Completion = struct {
 
         return switch (@as(std.os.E, @enumFromInt(-res))) {
             .CANCELED => error.Canceled,
+            .CONNRESET => error.ConnectionReset,
             else => |errno| std.os.unexpectedErrno(errno),
         };
     }
@@ -1051,6 +1056,7 @@ pub const ReadError = error{
     EOF,
     Canceled,
     Unexpected,
+    ConnectionReset,
 };
 
 pub const ShutdownError = error{
@@ -1060,6 +1066,8 @@ pub const ShutdownError = error{
 
 pub const WriteError = error{
     Canceled,
+    BrokenPipe,
+    ConnectionReset,
     Unexpected,
 };
 
