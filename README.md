@@ -188,7 +188,7 @@ int main(void) {
 **These instructions are for Zig downstream users only.** If you are
 using the C API to libxev, see the "Build" section.
 
-This package works with Zig package manager introduces in Zig 0.11.
+This package works with the Zig package manager introduced in Zig 0.11.
 Create a `build.zig.zon` file like this:
 
 ```zig
