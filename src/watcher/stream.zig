@@ -208,7 +208,14 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         pub const WriteRequest = struct {
             completion: xev.Completion = .{},
             userdata: ?*anyopaque = null,
-            initial_write_buffer: xev.WriteBuffer,
+
+            /// This is the original buffer passed to queueWrite. We have
+            /// to keep track of this because we may be forced to split
+            /// the write or rearm the write due to partial writes, but when
+            /// we call the final callback we want to pass the original
+            /// complete buffer.
+            full_write_buffer: xev.WriteBuffer,
+
             next: ?*@This() = null,
 
             /// This can be used to convert a completion pointer back to
@@ -252,7 +259,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             ) xev.CallbackAction,
         ) void {
             // Initialize our completion
-            req.* = .{ .initial_write_buffer = buf };
+            req.* = .{ .full_write_buffer = buf };
             // Must be kept in sync with partial write logic inside the callback
             self.write_init(&req.completion, buf);
             req.completion.userdata = q;
@@ -268,10 +275,12 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     // The queue MUST have a request because a completion
                     // can only be added if the queue is not empty, and
                     // nothing else should be popping!.
+                    //
+                    // We only peek the request here (not pop) because we may
+                    // need to rearm this write if the write was partial.
                     const req_inner: *WriteRequest = q_inner.head.?;
 
                     const cb_res = write_result(c_inner, r);
-                    var writer: Self = cb_res.writer;
                     var result: WriteError!usize = cb_res.result;
 
                     // Checks whether the entire buffer was written, this is
@@ -281,20 +290,18 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     const queued_len = writeBufferLength(cb_res.buf);
                     if (cb_res.result) |written_len| {
                         if (written_len < queued_len) {
-                            const rem_buf = writeBufferRemainder(cb_res.buf, written_len);
-
                             // Write remainder of the buffer, reusing the same completion
-                            writer.write_init(&req_inner.completion, rem_buf);
+                            const rem_buf = writeBufferRemainder(cb_res.buf, written_len);
+                            cb_res.writer.write_init(&req_inner.completion, rem_buf);
                             req_inner.completion.userdata = q_inner;
                             req_inner.completion.callback = callback;
                             l_inner.add(&req_inner.completion);
-
                             return .disarm;
                         }
 
                         // We wrote the entire buffer, modify the result to indicate
                         // to the caller that all bytes have been written.
-                        result = writeBufferLength(req_inner.initial_write_buffer);
+                        result = writeBufferLength(req_inner.full_write_buffer);
                     } else |_| {}
 
                     // We can pop previously peeked request.
@@ -304,8 +311,8 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         common.userdataValue(Userdata, req_inner.userdata),
                         l_inner,
                         c_inner,
-                        writer,
-                        req_inner.initial_write_buffer,
+                        cb_res.writer,
+                        req_inner.full_write_buffer,
                         result,
                     });
 
