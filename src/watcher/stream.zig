@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const builtin = @import("builtin");
 const common = @import("common.zig");
 const queue = @import("../queue.zig");
@@ -468,15 +469,15 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         /// Given a `WriteBuffer` and number of bytes written during the previous
         /// write operation, returns a new `WriteBuffer` with remaining data.
         fn writeBufferRemainder(buf: xev.WriteBuffer, offset: usize) xev.WriteBuffer {
-            var wb: xev.WriteBuffer = undefined;
-
             switch (buf) {
                 .slice => |slice| {
-                    wb = .{ .slice = slice[offset..] };
+                    assert(offset <= slice.len);
+                    return .{ .slice = slice[offset..] };
                 },
                 .array => |array| {
+                    assert(offset <= array.len);
                     const rem_len = array.len - offset;
-                    wb = .{ .array = .{
+                    var wb = xev.WriteBuffer{ .array = .{
                         .array = undefined,
                         .len = rem_len,
                     } };
@@ -484,10 +485,9 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         wb.array.array[0..rem_len],
                         array.array[offset..][0..rem_len],
                     );
+                    return wb;
                 },
             }
-
-            return wb;
         }
     };
 }
