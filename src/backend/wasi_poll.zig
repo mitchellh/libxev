@@ -890,8 +890,8 @@ pub const OperationType = enum {
     pread,
     write,
     pwrite,
-    recv,
     send,
+    recv,
     shutdown,
     close,
     timer,
@@ -908,8 +908,8 @@ pub const Result = union(OperationType) {
     pread: ReadError!usize,
     write: WriteError!usize,
     pwrite: WriteError!usize,
-    recv: ReadError!usize,
     send: WriteError!usize,
+    recv: ReadError!usize,
     shutdown: ShutdownError!void,
     close: CloseError!void,
     timer: TimerError!TimerTrigger,
@@ -972,11 +972,11 @@ pub const Operation = union(OperationType) {
         fd: std.os.fd_t,
     },
 
+    timer: Timer,
+
     async_wait: struct {
         wakeup: Loop.WakeupType = Loop.wakeup_init,
     },
-
-    timer: Timer,
 };
 
 const Timer = struct {
