@@ -868,8 +868,8 @@ pub const OperationType = enum {
 pub const Result = union(OperationType) {
     noop: void,
     accept: AcceptError!std.os.socket_t,
-    connect: ConnectError!void,
     close: CloseError!void,
+    connect: ConnectError!void,
     poll: PollError!void,
     read: ReadError!usize,
     pread: ReadError!usize,
@@ -878,10 +878,10 @@ pub const Result = union(OperationType) {
     sendmsg: WriteError!usize,
     recvmsg: ReadError!usize,
     shutdown: ShutdownError!void,
+    pwrite: WriteError!usize,
+    write: WriteError!usize,
     timer: TimerError!TimerTrigger,
     timer_remove: TimerRemoveError!void,
-    write: WriteError!usize,
-    pwrite: WriteError!usize,
     cancel: CancelError!void,
 };
 
@@ -899,13 +899,13 @@ pub const Operation = union(OperationType) {
         flags: u32 = std.os.SOCK.CLOEXEC,
     },
 
+    close: struct {
+        fd: std.os.fd_t,
+    },
+
     connect: struct {
         socket: std.os.socket_t,
         addr: std.net.Address,
-    },
-
-    close: struct {
-        fd: std.os.fd_t,
     },
 
     poll: struct {
@@ -929,11 +929,6 @@ pub const Operation = union(OperationType) {
         buffer: ReadBuffer,
     },
 
-    recvmsg: struct {
-        fd: std.os.fd_t,
-        msghdr: *std.os.msghdr,
-    },
-
     send: struct {
         fd: std.os.fd_t,
         buffer: WriteBuffer,
@@ -951,9 +946,25 @@ pub const Operation = union(OperationType) {
         iov: [1]std.os.iovec_const = undefined,
     },
 
+    recvmsg: struct {
+        fd: std.os.fd_t,
+        msghdr: *std.os.msghdr,
+    },
+
     shutdown: struct {
         socket: std.os.socket_t,
         how: std.os.ShutdownHow = .both,
+    },
+
+    pwrite: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
+    },
+
+    write: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
     },
 
     timer: struct {
@@ -968,17 +979,6 @@ pub const Operation = union(OperationType) {
 
     timer_remove: struct {
         timer: *Completion,
-    },
-
-    write: struct {
-        fd: std.os.fd_t,
-        buffer: WriteBuffer,
-    },
-
-    pwrite: struct {
-        fd: std.os.fd_t,
-        buffer: WriteBuffer,
-        offset: u64,
     },
 
     cancel: struct {
