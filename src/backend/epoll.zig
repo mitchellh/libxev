@@ -1012,6 +1012,7 @@ pub const Completion = struct {
 
 pub const OperationType = enum {
     noop,
+    cancel,
     accept,
     connect,
     poll,
@@ -1026,13 +1027,13 @@ pub const OperationType = enum {
     close,
     shutdown,
     timer,
-    cancel,
 };
 
 /// The result type based on the operation type. For a callback, the
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
     noop: void,
+    cancel: CancelError!void,
     accept: AcceptError!std.os.socket_t,
     connect: ConnectError!void,
     poll: PollError!void,
@@ -1047,7 +1048,6 @@ pub const Result = union(OperationType) {
     close: CloseError!void,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
-    cancel: CancelError!void,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -1129,13 +1129,13 @@ pub const Operation = union(OperationType) {
         msghdr: *std.os.msghdr,
     },
 
+    close: struct {
+        fd: std.os.fd_t,
+    },
+
     shutdown: struct {
         socket: std.os.socket_t,
         how: std.os.ShutdownHow = .both,
-    },
-
-    close: struct {
-        fd: std.os.fd_t,
     },
 
     timer: Timer,
