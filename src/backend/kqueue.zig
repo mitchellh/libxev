@@ -1460,6 +1460,28 @@ pub const Operation = union(OperationType) {
         addr: std.net.Address,
     },
 
+    read: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+    },
+
+    write: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+    },
+
+    pread: struct {
+        fd: std.os.fd_t,
+        buffer: ReadBuffer,
+        offset: u64,
+    },
+
+    pwrite: struct {
+        fd: std.os.fd_t,
+        buffer: WriteBuffer,
+        offset: u64,
+    },
+
     send: struct {
         fd: os.fd_t,
         buffer: WriteBuffer,
@@ -1486,31 +1508,8 @@ pub const Operation = union(OperationType) {
         addr_size: os.socklen_t = @sizeOf(os.sockaddr),
     },
 
-    write: struct {
+    close: struct {
         fd: std.os.fd_t,
-        buffer: WriteBuffer,
-    },
-
-    pwrite: struct {
-        fd: std.os.fd_t,
-        buffer: WriteBuffer,
-        offset: u64,
-    },
-
-    read: struct {
-        fd: std.os.fd_t,
-        buffer: ReadBuffer,
-    },
-
-    pread: struct {
-        fd: std.os.fd_t,
-        buffer: ReadBuffer,
-        offset: u64,
-    },
-
-    machport: struct {
-        port: os.system.mach_port_name_t,
-        buffer: ReadBuffer,
     },
 
     shutdown: struct {
@@ -1518,19 +1517,20 @@ pub const Operation = union(OperationType) {
         how: std.os.ShutdownHow = .both,
     },
 
-    close: struct {
-        fd: std.os.fd_t,
+    timer: Timer,
+
+    cancel: struct {
+        c: *Completion,
+    },
+
+    machport: struct {
+        port: os.system.mach_port_name_t,
+        buffer: ReadBuffer,
     },
 
     proc: struct {
         pid: std.os.pid_t,
         flags: u32 = os.system.NOTE_EXIT | os.system.NOTE_EXITSTATUS,
-    },
-
-    timer: Timer,
-
-    cancel: struct {
-        c: *Completion,
     },
 };
 
@@ -1538,20 +1538,20 @@ pub const Result = union(OperationType) {
     noop: void,
     accept: AcceptError!os.socket_t,
     connect: ConnectError!void,
-    close: CloseError!void,
+    read: ReadError!usize,
+    write: WriteError!usize,
+    pread: ReadError!usize,
+    pwrite: WriteError!usize,
     send: WriteError!usize,
     recv: ReadError!usize,
     sendto: WriteError!usize,
     recvfrom: ReadError!usize,
-    write: WriteError!usize,
-    pwrite: WriteError!usize,
-    read: ReadError!usize,
-    pread: ReadError!usize,
-    machport: MachPortError!void,
-    proc: ProcError!u32,
+    close: CloseError!void,
     shutdown: ShutdownError!void,
     timer: TimerError!TimerTrigger,
     cancel: CancelError!void,
+    machport: MachPortError!void,
+    proc: ProcError!u32,
 };
 
 pub const CancelError = error{
