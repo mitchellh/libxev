@@ -471,10 +471,10 @@ pub const Loop = struct {
                     @as(u64, @intCast(t.next.tv_nsec)) / std.time.ns_per_ms;
                 const ms = ms_next -| ms_now;
 
-                break :timeout .{
-                    .tv_sec = @intCast(ms / std.time.ms_per_s),
-                    .tv_nsec = @intCast(ms % std.time.ms_per_s),
-                };
+                // Convert to s/ns for the timespec
+                const sec = ms / std.time.ms_per_s;
+                const nsec = (ms % std.time.ms_per_s) * std.time.ns_per_ms;
+                break :timeout .{ .tv_sec = @intCast(sec), .tv_nsec = @intCast(nsec) };
             };
 
             // Wait for changes. Note that we ALWAYS attempt to get completions
