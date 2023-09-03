@@ -131,15 +131,27 @@ pub const Loop = struct {
             // of the submit call, because then we can do exactly once syscall
             // to get all our events.
             if (self.submissions.empty()) {
-                _ = try self.ring.submit_and_wait(wait);
+                _ = self.ring.submit_and_wait(wait) catch |err| switch (err) {
+                    error.SignalInterrupt => continue,
+                    else => return err,
+                };
             } else {
                 // We have submissions, meaning we have to do multiple submissions
                 // anyways so we always just do non-waiting ones.
-                _ = try self.submit();
+                _ = self.submit() catch |err| switch (err) {
+                    error.SignalInterrupt => continue,
+                    else => return err,
+                };
             }
 
             // Wait for completions...
-            const count = self.ring.copy_cqes(&cqes, wait) catch |err| return err;
+            const count = self.ring.copy_cqes(&cqes, wait) catch |err| switch (err) {
+                // EINTR means our blocking syscall was interrupted by some
+                // process signal. We just retry when we can. See signal(7).
+                error.SignalInterrupt => continue,
+                else => return err,
+            };
+
             for (cqes[0..count]) |cqe| {
                 const c = @as(?*Completion, @ptrFromInt(@as(usize, @intCast(cqe.user_data)))) orelse continue;
                 self.active -= 1;
