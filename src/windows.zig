@@ -33,7 +33,7 @@ pub const exp = struct {
         overlapped: ?*windows.OVERLAPPED,
     ) windows.ReadFileError!?usize {
         var read: windows.DWORD = 0;
-        const result: windows.BOOL = windows.kernel32.ReadFile(handle, buffer.ptr, @intCast(windows.DWORD, buffer.len), &read, overlapped);
+        const result: windows.BOOL = windows.kernel32.ReadFile(handle, buffer.ptr, @as(windows.DWORD, @intCast(buffer.len)), &read, overlapped);
         if (result == windows.FALSE) {
             const err = windows.kernel32.GetLastError();
             return switch (err) {
@@ -42,7 +42,7 @@ pub const exp = struct {
             };
         }
 
-        return @intCast(usize, read);
+        return @as(usize, @intCast(read));
     }
 
     pub fn WriteFile(
@@ -51,7 +51,7 @@ pub const exp = struct {
         overlapped: ?*windows.OVERLAPPED,
     ) windows.WriteFileError!?usize {
         var written: windows.DWORD = 0;
-        const result: windows.BOOL = windows.kernel32.WriteFile(handle, buffer.ptr, @intCast(windows.DWORD, buffer.len), &written, overlapped);
+        const result: windows.BOOL = windows.kernel32.WriteFile(handle, buffer.ptr, @as(windows.DWORD, @intCast(buffer.len)), &written, overlapped);
         if (result == windows.FALSE) {
             const err = windows.kernel32.GetLastError();
             return switch (err) {
@@ -60,7 +60,7 @@ pub const exp = struct {
             };
         }
 
-        return @intCast(usize, written);
+        return @as(usize, @intCast(written));
     }
 
     pub const DeleteFileError = error{} || std.os.UnexpectedError;

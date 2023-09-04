@@ -249,7 +249,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
-            var socket = @ptrCast(windows.ws2_32.SOCKET, self.fd);
+            var socket = @as(windows.ws2_32.SOCKET, @ptrCast(self.fd));
             try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
             try os.bind(socket, &addr.any, addr.getOsSockLen());
         }
@@ -273,6 +273,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: *State,
+                addr: std.net.Address,
                 s: Self,
                 b: xev.ReadBuffer,
                 r: ReadError!usize,
@@ -299,12 +300,13 @@ fn UDPSendtoIOCP(comptime xev: type) type {
                                 c_inner: *xev.Completion,
                                 r: xev.Result,
                             ) xev.CallbackAction {
-                                const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                                const s_inner: *State = @ptrCast(@alignCast(ud.?));
                                 return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                                    common.userdataValue(Userdata, s_inner.userdata),
                                     l_inner,
                                     c_inner,
                                     s_inner,
+                                    std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)),
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
@@ -362,9 +364,9 @@ fn UDPSendtoIOCP(comptime xev: type) type {
                                 c_inner: *xev.Completion,
                                 r: xev.Result,
                             ) xev.CallbackAction {
-                                const s_inner = @ptrCast(?*State, @alignCast(@alignOf(State), ud)).?;
+                                const s_inner: *State = @ptrCast(@alignCast(ud.?));
                                 return @call(.always_inline, cb, .{
-                                    @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), s_inner.userdata)),
+                                    common.userdataValue(Userdata, s_inner.userdata),
                                     l_inner,
                                     c_inner,
                                     s_inner,

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const os = std.os;
 const stream = @import("stream.zig");
@@ -246,7 +247,8 @@ pub fn TCP(comptime xev: type) type {
 
             // Retrieve bound port and initialize client
             var sock_len = address.getOsSockLen();
-            try os.getsockname(server.fd, &address.any, &sock_len);
+            const fd = if (xev.backend == .iocp) @as(os.windows.ws2_32.SOCKET, @ptrCast(server.fd)) else server.fd;
+            try os.getsockname(fd, &address.any, &sock_len);
             const client = try Self.init(address);
 
             //const address = try std.net.Address.parseIp4("127.0.0.1", 3132);
@@ -399,6 +401,8 @@ pub fn TCP(comptime xev: type) type {
         test "TCP: Queued writes" {
             // We have no way to get a socket in WASI from a WASI context.
             if (xev.backend == .wasi_poll) return error.SkipZigTest;
+            // Windows doesn't seem to respect the SNDBUF socket option.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
 
             const testing = std.testing;
 

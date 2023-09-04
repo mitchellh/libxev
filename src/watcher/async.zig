@@ -434,7 +434,7 @@ fn AsyncIOCP(comptime xev: type) type {
                         r: xev.Result,
                     ) xev.CallbackAction {
                         return @call(.always_inline, cb, .{
-                            @ptrCast(?*Userdata, @alignCast(@max(1, @alignOf(Userdata)), ud)),
+                            common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
                             if (r.async_wait) |_| {} else |err| err,

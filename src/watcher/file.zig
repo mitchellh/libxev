@@ -30,7 +30,7 @@ pub fn File(comptime xev: type) type {
         const FdType = if (xev.backend == .iocp) os.windows.HANDLE else os.socket_t;
 
         /// The underlying file
-        fd: std.os.fd_t,
+        fd: FdType,
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
@@ -111,6 +111,7 @@ pub fn File(comptime xev: type) type {
                     switch (xev.backend) {
                         .io_uring,
                         .wasi_poll,
+                        .iocp,
                         => {},
 
                         .epoll => {
@@ -274,6 +275,7 @@ pub fn File(comptime xev: type) type {
                     switch (xev.backend) {
                         .io_uring,
                         .wasi_poll,
+                        .iocp,
                         => {},
 
                         .epoll => {
@@ -365,6 +367,8 @@ pub fn File(comptime xev: type) type {
         test "pread/pwrite" {
             // wasi: local files don't work with poll (always ready)
             if (builtin.os.tag == .wasi) return error.SkipZigTest;
+            // windows: std.fs.File is not opened with OVERLAPPED flag.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
 
             const testing = std.testing;
 
