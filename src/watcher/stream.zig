@@ -59,12 +59,7 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
             ) xev.CallbackAction,
         ) void {
             c.* = .{
-                .op = .{
-                    .close = .{
-                        .fd = self.fd,
-                    },
-                },
-
+                .op = .{ .close = .{ .fd = self.fd } },
                 .userdata = userdata,
                 .callback = (struct {
                     fn callback(
@@ -73,11 +68,12 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
+                        var fd = T.initFd(c_inner.op.close.fd);
                         return @call(.always_inline, cb, .{
                             common.userdataValue(Userdata, ud),
                             l_inner,
                             c_inner,
-                            T.initFd(c_inner.op.close.fd),
+                            fd,
                             if (r.close) |_| {} else |err| err,
                         });
                     }
@@ -172,6 +168,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                     switch (xev.backend) {
                         .io_uring,
                         .wasi_poll,
+                        .iocp,
                         => {},
 
                         .epoll => {
@@ -447,6 +444,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     switch (xev.backend) {
                         .io_uring,
                         .wasi_poll,
+                        .iocp,
                         => {},
 
                         .epoll => {

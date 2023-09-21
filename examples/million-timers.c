@@ -14,11 +14,36 @@ xev_cb_action timer_cb(xev_loop* loop, xev_completion* c, int result, void *user
     return XEV_DISARM;
 }
 
+#ifdef _WIN32
+#include <windows.h>
+uint64_t hrtime(void) {
+    static int initialized = 0;
+    static LARGE_INTEGER start_timestamp;
+    static uint64_t qpc_tick_duration;
+
+    if (!initialized) {
+        initialized = 1;
+
+        LARGE_INTEGER qpc_freq;
+        QueryPerformanceFrequency(&qpc_freq);
+        qpc_tick_duration = 1e9 / qpc_freq.QuadPart;
+
+        QueryPerformanceCounter(&start_timestamp);
+    }
+
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    t.QuadPart -= start_timestamp.QuadPart;
+
+    return (uint64_t)t.QuadPart * qpc_tick_duration;
+}
+#else
 uint64_t hrtime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_nsec + (ts.tv_sec * 1e9);
 }
+#endif
 
 int main(void) {
   xev_watcher* timers;

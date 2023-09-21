@@ -80,8 +80,16 @@ pub fn build(b: *std.Build) !void {
             .target = target,
             .optimize = optimize,
         });
-        b.installArtifact(static_lib);
+
         static_lib.linkLibC();
+
+        // Link required libraries if targeting Windows
+        if (target.getOsTag() == .windows) {
+            static_lib.linkSystemLibrary("ws2_32");
+            static_lib.linkSystemLibrary("mswsock");
+        }
+
+        b.installArtifact(static_lib);
         b.default_step.dependOn(&static_lib.step);
 
         const static_binding_test = b.addExecutable(.{
@@ -107,10 +115,7 @@ pub fn build(b: *std.Build) !void {
     // Dynamic C lib. We only build this if this is the native target so we
     // can link to libxml2 on our native system.
     if (target.isNative()) {
-        const dynamic_lib_name = if (target.isWindows())
-            "xev.dll"
-        else
-            "xev";
+        const dynamic_lib_name = "xev";
 
         const dynamic_lib = b.addSharedLibrary(.{
             .name = dynamic_lib_name,
@@ -169,6 +174,7 @@ pub fn build(b: *std.Build) !void {
 
         b.installFile(file, "share/pkgconfig/libxev.pc");
     }
+
     // Benchmarks
     _ = try benchTargets(b, target, optimize, bench_install, bench_name);
 

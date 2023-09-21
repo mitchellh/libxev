@@ -35,7 +35,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
 
     var receivers: [n_receivers]Receiver = undefined;
     for (&receivers, 0..) |*r, i| {
-        const addr = try std.net.Address.parseIp4("0.0.0.0", @as(u16, @intCast(base_port + i)));
+        const addr = try std.net.Address.parseIp4("127.0.0.1", @as(u16, @intCast(base_port + i)));
         r.* = .{ .udp = try xev.UDP.init(addr) };
         try r.udp.bind(addr);
         r.udp.read(
@@ -52,7 +52,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
     var senders: [n_senders]Sender = undefined;
     for (&senders, 0..) |*s, i| {
         const addr = try std.net.Address.parseIp4(
-            "0.0.0.0",
+            "127.0.0.1",
             @as(u16, @intCast(base_port + (i % n_receivers))),
         );
         s.* = .{ .udp = try xev.UDP.init(addr) };

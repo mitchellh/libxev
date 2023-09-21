@@ -13,18 +13,16 @@ jobs:
           x86_64-linux-musl,
           aarch64-macos,
           x86_64-macos,
-          wasm32-wasi
+          wasm32-wasi,
+          x86_64-windows-gnu
 
           # Broken but not in any obvious way:
           # x86-linux-gnu,
           # x86-linux-musl,
-
-          # Not yet supported:
-          # i386-windows,
-          # x86_64-windows-gnu,
+          # x86-windows,
         ]
     runs-on: ${{ matrix.os }}
-    needs: test
+    needs: [test-x86_64-linux, test-x86_64-windows]
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -45,7 +43,7 @@ jobs:
     - name: test
       run: nix develop -c zig build --summary all -Dtarget=${{ matrix.target }}
 
-  test:
+  test-x86_64-linux:
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -77,3 +75,26 @@ jobs:
 
     # Run a full build to ensure that works
     - run: nix build
+
+  test-x86_64-windows:
+    strategy:
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Install zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.12.0-dev.256+8b74eae9c
+
+    - name: test
+      run: zig build test --summary all
+
+    - name: build all benchmarks and examples
+      run: zig build -Dexample -Dbench --summary all
