@@ -1,5 +1,5 @@
 const std = @import("std");
-const LibExeObjStep = std.build.LibExeObjStep;
+const CompileStep = std.build.Step.Compile;
 const ScdocStep = @import("src/build/ScdocStep.zig");
 
 pub fn build(b: *std.Build) !void {
@@ -73,7 +73,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&tests_run.step);
 
     // Static C lib
-    const static_c_lib: ?*std.build.LibExeObjStep = if (target.getOsTag() != .wasi) lib: {
+    const static_c_lib: ?*std.build.Step.Compile = if (target.getOsTag() != .wasi) lib: {
         const static_lib = b.addStaticLibrary(.{
             .name = "xev",
             .root_source_file = .{ .path = "src/c_api.zig" },
@@ -194,10 +194,10 @@ fn benchTargets(
     mode: std.builtin.Mode,
     install: bool,
     install_name: ?[]const u8,
-) !std.StringHashMap(*LibExeObjStep) {
+) !std.StringHashMap(*CompileStep) {
     _ = mode;
 
-    var map = std.StringHashMap(*LibExeObjStep).init(b.allocator);
+    var map = std.StringHashMap(*CompileStep).init(b.allocator);
 
     // Open the directory
     const c_dir_path = (comptime thisDir()) ++ "/src/bench";
@@ -249,7 +249,7 @@ fn exampleTargets(
     b: *std.Build,
     target: std.zig.CrossTarget,
     optimize: std.builtin.Mode,
-    c_lib_: ?*std.build.LibExeObjStep,
+    c_lib_: ?*std.build.Step.Compile,
     install: bool,
     install_name: ?[]const u8,
 ) !void {
