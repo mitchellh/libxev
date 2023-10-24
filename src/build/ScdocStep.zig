@@ -59,7 +59,7 @@ fn make(step: *std.build.Step, progress: *std.Progress.Node) !void {
             "rm -f {[path]s}/* && mkdir -p {[path]s}",
             .{ .path = self.out_path },
         );
-        _ = self.builder.exec(&[_][]const u8{ "sh", "-c", command });
+        _ = self.builder.run(&[_][]const u8{ "sh", "-c", command });
     }
 
     // Find all our man pages which are in our src path ending with ".scd".
@@ -88,7 +88,7 @@ fn make(step: *std.build.Step, progress: *std.Progress.Node) !void {
             "scdoc < {s} > {s}",
             .{ src, dst },
         );
-        _ = self.builder.exec(&[_][]const u8{ "sh", "-c", command });
+        _ = self.builder.run(&[_][]const u8{ "sh", "-c", command });
     }
 }
 

@@ -823,21 +823,35 @@ pub const Completion = struct {
                 var roflags: wasi.roflags_t = undefined;
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
-                        const iovs = [1]std.os.iovec{std.os.iovec{
+                        var iovs = [1]std.os.iovec{std.os.iovec{
                             .iov_base = v.ptr,
                             .iov_len = v.len,
                         }};
 
-                        break :slice wasi.sock_recv(op.fd, &iovs[0], iovs.len, 0, &n, &roflags);
+                        break :slice wasi.sock_recv(
+                            op.fd,
+                            @ptrCast(&iovs[0]),
+                            iovs.len,
+                            0,
+                            &n,
+                            &roflags,
+                        );
                     },
 
                     .array => |*v| array: {
-                        const iovs = [1]std.os.iovec{std.os.iovec{
+                        var iovs = [1]std.os.iovec{std.os.iovec{
                             .iov_base = v,
                             .iov_len = v.len,
                         }};
 
-                        break :array wasi.sock_recv(op.fd, &iovs[0], iovs.len, 0, &n, &roflags);
+                        break :array wasi.sock_recv(
+                            op.fd,
+                            @ptrCast(&iovs[0]),
+                            iovs.len,
+                            0,
+                            &n,
+                            &roflags,
+                        );
                     },
                 };
 
@@ -853,21 +867,33 @@ pub const Completion = struct {
                 var n: usize = undefined;
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
-                        const iovs = [1]std.os.iovec_const{std.os.iovec_const{
+                        var iovs = [1]std.os.iovec_const{std.os.iovec_const{
                             .iov_base = v.ptr,
                             .iov_len = v.len,
                         }};
 
-                        break :slice wasi.sock_send(op.fd, &iovs[0], iovs.len, 0, &n);
+                        break :slice wasi.sock_send(
+                            op.fd,
+                            @ptrCast(&iovs[0]),
+                            iovs.len,
+                            0,
+                            &n,
+                        );
                     },
 
                     .array => |*v| array: {
-                        const iovs = [1]std.os.iovec_const{std.os.iovec_const{
+                        var iovs = [1]std.os.iovec_const{std.os.iovec_const{
                             .iov_base = &v.array,
                             .iov_len = v.len,
                         }};
 
-                        break :array wasi.sock_send(op.fd, &iovs[0], iovs.len, 0, &n);
+                        break :array wasi.sock_send(
+                            op.fd,
+                            @ptrCast(&iovs[0]),
+                            iovs.len,
+                            0,
+                            &n,
+                        );
                     },
                 };
 
