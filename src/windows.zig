@@ -5,6 +5,9 @@ pub usingnamespace std.os.windows;
 
 /// Namespace containing missing utils from std
 pub const exp = struct {
+    pub const STATUS_PENDING = 0x00000103;
+    pub const STILL_ACTIVE = STATUS_PENDING;
+
     pub const JOBOBJECT_ASSOCIATE_COMPLETION_PORT = extern struct {
         CompletionKey: windows.ULONG_PTR,
         CompletionPort: windows.HANDLE,

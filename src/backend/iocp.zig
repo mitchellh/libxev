@@ -329,25 +329,12 @@ pub const Loop = struct {
                     // value, and not the address of the overlapped structure. The Completion pointer is passed
                     // as the completion key instead.
                     const completion: *Completion = @ptrFromInt(entry.lpCompletionKey);
-                    const message_type: windows.exp.JOB_OBJECT_MSG_TYPE = @enumFromInt(entry.dwNumberOfBytesTransferred);
-                    completion.result = switch (message_type) {
-                        inline .JOB_OBJECT_MSG_END_OF_JOB_TIME,
-                        .JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT,
-                        .JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
-                        .JOB_OBJECT_MSG_JOB_CYCLE_TIME_LIMIT,
-                        .JOB_OBJECT_MSG_SILO_TERMINATED,
-                        => |t| .{ .job_object =  @unionInit(JobObjectResult, @tagName(t), {}) },
-                        inline .JOB_OBJECT_MSG_END_OF_PROCESS_TIME,
-                        .JOB_OBJECT_MSG_NEW_PROCESS,
-                        .JOB_OBJECT_MSG_EXIT_PROCESS,
-                        .JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS,
-                        .JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT,
-                        .JOB_OBJECT_MSG_JOB_MEMORY_LIMIT,
-                        .JOB_OBJECT_MSG_NOTIFICATION_LIMIT,
-                        => |t| .{ .job_object =  @unionInit(JobObjectResult, @tagName(t), @intFromPtr(entry.lpOverlapped)) },
-                        else => .{ .job_object = JobObjectError.UnknownMessageType },
-                    };
-
+                    completion.result = .{ .job_object = .{
+                        .message = .{
+                            .type = @enumFromInt(entry.dwNumberOfBytesTransferred),
+                            .value = @intFromPtr(entry.lpOverlapped),
+                        },
+                    } };
                     break :completion completion;
                 };
 
@@ -744,11 +731,18 @@ pub const Loop = struct {
                     ) catch |err| break :action .{ .result = .{ .job_object = err } };
 
                     v.associated = true;
+                    const action = completion.callback(completion.userdata, self, completion, .{ .job_object = .{ .associated = {} } });
+                    switch (action) {
+                        .disarm => {
+                            completion.flags.state = .dead;
+                            return;
+                        },
+                        .rearm => break :action .{ .submitted = {} },
+                    }
                 }
 
                 break :action .{ .submitted = {} };
             },
-
         };
 
         switch (action) {
@@ -1123,7 +1117,6 @@ pub const Completion = struct {
             .async_wait => .{ .async_wait = {} },
 
             .job_object => self.result.?,
-
         };
     }
 
@@ -1193,7 +1186,6 @@ pub const OperationType = enum {
 
     /// Receive a notification from a job object associated with a completion port
     job_object,
-
 };
 
 /// All the supported operations of this event loop. These are always
@@ -1378,42 +1370,15 @@ pub const JobObjectError = error{
     Unexpected,
 };
 
-pub const JobObjectResult = union(windows.exp.JOB_OBJECT_MSG_TYPE) {
-    /// Time limit was reached
-    JOB_OBJECT_MSG_END_OF_JOB_TIME: void,
+pub const JobObjectResult = union(enum) {
+    // The job object was associated with the completion port
+    associated: void,
 
-    /// Process exceed its time limit. Value is the process ID.
-    JOB_OBJECT_MSG_END_OF_PROCESS_TIME: usize,
-
-    /// Active process limit was exceeded
-    JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT: void,
-
-    /// Active process count is zero
-    JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO: void,
-
-    /// Process has been added to the job. Value is the process ID.
-    JOB_OBJECT_MSG_NEW_PROCESS: usize,
-
-    /// Process exited. Value is the process ID.
-    JOB_OBJECT_MSG_EXIT_PROCESS: usize,
-
-    /// Process exited abnormally. Value is the process ID.
-    JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS: usize,
-
-    /// Process exceeded its memory limit. Value is the process ID.
-    JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT: usize,
-
-    /// Process exceeded the job-wide memory limit. Value is the process ID.
-    JOB_OBJECT_MSG_JOB_MEMORY_LIMIT: usize,
-
-    /// Resource limit was exceeded. Value is the process ID.
-    JOB_OBJECT_MSG_NOTIFICATION_LIMIT: usize,
-
-    /// Undocumented
-    JOB_OBJECT_MSG_JOB_CYCLE_TIME_LIMIT: void,
-
-    /// Undocumented
-    JOB_OBJECT_MSG_SILO_TERMINATED: void,
+    /// A message was recived on the completion port for this job object
+    message: struct {
+        type: windows.exp.JOB_OBJECT_MSG_TYPE,
+        value: usize,
+    },
 };
 
 /// ReadBuffer are the various options for reading.

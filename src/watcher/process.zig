@@ -294,25 +294,47 @@ fn ProcessIocp(comptime xev: type) type {
                     ) xev.CallbackAction {
                         if (r.job_object) |result| {
                             switch (result) {
-                                 .JOB_OBJECT_MSG_EXIT_PROCESS,
-                                 .JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS,
-                                => |pid| {
-                                    // Don't need to check PID as we've specified JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
-                                    _ = pid;
+                                .associated => {
+                                    // There was a period of time between when the job object was created
+                                    // and when it was associated with the completion port. We may have
+                                    // missed a notification, so check if it's still alive.
 
                                     var exit_code: windows.DWORD = undefined;
                                     const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
                                     const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != 0;
                                     if (!has_code) std.log.warn("unable to get exit code for process={}", .{windows.kernel32.GetLastError()});
+                                    if (exit_code == windows.exp.STILL_ACTIVE) return .rearm;
 
                                     return @call(.always_inline, cb, .{
                                         common.userdataValue(Userdata, ud),
                                         l_inner,
                                         c_inner,
-                                        if (has_code) exit_code else WaitError.Unexpected,
+                                        exit_code,
                                     });
                                 },
-                                else => return .rearm,
+                                .message => |message| {
+                                    switch (message.type) {
+                                        .JOB_OBJECT_MSG_EXIT_PROCESS,
+                                        .JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS,
+                                        => {
+                                            // Don't need to check the message value (PID) as we've
+                                            // specified JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+
+                                            var exit_code: windows.DWORD = undefined;
+                                            const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
+                                            const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != 0;
+                                            if (!has_code) std.log.warn("unable to get exit code for process={}", .{windows.kernel32.GetLastError()});
+
+                                            return @call(.always_inline, cb, .{
+                                                common.userdataValue(Userdata, ud),
+                                                l_inner,
+                                                c_inner,
+                                                if (has_code) exit_code else WaitError.Unexpected,
+                                            });
+                                        },
+                                        else => return .rearm,
+                                    }
+                                },
                             }
                         } else |err| {
                             return @call(.always_inline, cb, .{
@@ -404,6 +426,41 @@ fn ProcessTests(
             // Wait for wake
             try loop.run(.until_done);
             try testing.expectEqual(@as(u32, 42), code.?);
+        }
+
+        test "process wait on a process that already exited" {
+            const testing = std.testing;
+            const alloc = testing.allocator;
+
+            var child = std.ChildProcess.init(argv_0, alloc);
+            try child.spawn();
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var p = try Impl.init(child.id);
+            defer p.deinit();
+
+            _ = try child.wait();
+
+            // Wait
+            var code: ?u32 = null;
+            var c_wait: xev.Completion = undefined;
+            p.wait(&loop, &c_wait, ?u32, &code, (struct {
+                fn callback(
+                    ud: ?*?u32,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: Impl.WaitError!u32,
+                ) xev.CallbackAction {
+                    ud.?.* = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+
+            // Wait for wake
+            try loop.run(.until_done);
+            try testing.expectEqual(@as(u32, 0), code.?);
         }
     };
 }
