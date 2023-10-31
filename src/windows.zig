@@ -5,6 +5,104 @@ pub usingnamespace std.os.windows;
 
 /// Namespace containing missing utils from std
 pub const exp = struct {
+    pub const STATUS_PENDING = 0x00000103;
+    pub const STILL_ACTIVE = STATUS_PENDING;
+
+    pub const JOBOBJECT_ASSOCIATE_COMPLETION_PORT = extern struct {
+        CompletionKey: windows.ULONG_PTR,
+        CompletionPort: windows.HANDLE,
+    };
+
+    pub const JOBOBJECT_BASIC_LIMIT_INFORMATION = extern struct {
+        PerProcessUserTimeLimit: windows.LARGE_INTEGER,
+        PerJobUserTimeLimit: windows.LARGE_INTEGER,
+        LimitFlags: windows.DWORD,
+        MinimumWorkingSetSize: windows.SIZE_T,
+        MaximumWorkingSetSize: windows.SIZE_T,
+        ActiveProcessLimit: windows.DWORD,
+        Affinity: windows.ULONG_PTR,
+        PriorityClass: windows.DWORD,
+        SchedulingClass: windows.DWORD,
+    };
+
+    pub const IO_COUNTERS = extern struct {
+        ReadOperationCount: windows.ULONGLONG,
+        WriteOperationCount: windows.ULONGLONG,
+        OtherOperationCount: windows.ULONGLONG,
+        ReadTransferCount: windows.ULONGLONG,
+        WriteTransferCount: windows.ULONGLONG,
+        OtherTransferCount: windows.ULONGLONG,
+    };
+
+    pub const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = extern struct {
+        BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        IoInfo: IO_COUNTERS,
+        ProcessMemoryLimit: windows.SIZE_T,
+        JobMemoryLimit: windows.SIZE_T,
+        PeakProcessMemoryUsed: windows.SIZE_T,
+        PeakJobMemoryUsed: windows.SIZE_T,
+    };
+
+    pub const JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008;
+    pub const JOB_OBJECT_LIMIT_AFFINITY = 0x00000010;
+    pub const JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800;
+    pub const JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400;
+    pub const JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200;
+    pub const JOB_OBJECT_LIMIT_JOB_TIME = 0x00000004;
+    pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    pub const JOB_OBJECT_LIMIT_PRESERVE_JOB_TIME = 0x00000004;
+    pub const JOB_OBJECT_LIMIT_PRIORITY_CLASS = 0x00000020;
+    pub const JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100;
+    pub const JOB_OBJECT_LIMIT_PROCESS_TIME = 0x00000002;
+    pub const JOB_OBJECT_LIMIT_SCHEDULING_CLASS = 0x00000080;
+    pub const JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000;
+    pub const JOB_OBJECT_LIMIT_SUBSET_AFFINITY = 0x00004000;
+    pub const JOB_OBJECT_LIMIT_WORKINGSET = 0x00000001;
+
+    pub const JOBOBJECT_INFORMATION_CLASS = enum(c_int) {
+        JobObjectAssociateCompletionPortInformation = 7,
+        JobObjectBasicLimitInformation = 2,
+        JobObjectBasicUIRestrictions = 4,
+        JobObjectCpuRateControlInformation = 15,
+        JobObjectEndOfJobTimeInformation = 6,
+        JobObjectExtendedLimitInformation = 9,
+        JobObjectGroupInformation = 11,
+        JobObjectGroupInformationEx = 14,
+        JobObjectLimitViolationInformation2 = 34,
+        JobObjectNetRateControlInformation = 32,
+        JobObjectNotificationLimitInformation = 12,
+        JobObjectNotificationLimitInformation2 = 33,
+        JobObjectSecurityLimitInformation = 5,
+    };
+
+    pub const JOB_OBJECT_MSG_TYPE = enum(windows.DWORD) {
+        JOB_OBJECT_MSG_END_OF_JOB_TIME = 1,
+        JOB_OBJECT_MSG_END_OF_PROCESS_TIME = 2,
+        JOB_OBJECT_MSG_ACTIVE_PROCESS_LIMIT = 3,
+        JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO = 4,
+        JOB_OBJECT_MSG_NEW_PROCESS = 6,
+        JOB_OBJECT_MSG_EXIT_PROCESS = 7,
+        JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS = 8,
+        JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT = 9,
+        JOB_OBJECT_MSG_JOB_MEMORY_LIMIT = 10,
+        JOB_OBJECT_MSG_NOTIFICATION_LIMIT = 11,
+        JOB_OBJECT_MSG_JOB_CYCLE_TIME_LIMIT = 12,
+        JOB_OBJECT_MSG_SILO_TERMINATED = 13,
+        _,
+    };
+
+    pub const kernel32 = struct {
+        pub extern "kernel32" fn GetProcessId(Process: windows.HANDLE) callconv(windows.WINAPI) windows.DWORD;
+        pub extern "kernel32" fn CreateJobObjectA(lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES, lpName: ?windows.LPCSTR) callconv(windows.WINAPI) windows.HANDLE;
+        pub extern "kernel32" fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) callconv(windows.WINAPI) windows.BOOL;
+        pub extern "kernel32" fn SetInformationJobObject(
+            hJob: windows.HANDLE,
+            JobObjectInformationClass: JOBOBJECT_INFORMATION_CLASS,
+            lpJobObjectInformation: windows.LPVOID,
+            cbJobObjectInformationLength: windows.DWORD,
+        ) callconv(windows.WINAPI) windows.BOOL;
+    };
+
     pub const CreateFileError = error{} || std.os.UnexpectedError;
 
     pub fn CreateFile(
@@ -67,6 +165,50 @@ pub const exp = struct {
 
     pub fn DeleteFile(name: [*:0]const u16) DeleteFileError!void {
         const result: windows.BOOL = windows.kernel32.DeleteFileW(name);
+        if (result == windows.FALSE) {
+            const err = windows.kernel32.GetLastError();
+            return switch (err) {
+                else => windows.unexpectedError(err),
+            };
+        }
+    }
+
+    pub const CreateJobObjectError = error{AlreadyExists} || std.os.UnexpectedError;
+    pub fn CreateJobObject(
+        lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
+        lpName: ?windows.LPCSTR,
+    ) !windows.HANDLE {
+        const handle = kernel32.CreateJobObjectA(lpSecurityAttributes, lpName);
+        return switch (windows.kernel32.GetLastError()) {
+            .SUCCESS => handle,
+            .ALREADY_EXISTS => CreateJobObjectError.AlreadyExists,
+            else => |err| windows.unexpectedError(err),
+        };
+    }
+
+    pub fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) std.os.UnexpectedError!void {
+        const result: windows.BOOL = kernel32.AssignProcessToJobObject(hJob, hProcess);
+        if (result == windows.FALSE) {
+            const err = windows.kernel32.GetLastError();
+            return switch (err) {
+                else => windows.unexpectedError(err),
+            };
+        }
+    }
+
+    pub fn SetInformationJobObject(
+        hJob: windows.HANDLE,
+        JobObjectInformationClass: JOBOBJECT_INFORMATION_CLASS,
+        lpJobObjectInformation: windows.LPVOID,
+        cbJobObjectInformationLength: windows.DWORD,
+    ) std.os.UnexpectedError!void {
+        const result: windows.BOOL = kernel32.SetInformationJobObject(
+            hJob,
+            JobObjectInformationClass,
+            lpJobObjectInformation,
+            cbJobObjectInformationLength,
+        );
+
         if (result == windows.FALSE) {
             const err = windows.kernel32.GetLastError();
             return switch (err) {

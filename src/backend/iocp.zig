@@ -313,14 +313,30 @@ pub const Loop = struct {
 
             // Go through the entries and perform completions callbacks.
             for (entries[0..count]) |entry| {
-                // We retrieve the Completion from the OVERLAPPED pointer as we know it's a part of
-                // the Completion struct.
-                const overlapped_ptr: ?*windows.OVERLAPPED = @as(?*windows.OVERLAPPED, @ptrCast(entry.lpOverlapped));
-                if (overlapped_ptr == null) {
-                    // Probably an async wakeup
-                    continue;
-                }
-                var completion = @fieldParentPtr(Completion, "overlapped", overlapped_ptr.?);
+                const completion: *Completion = if (entry.lpCompletionKey == 0) completion: {
+                    // We retrieve the Completion from the OVERLAPPED pointer as we know it's a part of
+                    // the Completion struct.
+                    const overlapped_ptr: ?*windows.OVERLAPPED = @as(?*windows.OVERLAPPED, @ptrCast(entry.lpOverlapped));
+                    if (overlapped_ptr == null) {
+                        // Probably an async wakeup
+                        continue;
+                    }
+
+                    break :completion @fieldParentPtr(Completion, "overlapped", overlapped_ptr.?);
+                } else completion: {
+                    // JobObjects are a special case where the OVERLAPPED_ENTRY fields are interpreted differently.
+                    // When JOBOBJECT_ASSOCIATE_COMPLETION_PORT is used, lpOverlapped actually contains the message
+                    // value, and not the address of the overlapped structure. The Completion pointer is passed
+                    // as the completion key instead.
+                    const completion: *Completion = @ptrFromInt(entry.lpCompletionKey);
+                    completion.result = .{ .job_object = .{
+                        .message = .{
+                            .type = @enumFromInt(entry.dwNumberOfBytesTransferred),
+                            .value = @intFromPtr(entry.lpOverlapped),
+                        },
+                    } };
+                    break :completion completion;
+                };
 
                 wait_rem -|= 1;
 
@@ -699,6 +715,34 @@ pub const Loop = struct {
                 self.asyncs.push(completion);
                 break :action .{ .async_wait = {} };
             },
+
+            .job_object => |*v| action: {
+                if (!v.associated) {
+                    var port = windows.exp.JOBOBJECT_ASSOCIATE_COMPLETION_PORT{
+                        .CompletionKey = @intFromPtr(completion),
+                        .CompletionPort = self.iocp_handle,
+                    };
+
+                    windows.exp.SetInformationJobObject(
+                        v.job,
+                        .JobObjectAssociateCompletionPortInformation,
+                        &port,
+                        @sizeOf(windows.exp.JOBOBJECT_ASSOCIATE_COMPLETION_PORT),
+                    ) catch |err| break :action .{ .result = .{ .job_object = err } };
+
+                    v.associated = true;
+                    const action = completion.callback(completion.userdata, self, completion, .{ .job_object = .{ .associated = {} } });
+                    switch (action) {
+                        .disarm => {
+                            completion.flags.state = .dead;
+                            return;
+                        },
+                        .rearm => break :action .{ .submitted = {} },
+                    }
+                }
+
+                break :action .{ .submitted = {} };
+            },
         };
 
         switch (action) {
@@ -1071,6 +1115,8 @@ pub const Completion = struct {
             },
 
             .async_wait => .{ .async_wait = {} },
+
+            .job_object => self.result.?,
         };
     }
 
@@ -1137,6 +1183,9 @@ pub const OperationType = enum {
 
     /// Wait for an async event to be posted.
     async_wait,
+
+    /// Receive a notification from a job object associated with a completion port
+    job_object,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -1225,6 +1274,15 @@ pub const Operation = union(OperationType) {
     async_wait: struct {
         wakeup: std.atomic.Atomic(bool) = .{ .value = false },
     },
+
+    job_object: struct {
+        job: windows.HANDLE,
+        userdata: ?*anyopaque,
+
+        /// Tracks if the job has been associated with the completion port.
+        /// Do not use this, it is used internally.
+        associated: bool = false,
+    },
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -1246,6 +1304,7 @@ pub const Result = union(OperationType) {
     timer: TimerError!TimerTrigger,
     cancel: CancelError!void,
     async_wait: AsyncError!void,
+    job_object: JobObjectError!JobObjectResult,
 };
 
 pub const CancelError = error{
@@ -1304,6 +1363,21 @@ pub const TimerTrigger = enum {
 
     /// Timer was canceled.
     cancel,
+};
+
+pub const JobObjectError = error{
+    Unexpected,
+};
+
+pub const JobObjectResult = union(enum) {
+    // The job object was associated with the completion port
+    associated: void,
+
+    /// A message was recived on the completion port for this job object
+    message: struct {
+        type: windows.exp.JOB_OBJECT_MSG_TYPE,
+        value: usize,
+    },
 };
 
 /// ReadBuffer are the various options for reading.
