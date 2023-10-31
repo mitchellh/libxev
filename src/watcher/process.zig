@@ -234,28 +234,11 @@ fn ProcessIocp(comptime xev: type) type {
             const job = try windows.exp.CreateJobObject(null, null);
             errdefer _ = windows.kernel32.CloseHandle(job);
 
-            // Setting this limit information is required so that we only get process exit
-            // notifications for this process - without it we would get notifications for
-            // all of its child processes as well.
-
-            var extended_limit_information = std.mem.zeroInit(windows.exp.JOBOBJECT_EXTENDED_LIMIT_INFORMATION, .{
-                .BasicLimitInformation = std.mem.zeroInit(windows.exp.JOBOBJECT_BASIC_LIMIT_INFORMATION, .{
-                    .LimitFlags = windows.exp.JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
-                }),
-            });
-
-            try windows.exp.SetInformationJobObject(
-                job,
-                .JobObjectExtendedLimitInformation,
-                &extended_limit_information,
-                @sizeOf(@TypeOf(extended_limit_information)),
-            );
-
             try windows.exp.AssignProcessToJobObject(job, dup_process);
 
             return .{
-                .process = dup_process,
                 .job = job,
+                .process = dup_process,
             };
         }
 
@@ -313,27 +296,29 @@ fn ProcessIocp(comptime xev: type) type {
                                     });
                                 },
                                 .message => |message| {
-                                    switch (message.type) {
+                                    const result_inner = switch (message.type) {
                                         .JOB_OBJECT_MSG_EXIT_PROCESS,
                                         .JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS,
-                                        => {
-                                            // Don't need to check the message value (PID) as we've
-                                            // specified JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+                                        => b: {
+                                            const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
+                                            const pid = windows.exp.kernel32.GetProcessId(process);
+                                            if (pid == 0) break :b WaitError.Unexpected;
+                                            if (message.value != pid) return .rearm;
 
                                             var exit_code: windows.DWORD = undefined;
-                                            const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
                                             const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != 0;
                                             if (!has_code) std.log.warn("unable to get exit code for process={}", .{windows.kernel32.GetLastError()});
-
-                                            return @call(.always_inline, cb, .{
-                                                common.userdataValue(Userdata, ud),
-                                                l_inner,
-                                                c_inner,
-                                                if (has_code) exit_code else WaitError.Unexpected,
-                                            });
+                                            break :b if (has_code) exit_code else WaitError.Unexpected;
                                         },
                                         else => return .rearm,
-                                    }
+                                    };
+
+                                    return @call(.always_inline, cb, .{
+                                        common.userdataValue(Userdata, ud),
+                                        l_inner,
+                                        c_inner,
+                                        result_inner
+                                    });
                                 },
                             }
                         } else |err| {

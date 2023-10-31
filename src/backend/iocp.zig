@@ -1366,7 +1366,6 @@ pub const TimerTrigger = enum {
 };
 
 pub const JobObjectError = error{
-    UnknownMessageType,
     Unexpected,
 };
 
