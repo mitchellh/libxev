@@ -228,11 +228,7 @@ pub const Loop = struct {
                 // completion. We get the syscall errorcode from data and
                 // store it.
                 if (ev.flags & os.system.EV_ERROR != 0) {
-                    c.result = c.syscall_result(@as(i32, @intCast(ev.data)));
-
-                    // We reset the state so that we know that it never
-                    // registered with kevent.
-                    c.flags.state = .adding;
+                    c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
                 } else {
                     // No error, means that this completion is ready to work.
                     c.result = c.perform(&ev);
@@ -1375,6 +1371,7 @@ pub const Completion = struct {
                 .proc = switch (errno) {
                     .SUCCESS => @intCast(r),
                     .CANCELED => error.Canceled,
+                    .SRCH => ProcError.NoSuchProcess,
                     else => |err| os.unexpectedErrno(err),
                 },
             },
@@ -1600,6 +1597,7 @@ pub const ProcError = os.KEventError || error{
     Canceled,
     MissingKevent,
     Unexpected,
+    NoSuchProcess,
 };
 
 pub const ShutdownError = os.ShutdownError || error{

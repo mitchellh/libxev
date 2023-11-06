@@ -313,12 +313,7 @@ fn ProcessIocp(comptime xev: type) type {
                                         else => return .rearm,
                                     };
 
-                                    return @call(.always_inline, cb, .{
-                                        common.userdataValue(Userdata, ud),
-                                        l_inner,
-                                        c_inner,
-                                        result_inner
-                                    });
+                                    return @call(.always_inline, cb, .{ common.userdataValue(Userdata, ud), l_inner, c_inner, result_inner });
                                 },
                             }
                         } else |err| {
@@ -438,7 +433,7 @@ fn ProcessTests(
                     _: *xev.Completion,
                     r: Impl.WaitError!u32,
                 ) xev.CallbackAction {
-                    ud.?.* = r catch unreachable;
+                    ud.?.* = r catch 0;
                     return .disarm;
                 }
             }).callback);
