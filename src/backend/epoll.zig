@@ -728,7 +728,8 @@ pub const Loop = struct {
 
     fn stop_completion(self: *Loop, completion: *Completion) void {
         // Delete. This should never fail.
-        if (completion.fd()) |fd| {
+        const maybe_fd = if (completion.flags.dup) completion.flags.dup_fd else completion.fd();
+        if (maybe_fd) |fd| {
             std.os.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_DEL,
