@@ -1316,7 +1316,7 @@ test "epoll: loop time" {
     defer loop.deinit();
 
     // should never init zero
-    var now = loop.now();
+    const now = loop.now();
     try testing.expect(now > 0);
 
     // should update on a loop tick

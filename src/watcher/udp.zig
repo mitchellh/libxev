@@ -249,7 +249,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
-            var socket = @as(windows.ws2_32.SOCKET, @ptrCast(self.fd));
+            const socket = @as(windows.ws2_32.SOCKET, @ptrCast(self.fd));
             try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
             try os.bind(socket, &addr.any, addr.getOsSockLen());
         }

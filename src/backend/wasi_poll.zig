@@ -1191,7 +1191,7 @@ test "wasi: loop time" {
     defer loop.deinit();
 
     // should never init zero
-    var now = loop.now();
+    const now = loop.now();
     try testing.expect(now > 0);
 
     // should update on a loop tick
@@ -1512,8 +1512,8 @@ test "wasi: file" {
     // We can't use dir.createFile yet: https://github.com/ziglang/zig/issues/14324
     const f = f: {
         const w = wasi;
-        var oflags = w.O.CREAT | w.O.TRUNC;
-        var base: w.rights_t = w.RIGHT.FD_WRITE |
+        const oflags = w.O.CREAT | w.O.TRUNC;
+        const base: w.rights_t = w.RIGHT.FD_WRITE |
             w.RIGHT.FD_READ |
             w.RIGHT.FD_DATASYNC |
             w.RIGHT.FD_SEEK |
@@ -1526,7 +1526,7 @@ test "wasi: file" {
             w.RIGHT.FD_FILESTAT_SET_SIZE |
             w.RIGHT.FD_FILESTAT_GET |
             w.RIGHT.POLL_FD_READWRITE;
-        var fdflags: w.fdflags_t = w.FDFLAG.SYNC | w.FDFLAG.RSYNC | w.FDFLAG.DSYNC;
+        const fdflags: w.fdflags_t = w.FDFLAG.SYNC | w.FDFLAG.RSYNC | w.FDFLAG.DSYNC;
         const fd = try std.os.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags);
         break :f std.fs.File{ .handle = fd };
     };
@@ -1570,7 +1570,7 @@ test "wasi: file" {
     try testing.expect(read_len.? == 0);
 
     // Start a writer
-    var write_buf = "hello!";
+    const write_buf = "hello!";
     var write_len: ?usize = null;
     var c_write: xev.Completion = .{
         .op = .{

@@ -705,11 +705,11 @@ const Node = struct {
 
         fn pop(self: *Buffer) ?*Node {
             var head = self.head.load(.Monotonic);
-            var tail = self.tail.loadUnchecked(); // we're the only thread that can change this
+            const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
 
             while (true) {
                 // Quick sanity check and return null when not empty
-                var size = tail -% head;
+                const size = tail -% head;
                 assert(size <= capacity);
                 if (size == 0) {
                     return null;

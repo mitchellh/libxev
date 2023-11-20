@@ -68,7 +68,7 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
-                        var fd = T.initFd(c_inner.op.close.fd);
+                        const fd = T.initFd(c_inner.op.close.fd);
                         return @call(.always_inline, cb, .{
                             common.userdataValue(Userdata, ud),
                             l_inner,
@@ -568,7 +568,7 @@ pub fn GenericStream(comptime xev: type) type {
             try testing.expect(read_len == null);
 
             // Send
-            var send_buf = "hello, world!";
+            const send_buf = "hello, world!";
             var c_write: xev.Completion = undefined;
             child.write(&loop, &c_write, .{ .slice = send_buf }, void, null, (struct {
                 fn callback(
@@ -632,7 +632,7 @@ pub fn GenericStream(comptime xev: type) type {
 
             // Send (note the newline at the end of the buf is important
             // since we're in cooked mode)
-            var send_buf = "hello, world!\n";
+            const send_buf = "hello, world!\n";
             var c_write: xev.Completion = undefined;
             parent.write(&loop, &c_write, .{ .slice = send_buf }, void, null, (struct {
                 fn callback(
