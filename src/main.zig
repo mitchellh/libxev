@@ -136,7 +136,7 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         }
 
         test "completion is zero-able" {
-            var c: Completion = .{};
+            const c: Completion = .{};
             _ = c;
         }
     };

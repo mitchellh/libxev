@@ -60,7 +60,7 @@ pub const Loop = struct {
         // Get the duration of the QueryPerformanceCounter.
         // We should check if the division is lossless, but it returns 10_000_000 on my machine so
         // we'll handle that later.
-        var qpc_duration = 1_000_000_000 / windows.QueryPerformanceFrequency();
+        const qpc_duration = 1_000_000_000 / windows.QueryPerformanceFrequency();
 
         // This creates a new Completion Port
         const handle = try windows.CreateIoCompletionPort(windows.INVALID_HANDLE_VALUE, null, 0, 1);
@@ -483,7 +483,7 @@ pub const Loop = struct {
                     std.debug.assert(windows.ws2_32.getsockname(asSocket(v.socket), @as(*std.os.sockaddr, @ptrCast(&addr)), &addr_len) == 0);
 
                     var socket_type: i32 = 0;
-                    var socket_type_bytes = std.mem.asBytes(&socket_type);
+                    const socket_type_bytes = std.mem.asBytes(&socket_type);
                     var opt_len: i32 = @as(i32, @intCast(socket_type_bytes.len));
                     std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.socket), std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
 
@@ -534,7 +534,7 @@ pub const Loop = struct {
 
             .read => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 break :action if (windows.exp.ReadFile(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
@@ -547,7 +547,7 @@ pub const Loop = struct {
 
             .pread => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.Offset = @intCast(v.offset & 0xFFFF_FFFF_FFFF_FFFF);
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.OffsetHigh = @intCast(v.offset >> 32);
                 break :action if (windows.exp.ReadFile(v.fd, buffer, &completion.overlapped)) |_|
@@ -564,7 +564,7 @@ pub const Loop = struct {
 
             .write => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 break :action if (windows.exp.WriteFile(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
@@ -577,7 +577,7 @@ pub const Loop = struct {
 
             .pwrite => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.Offset = @intCast(v.offset & 0xFFFF_FFFF_FFFF_FFFF);
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.OffsetHigh = @intCast(v.offset >> 32);
                 break :action if (windows.exp.WriteFile(v.fd, buffer, &completion.overlapped)) |_|
@@ -592,7 +592,7 @@ pub const Loop = struct {
 
             .send => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @as(u32, @intCast(buffer.len)) };
                 const result = windows.ws2_32.WSASend(
                     asSocket(v.fd),
@@ -617,7 +617,7 @@ pub const Loop = struct {
 
             .recv => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 v.wsa_buffer = .{ .buf = buffer.ptr, .len = @as(u32, @intCast(buffer.len)) };
 
                 var flags: u32 = 0;
@@ -645,7 +645,7 @@ pub const Loop = struct {
 
             .sendto => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
                 v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @as(u32, @intCast(buffer.len)) };
                 const result = windows.ws2_32.WSASendTo(
                     asSocket(v.fd),
@@ -672,7 +672,7 @@ pub const Loop = struct {
 
             .recvfrom => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                var buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
                 v.wsa_buffer = .{ .buf = buffer.ptr, .len = @as(u32, @intCast(buffer.len)) };
 
                 var flags: u32 = 0;
@@ -1061,7 +1061,7 @@ pub const Completion = struct {
                 // NOTE(Corendos): according to Win32 documentation, EOF has to be detected using the socket type.
                 const socket_type = t: {
                     var socket_type: windows.DWORD = 0;
-                    var socket_type_bytes = std.mem.asBytes(&socket_type);
+                    const socket_type_bytes = std.mem.asBytes(&socket_type);
                     var opt_len: i32 = @as(i32, @intCast(socket_type_bytes.len));
 
                     // Here we assume the call will succeed because the socket should be valid.
@@ -1447,7 +1447,7 @@ test "iocp: loop time" {
     defer loop.deinit();
 
     // should never init zero
-    var now = loop.now();
+    const now = loop.now();
     try testing.expect(now > 0);
 
     while (now == loop.now()) try loop.run(.no_wait);
@@ -1954,7 +1954,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    var ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    const ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
     errdefer std.os.closeSocket(ln);
 
     try std.os.setsockopt(ln, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
@@ -1962,7 +1962,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     try std.os.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    var client_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    const client_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
     errdefer std.os.closeSocket(client_conn);
 
     var server_conn_result: Result = undefined;
@@ -2024,7 +2024,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     //try testing.expect(server_conn > 0);
     try testing.expect(connected);
-    var server_conn = try server_conn_result.accept;
+    const server_conn = try server_conn_result.accept;
 
     // Send
     var c_send: xev.Completion = .{
@@ -2220,7 +2220,7 @@ test "iocp: recv cancellation" {
 
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    var socket = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    const socket = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
     errdefer std.os.closeSocket(socket);
 
     try std.os.setsockopt(socket, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
@@ -2293,7 +2293,7 @@ test "iocp: accept cancellation" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    var ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    const ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
     errdefer std.os.closeSocket(ln);
 
     try std.os.setsockopt(ln, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));

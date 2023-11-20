@@ -511,7 +511,7 @@ pub fn TCP(comptime xev: type) type {
             var w_queue = Self.WriteQueue{};
             var wr_send: xev.TCP.WriteRequest = undefined;
             var sent_queued: usize = 0;
-            var queued_slice = send_buf[sent_unqueued..];
+            const queued_slice = send_buf[sent_unqueued..];
             client.queueWrite(&loop, &w_queue, &wr_send, .{ .slice = queued_slice }, usize, &sent_queued, (struct {
                 fn callback(
                     sent_queued_inner: ?*usize,
@@ -551,7 +551,7 @@ pub fn TCP(comptime xev: type) type {
                 pub fn read(receiver: *@This()) void {
                     if (receiver.bytes_read == receiver.buf.len) return;
 
-                    var read_buf = xev.ReadBuffer{
+                    const read_buf = xev.ReadBuffer{
                         .slice = receiver.buf[receiver.bytes_read..],
                     };
                     receiver.conn.read(receiver.loop, &receiver.completion, read_buf, @This(), receiver, readCb);
@@ -566,7 +566,7 @@ pub fn TCP(comptime xev: type) type {
                     r: Self.ReadError!usize,
                 ) xev.CallbackAction {
                     var receiver = receiver_opt.?;
-                    var n_bytes = r catch unreachable;
+                    const n_bytes = r catch unreachable;
 
                     receiver.bytes_read += n_bytes;
                     if (receiver.bytes_read < send_buf.len) {

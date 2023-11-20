@@ -1330,7 +1330,7 @@ test "io_uring: loop time" {
     defer loop.deinit();
 
     // should never init zero
-    var now = loop.now();
+    const now = loop.now();
     try testing.expect(now > 0);
 
     // should update on a loop tick
@@ -1666,7 +1666,7 @@ test "io_uring: sendmsg/recvmsg" {
     var iovecs_recv = [_]os.iovec{
         os.iovec{ .iov_base = &buffer_recv, .iov_len = buffer_recv.len },
     };
-    var addr = [_]u8{0} ** 4;
+    const addr = [_]u8{0} ** 4;
     var address_recv = net.Address.initIp4(addr, 0);
     var msg_recv: os.msghdr = os.msghdr{
         .name = &address_recv.any,
@@ -1716,7 +1716,7 @@ test "io_uring: socket read cancellation" {
 
     // Create a UDP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    var socket = try os.socket(address.any.family, os.SOCK.DGRAM | os.SOCK.CLOEXEC, 0);
+    const socket = try os.socket(address.any.family, os.SOCK.DGRAM | os.SOCK.CLOEXEC, 0);
     errdefer os.closeSocket(socket);
     try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(socket, &address.any, address.getOsSockLen());
@@ -1735,7 +1735,7 @@ test "io_uring: socket read cancellation" {
         .userdata = &read_result,
         .callback = (struct {
             fn callback(ud: ?*anyopaque, l: *xev.Loop, c: *xev.Completion, r: xev.Result) xev.CallbackAction {
-                var ptr = @as(*xev.Result, @ptrCast(@alignCast(ud)));
+                const ptr = @as(*xev.Result, @ptrCast(@alignCast(ud)));
                 ptr.* = r;
                 _ = c;
                 _ = l;
