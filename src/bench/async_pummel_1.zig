@@ -30,7 +30,7 @@ pub fn run(comptime thread_count: comptime_int) !void {
     notifier = try xev.Async.init();
     defer notifier.deinit();
 
-    var userdata: ?*void = null;
+    const userdata: ?*void = null;
     var c: xev.Completion = undefined;
     notifier.wait(&loop, &c, void, userdata, &asyncCallback);
 

@@ -201,7 +201,7 @@ fn benchTargets(
 
     // Open the directory
     const c_dir_path = (comptime thisDir()) ++ "/src/bench";
-    var c_dir = try std.fs.openIterableDirAbsolute(c_dir_path, .{});
+    var c_dir = try std.fs.openDirAbsolute(c_dir_path, .{ .iterate = true });
     defer c_dir.close();
 
     // Go through and add each as a step
@@ -258,7 +258,7 @@ fn exampleTargets(
 
     // Open the directory
     const c_dir_path = (comptime thisDir()) ++ "/examples";
-    var c_dir = try std.fs.openIterableDirAbsolute(c_dir_path, .{});
+    var c_dir = try std.fs.openDirAbsolute(c_dir_path, .{ .iterate = true });
     defer c_dir.close();
 
     // Go through and add each as a step
