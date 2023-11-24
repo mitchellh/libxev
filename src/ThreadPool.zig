@@ -38,7 +38,7 @@ const ThreadPool = @This();
 
 const std = @import("std");
 const assert = std.debug.assert;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 stack_size: u32,
 max_threads: u32,
@@ -192,7 +192,7 @@ noinline fn notifySlow(self: *ThreadPool, is_waking: bool) void {
 
         // Release barrier synchronizes with Acquire in wait()
         // to ensure pushes to run queues happen before observing a posted notification.
-        sync = @bitCast(self.sync.tryCompareAndSwap(
+        sync = @bitCast(self.sync.cmpxchgWeak(
             @bitCast(sync),
             @bitCast(new_sync),
             .Release,
@@ -235,7 +235,7 @@ noinline fn wait(self: *ThreadPool, _is_waking: bool) error{Shutdown}!bool {
 
             // Acquire barrier synchronizes with notify()
             // to ensure that pushes to run queue are observed after wait() returns.
-            sync = @bitCast(self.sync.tryCompareAndSwap(
+            sync = @bitCast(self.sync.cmpxchgWeak(
                 @bitCast(sync),
                 @bitCast(new_sync),
                 .Acquire,
@@ -252,7 +252,7 @@ noinline fn wait(self: *ThreadPool, _is_waking: bool) error{Shutdown}!bool {
             if (is_waking)
                 new_sync.state = .pending;
 
-            sync = @bitCast(self.sync.tryCompareAndSwap(
+            sync = @bitCast(self.sync.cmpxchgWeak(
                 @bitCast(sync),
                 @bitCast(new_sync),
                 .Monotonic,
@@ -282,7 +282,7 @@ pub noinline fn shutdown(self: *ThreadPool) void {
         new_sync.idle = 0;
 
         // Full barrier to synchronize with both wait() and notify()
-        sync = @bitCast(self.sync.tryCompareAndSwap(
+        sync = @bitCast(self.sync.cmpxchgWeak(
             @bitCast(sync),
             @bitCast(new_sync),
             .AcqRel,
@@ -301,7 +301,7 @@ fn register(noalias self: *ThreadPool, noalias thread: *Thread) void {
     var threads = self.threads.load(.Monotonic);
     while (true) {
         thread.next = threads;
-        threads = self.threads.tryCompareAndSwap(
+        threads = self.threads.cmpxchgWeak(
             threads,
             thread,
             .Release,
@@ -455,14 +455,14 @@ const Event = struct {
             // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
             // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
             if (state == SHUTDOWN) {
-                std.atomic.fence(.Acquire);
+                @fence(.Acquire);
                 return;
             }
 
             // Consume a notification when it pops up.
             // Acquire barrier to ensure operations before the notify() appear after the wait().
             if (state == NOTIFIED) {
-                state = self.state.tryCompareAndSwap(
+                state = self.state.cmpxchgWeak(
                     state,
                     acquire_with,
                     .Acquire,
@@ -473,7 +473,7 @@ const Event = struct {
 
             // There is no notification to consume, we should wait on the event by ensuring its WAITING.
             if (state != WAITING) blk: {
-                state = self.state.tryCompareAndSwap(
+                state = self.state.cmpxchgWeak(
                     state,
                     WAITING,
                     .Monotonic,
@@ -556,7 +556,7 @@ const Node = struct {
                 new_stack |= (stack & ~PTR_MASK);
 
                 // Push to the stack with a release barrier for the consumer to see the proper list links.
-                stack = self.stack.tryCompareAndSwap(
+                stack = self.stack.cmpxchgWeak(
                     stack,
                     new_stack,
                     .Release,
@@ -582,7 +582,7 @@ const Node = struct {
 
                 // Acquire barrier on getting the consumer to see cache/Node updates done by previous consumers
                 // and to ensure our cache/Node updates in pop() happen after that of previous consumers.
-                stack = self.stack.tryCompareAndSwap(
+                stack = self.stack.cmpxchgWeak(
                     stack,
                     new_stack,
                     .Acquire,
@@ -645,7 +645,7 @@ const Node = struct {
 
         fn push(noalias self: *Buffer, noalias list: *List) error{Overflow}!void {
             var head = self.head.load(.Monotonic);
-            var tail = self.tail.loadUnchecked(); // we're the only thread that can change this
+            var tail = self.tail.raw; // we're the only thread that can change this
 
             while (true) {
                 var size = tail -% head;
@@ -677,22 +677,22 @@ const Node = struct {
                 // Migrating half amortizes the cost of stealing while requiring future pops to still use the buffer.
                 // Acquire barrier to ensure the linked list creation after the steal only happens after we succesfully steal.
                 var migrate = size / 2;
-                head = self.head.tryCompareAndSwap(
+                head = self.head.cmpxchgWeak(
                     head,
                     head +% migrate,
                     .Acquire,
                     .Monotonic,
                 ) orelse {
                     // Link the migrated Nodes together
-                    const first = self.array[head % capacity].loadUnchecked();
+                    const first = self.array[head % capacity].raw;
                     while (migrate > 0) : (migrate -= 1) {
-                        const prev = self.array[head % capacity].loadUnchecked();
+                        const prev = self.array[head % capacity].raw;
                         head +%= 1;
-                        prev.next = self.array[head % capacity].loadUnchecked();
+                        prev.next = self.array[head % capacity].raw;
                     }
 
                     // Append the list that was supposed to be pushed to the end of the migrated Nodes
-                    const last = self.array[(head -% 1) % capacity].loadUnchecked();
+                    const last = self.array[(head -% 1) % capacity].raw;
                     last.next = list.head;
                     list.tail.next = null;
 
@@ -705,7 +705,7 @@ const Node = struct {
 
         fn pop(self: *Buffer) ?*Node {
             var head = self.head.load(.Monotonic);
-            const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
+            const tail = self.tail.raw; // we're the only thread that can change this
 
             while (true) {
                 // Quick sanity check and return null when not empty
@@ -717,12 +717,12 @@ const Node = struct {
 
                 // Dequeue with an acquire barrier to ensure any writes done to the Node
                 // only happen after we succesfully claim it from the array.
-                head = self.head.tryCompareAndSwap(
+                head = self.head.cmpxchgWeak(
                     head,
                     head +% 1,
                     .Acquire,
                     .Monotonic,
-                ) orelse return self.array[head % capacity].loadUnchecked();
+                ) orelse return self.array[head % capacity].raw;
             }
         }
 
@@ -736,7 +736,7 @@ const Node = struct {
             defer queue.releaseConsumer(consumer);
 
             const head = self.head.load(.Monotonic);
-            const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
+            const tail = self.tail.raw; // we're the only thread that can change this
 
             const size = tail -% head;
             assert(size <= capacity);
@@ -755,7 +755,7 @@ const Node = struct {
             const node = queue.pop(&consumer) orelse blk: {
                 if (pushed == 0) return null;
                 pushed -= 1;
-                break :blk self.array[(tail +% pushed) % capacity].loadUnchecked();
+                break :blk self.array[(tail +% pushed) % capacity].raw;
             };
 
             // Update the array tail with the nodes we pushed to it.
@@ -769,7 +769,7 @@ const Node = struct {
 
         fn steal(noalias self: *Buffer, noalias buffer: *Buffer) ?Stole {
             const head = self.head.load(.Monotonic);
-            const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
+            const tail = self.tail.raw; // we're the only thread that can change this
 
             const size = tail -% head;
             assert(size <= capacity);
@@ -805,7 +805,7 @@ const Node = struct {
                 // - an Acquire barrier to ensure that we only interact with the stolen Nodes after the steal was committed.
                 // - a Release barrier to ensure that the Nodes are copied above prior to the committing of the steal
                 //   because if they're copied after the steal, the could be getting rewritten by the target's push().
-                _ = buffer.head.compareAndSwap(
+                _ = buffer.head.cmpxchgStrong(
                     buffer_head,
                     buffer_head +% steal_size,
                     .AcqRel,
@@ -813,7 +813,7 @@ const Node = struct {
                 ) orelse {
                     // Pop one from the nodes we stole as we'll be returning it
                     const pushed = steal_size - 1;
-                    const node = self.array[(tail +% pushed) % capacity].loadUnchecked();
+                    const node = self.array[(tail +% pushed) % capacity].raw;
 
                     // Update the array tail with the nodes we pushed to it.
                     // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.

@@ -63,7 +63,7 @@ fn make(step: *std.build.Step, progress: *std.Progress.Node) !void {
     }
 
     // Find all our man pages which are in our src path ending with ".scd".
-    var dir = try fs.openIterableDirAbsolute(self.src_path, .{});
+    var dir = try fs.openDirAbsolute(self.src_path, .{ .iterate = true });
     defer dir.close();
 
     var iter = dir.iterate();
@@ -138,7 +138,7 @@ const InstallStep = struct {
         }
 
         // Find all our man pages which are in our src path ending with ".scd".
-        var dir = try fs.openIterableDirAbsolute(path, .{});
+        var dir = try fs.openDirAbsolute(path, .{ .iterate = true });
         defer dir.close();
         var iter = dir.iterate();
         while (try iter.next()) |*entry| {

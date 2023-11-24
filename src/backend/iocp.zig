@@ -1272,7 +1272,7 @@ pub const Operation = union(OperationType) {
     },
 
     async_wait: struct {
-        wakeup: std.atomic.Atomic(bool) = .{ .value = false },
+        wakeup: std.atomic.Value(bool) = .{ .raw = false },
     },
 
     job_object: struct {
