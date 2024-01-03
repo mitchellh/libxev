@@ -1,7 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const fs = std.fs;
-const Step = std.build.Step;
+const Step = std.Build.Step;
 const Build = std.Build;
 
 /// ScdocStep generates man pages using scdoc(1).
@@ -46,7 +46,7 @@ pub fn init(builder: *Build) ScdocStep {
     };
 }
 
-fn make(step: *std.build.Step, progress: *std.Progress.Node) !void {
+fn make(step: *std.Build.Step, progress: *std.Progress.Node) !void {
     _ = progress;
 
     const self = @fieldParentPtr(ScdocStep, "step", step);
