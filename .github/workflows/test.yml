@@ -91,7 +91,7 @@ jobs:
     - name: Install zig
       uses: goto-bus-stop/setup-zig@v2
       with:
-        version: 0.12.0-dev.1710+2bffd8101
+        version: 0.12.0-dev.2058+04ac028a2
 
     - name: test
       run: zig build test --summary all
