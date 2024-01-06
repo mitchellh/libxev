@@ -296,7 +296,7 @@ const Server = struct {
         // Echo it back
         const c_echo = self.completion_pool.create() catch unreachable;
         const buf_write = self.buffer_pool.create() catch unreachable;
-        std.mem.copy(u8, buf_write, buf.slice[0..n]);
+        @memcpy(buf_write, buf.slice[0..n]);
         socket.write(loop, c_echo, .{ .slice = buf_write[0..n] }, Server, self, writeCallback);
 
         // Read again
