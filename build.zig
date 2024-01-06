@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("xev", .{ .source_file = .{ .path = "src/main.zig" } });
+    _ = b.addModule("xev", .{ .root_source_file = .{ .path = "src/main.zig" } });
 
     const man_pages = b.option(
         bool,
@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) !void {
 
     // Our tests require libc on Linux and Mac. Note that libxev itself
     // does NOT require libc.
-    const test_libc = switch (target.getOsTag()) {
+    const test_libc = switch (target.result.os.tag) {
         .linux, .macos => true,
         else => false,
     };
@@ -73,7 +73,7 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&tests_run.step);
 
     // Static C lib
-    const static_c_lib: ?*std.build.Step.Compile = if (target.getOsTag() != .wasi) lib: {
+    const static_c_lib: ?*std.Build.Step.Compile = if (target.result.os.tag != .wasi) lib: {
         const static_lib = b.addStaticLibrary(.{
             .name = "xev",
             .root_source_file = .{ .path = "src/c_api.zig" },
@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) !void {
         static_lib.linkLibC();
 
         // Link required libraries if targeting Windows
-        if (target.getOsTag() == .windows) {
+        if (target.result.os.tag == .windows) {
             static_lib.linkSystemLibrary("ws2_32");
             static_lib.linkSystemLibrary("mswsock");
         }
@@ -114,7 +114,7 @@ pub fn build(b: *std.Build) !void {
 
     // Dynamic C lib. We only build this if this is the native target so we
     // can link to libxml2 on our native system.
-    if (target.isNative()) {
+    if (target.query.isNative()) {
         const dynamic_lib_name = "xev";
 
         const dynamic_lib = b.addSharedLibrary(.{
@@ -190,14 +190,14 @@ pub fn build(b: *std.Build) !void {
 
 fn benchTargets(
     b: *std.Build,
-    target: std.zig.CrossTarget,
-    mode: std.builtin.Mode,
+    target: std.Build.ResolvedTarget,
+    mode: std.builtin.OptimizeMode,
     install: bool,
     install_name: ?[]const u8,
-) !std.StringHashMap(*CompileStep) {
+) !std.StringHashMap(*std.Build.Step.Compile) {
     _ = mode;
 
-    var map = std.StringHashMap(*CompileStep).init(b.allocator);
+    var map = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
 
     // Open the directory
     const c_dir_path = (comptime thisDir()) ++ "/src/bench";
@@ -230,7 +230,7 @@ fn benchTargets(
             .target = target,
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
-        c_exe.addModule("xev", b.modules.get("xev").?);
+        c_exe.root_module.addImport("xev", b.modules.get("xev").?);
         if (install) {
             const install_step = b.addInstallArtifact(c_exe, .{
                 .dest_dir = .{ .override = .{ .custom = "bench" } },
@@ -247,9 +247,9 @@ fn benchTargets(
 
 fn exampleTargets(
     b: *std.Build,
-    target: std.zig.CrossTarget,
-    optimize: std.builtin.Mode,
-    c_lib_: ?*std.build.Step.Compile,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    c_lib_: ?*std.Build.Step.Compile,
     install: bool,
     install_name: ?[]const u8,
 ) !void {
@@ -288,7 +288,7 @@ fn exampleTargets(
                 .target = target,
                 .optimize = optimize,
             });
-            c_exe.addModule("xev", b.modules.get("xev").?);
+            c_exe.root_module.addImport("xev", b.modules.get("xev").?);
             if (install) {
                 const install_step = b.addInstallArtifact(c_exe, .{
                     .dest_dir = .{ .override = .{ .custom = "example" } },
