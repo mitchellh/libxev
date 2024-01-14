@@ -1707,7 +1707,7 @@ const Timer = struct {
 /// Kevent is either kevent_s or kevent64_s depending on the target platform.
 /// This lets us support both Mac and non-Mac platforms.
 const Kevent = switch (builtin.os.tag) {
-    .macos => os.system.kevent64_s,
+    .ios, .macos => os.system.kevent64_s,
     else => @compileError("kqueue not supported yet for target OS"),
 };
 
