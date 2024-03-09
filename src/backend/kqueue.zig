@@ -2133,7 +2133,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
     var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(ln);
+    errdefer os.close(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(ln, &address.any, address.getOsSockLen());
     try os.listen(ln, kernel_backlog);
@@ -2144,7 +2144,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
         os.SOCK.NONBLOCK | os.SOCK.STREAM | os.SOCK.CLOEXEC,
         0,
     );
-    errdefer os.closeSocket(client_conn);
+    errdefer os.close(client_conn);
 
     // Accept
     var server_conn: os.socket_t = 0;
@@ -2583,7 +2583,7 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
     var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(ln);
+    errdefer os.close(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(ln, &address.any, address.getOsSockLen());
     try os.listen(ln, kernel_backlog);

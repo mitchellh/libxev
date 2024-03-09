@@ -56,7 +56,7 @@ pub const Loop = struct {
 
     pub fn init(options: xev.Options) !Loop {
         var res: Loop = .{
-            .fd = try std.os.epoll_create1(std.os.O.CLOEXEC),
+            .fd = try std.os.epoll_create1(std.posix.linux.EPOLL.CLOEXEC),
             .thread_pool = options.thread_pool,
             .thread_pool_completions = undefined,
             .cached_now = undefined,
@@ -1540,9 +1540,9 @@ test "epoll: timerfd" {
 
     // We'll try with a simple timerfd
     const Timerfd = @import("../linux/timerfd.zig").Timerfd;
-    var t = try Timerfd.init(.monotonic, 0);
+    var t = try Timerfd.init(.monotonic, .{});
     defer t.deinit();
-    try t.set(0, &.{ .value = .{ .nanoseconds = 1 } }, null);
+    try t.set(.{}, &.{ .value = .{ .nanoseconds = 1 } }, null);
 
     // Add the timer
     var called = false;
@@ -1591,7 +1591,7 @@ test "epoll: socket accept/connect/send/recv/close" {
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
     var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(ln);
+    errdefer os.close(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(ln, &address.any, address.getOsSockLen());
     try os.listen(ln, kernel_backlog);
@@ -1602,7 +1602,7 @@ test "epoll: socket accept/connect/send/recv/close" {
         os.SOCK.NONBLOCK | os.SOCK.STREAM | os.SOCK.CLOEXEC,
         0,
     );
-    errdefer os.closeSocket(client_conn);
+    errdefer os.close(client_conn);
 
     // Accept
     var server_conn: os.socket_t = 0;

@@ -1955,7 +1955,7 @@ test "iocp: socket accept/connect/send/recv/close" {
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
     const ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.closeSocket(ln);
+    errdefer std.os.close(ln);
 
     try std.os.setsockopt(ln, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try std.os.bind(ln, &address.any, address.getOsSockLen());
@@ -1963,7 +1963,7 @@ test "iocp: socket accept/connect/send/recv/close" {
 
     // Create a TCP client socket
     const client_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.closeSocket(client_conn);
+    errdefer std.os.close(client_conn);
 
     var server_conn_result: Result = undefined;
     var c_accept: Completion = .{
@@ -2221,7 +2221,7 @@ test "iocp: recv cancellation" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const socket = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.closeSocket(socket);
+    errdefer std.os.close(socket);
 
     try std.os.setsockopt(socket, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try std.os.bind(socket, &address.any, address.getOsSockLen());
@@ -2294,7 +2294,7 @@ test "iocp: accept cancellation" {
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
     const ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.closeSocket(ln);
+    errdefer std.os.close(ln);
 
     try std.os.setsockopt(ln, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try std.os.bind(ln, &address.any, address.getOsSockLen());
