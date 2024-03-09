@@ -5,7 +5,7 @@ const queue = @import("../queue.zig");
 const xev = @import("../main.zig").IO_Uring;
 
 pub const Loop = struct {
-    ring: linux.IO_Uring,
+    ring: linux.IoUring,
 
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
@@ -41,7 +41,7 @@ pub const Loop = struct {
             // TODO(mitchellh): add an init_advanced function or something
             // for people using the io_uring API directly to be able to set
             // the flags for this.
-            .ring = try linux.IO_Uring.init(entries, 0),
+            .ring = try linux.IoUring.init(entries, 0),
         };
         result.update_now();
 
@@ -363,35 +363,25 @@ pub const Loop = struct {
                 return;
             },
 
-            .accept => |*v| linux.io_uring_prep_accept(
-                sqe,
+            .accept => |*v| sqe.prep_accept(
                 v.socket,
                 &v.addr,
                 &v.addr_size,
                 v.flags,
             ),
 
-            .close => |v| linux.io_uring_prep_close(
-                sqe,
-                v.fd,
-            ),
+            .close => |v| sqe.prep_close(v.fd),
 
-            .connect => |*v| linux.io_uring_prep_connect(
-                sqe,
+            .connect => |*v| sqe.prep_connect(
                 v.socket,
                 &v.addr.any,
                 v.addr.getOsSockLen(),
             ),
 
-            .poll => |v| linux.io_uring_prep_poll_add(
-                sqe,
-                v.fd,
-                v.events,
-            ),
+            .poll => |v| sqe.prep_poll_add(v.fd, v.events),
 
             .read => |*v| switch (v.buffer) {
-                .array => |*buf| linux.io_uring_prep_read(
-                    sqe,
+                .array => |*buf| sqe.prep_read(
                     v.fd,
                     buf,
 
@@ -400,8 +390,7 @@ pub const Loop = struct {
                     @bitCast(@as(i64, -1)),
                 ),
 
-                .slice => |buf| linux.io_uring_prep_read(
-                    sqe,
+                .slice => |buf| sqe.prep_read(
                     v.fd,
                     buf,
 
@@ -412,15 +401,13 @@ pub const Loop = struct {
             },
 
             .pread => |*v| switch (v.buffer) {
-                .array => |*buf| linux.io_uring_prep_read(
-                    sqe,
+                .array => |*buf| sqe.prep_read(
                     v.fd,
                     buf,
                     v.offset,
                 ),
 
-                .slice => |buf| linux.io_uring_prep_read(
-                    sqe,
+                .slice => |buf| sqe.prep_read(
                     v.fd,
                     buf,
                     v.offset,
@@ -428,15 +415,13 @@ pub const Loop = struct {
             },
 
             .recv => |*v| switch (v.buffer) {
-                .array => |*buf| linux.io_uring_prep_recv(
-                    sqe,
+                .array => |*buf| sqe.prep_recv(
                     v.fd,
                     buf,
                     0,
                 ),
 
-                .slice => |buf| linux.io_uring_prep_recv(
-                    sqe,
+                .slice => |buf| sqe.prep_recv(
                     v.fd,
                     buf,
                     0,
@@ -444,8 +429,7 @@ pub const Loop = struct {
             },
 
             .recvmsg => |*v| {
-                linux.io_uring_prep_recvmsg(
-                    sqe,
+                sqe.prep_recvmsg(
                     v.fd,
                     v.msghdr,
                     0,
@@ -453,15 +437,13 @@ pub const Loop = struct {
             },
 
             .send => |*v| switch (v.buffer) {
-                .array => |*buf| linux.io_uring_prep_send(
-                    sqe,
+                .array => |*buf| sqe.prep_send(
                     v.fd,
                     buf.array[0..buf.len],
                     0,
                 ),
 
-                .slice => |buf| linux.io_uring_prep_send(
-                    sqe,
+                .slice => |buf| sqe.prep_send(
                     v.fd,
                     buf,
                     0,
@@ -473,16 +455,14 @@ pub const Loop = struct {
                     @panic("TODO: sendmsg with buffer");
                 }
 
-                linux.io_uring_prep_sendmsg(
-                    sqe,
+                sqe.prep_sendmsg(
                     v.fd,
                     v.msghdr,
                     0,
                 );
             },
 
-            .shutdown => |v| linux.io_uring_prep_shutdown(
-                sqe,
+            .shutdown => |v| sqe.prep_shutdown(
                 v.socket,
                 switch (v.how) {
                     .both => linux.SHUT.RDWR,
@@ -491,22 +471,19 @@ pub const Loop = struct {
                 },
             ),
 
-            .timer => |*v| linux.io_uring_prep_timeout(
-                sqe,
+            .timer => |*v| sqe.prep_timeout(
                 &v.next,
                 0,
                 linux.IORING_TIMEOUT_ABS,
             ),
 
-            .timer_remove => |v| linux.io_uring_prep_timeout_remove(
-                sqe,
+            .timer_remove => |v| sqe.prep_timeout_remove(
                 @intFromPtr(v.timer),
                 0,
             ),
 
             .write => |*v| switch (v.buffer) {
-                .array => |*buf| linux.io_uring_prep_write(
-                    sqe,
+                .array => |*buf| sqe.prep_write(
                     v.fd,
                     buf.array[0..buf.len],
 
@@ -515,8 +492,7 @@ pub const Loop = struct {
                     @bitCast(@as(i64, -1)),
                 ),
 
-                .slice => |buf| linux.io_uring_prep_write(
-                    sqe,
+                .slice => |buf| sqe.prep_write(
                     v.fd,
                     buf,
 
@@ -527,22 +503,20 @@ pub const Loop = struct {
             },
 
             .pwrite => |*v| switch (v.buffer) {
-                .array => |*buf| linux.io_uring_prep_write(
-                    sqe,
+                .array => |*buf| sqe.prep_write(
                     v.fd,
                     buf.array[0..buf.len],
                     v.offset,
                 ),
 
-                .slice => |buf| linux.io_uring_prep_write(
-                    sqe,
+                .slice => |buf| sqe.prep_write(
                     v.fd,
                     buf,
                     v.offset,
                 ),
             },
 
-            .cancel => |v| linux.io_uring_prep_cancel(sqe, @intCast(@intFromPtr(v.c)), 0),
+            .cancel => |v| sqe.prep_cancel(@intCast(@intFromPtr(v.c)), 0),
         }
 
         // Our sqe user data always points back to the completion.
@@ -1164,9 +1138,9 @@ test "io_uring: timerfd" {
 
     // We'll try with a simple timerfd
     const Timerfd = @import("../linux/timerfd.zig").Timerfd;
-    var t = try Timerfd.init(.monotonic, 0);
+    var t = try Timerfd.init(.monotonic, .{});
     defer t.deinit();
-    try t.set(0, &.{ .value = .{ .nanoseconds = 1 } }, null);
+    try t.set(.{}, &.{ .value = .{ .nanoseconds = 1 } }, null);
 
     // Add the timer
     var called = false;
@@ -1394,14 +1368,14 @@ test "io_uring: socket accept/connect/send/recv/close" {
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
     var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(ln);
+    errdefer os.close(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(ln, &address.any, address.getOsSockLen());
     try os.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
     var client_conn = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(client_conn);
+    errdefer os.close(client_conn);
 
     // Accept
     var server_conn: os.socket_t = 0;
@@ -1717,7 +1691,7 @@ test "io_uring: socket read cancellation" {
     // Create a UDP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const socket = try os.socket(address.any.family, os.SOCK.DGRAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.closeSocket(socket);
+    errdefer os.close(socket);
     try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
     try os.bind(socket, &address.any, address.getOsSockLen());
 

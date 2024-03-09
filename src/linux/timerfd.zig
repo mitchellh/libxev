@@ -13,7 +13,7 @@ pub const Timerfd = struct {
     fd: i32,
 
     /// timerfd_create
-    pub fn init(clock: Clock, flags: u32) !Timerfd {
+    pub fn init(clock: Clock, flags: linux.TFD) !Timerfd {
         const res = linux.timerfd_create(@intFromEnum(clock), flags);
         return switch (linux.getErrno(res)) {
             .SUCCESS => .{ .fd = @as(i32, @intCast(res)) },
@@ -28,7 +28,7 @@ pub const Timerfd = struct {
     /// timerfd_settime
     pub fn set(
         self: *const Timerfd,
-        flags: u32,
+        flags: linux.TFD.TIMER,
         new_value: *const Spec,
         old_value: ?*Spec,
     ) !void {
@@ -83,15 +83,15 @@ pub const Timerfd = struct {
 test Timerfd {
     const testing = std.testing;
 
-    var t = try Timerfd.init(.monotonic, 0);
+    var t = try Timerfd.init(.monotonic, .{});
     defer t.deinit();
 
     // Set
-    try t.set(0, &.{ .value = .{ .seconds = 60 } }, null);
+    try t.set(.{}, &.{ .value = .{ .seconds = 60 } }, null);
     try testing.expect((try t.get()).value.seconds > 0);
 
     // Disarm
     var old: Timerfd.Spec = undefined;
-    try t.set(0, &.{ .value = .{ .seconds = 0 } }, &old);
+    try t.set(.{}, &.{ .value = .{ .seconds = 0 } }, &old);
     try testing.expect(old.value.seconds > 0);
 }
