@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const wasi = std.os.wasi;
+const posix = std.posix;
 const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
@@ -243,7 +244,7 @@ pub const Loop = struct {
                     .tag = wasi.EVENTTYPE_CLOCK,
                     .u = .{
                         .clock = .{
-                            .id = @as(u32, @bitCast(std.os.CLOCK.MONOTONIC)),
+                            .id = @as(u32, @bitCast(posix.CLOCK.MONOTONIC)),
                             .timeout = timeout,
                             .precision = 1 * std.time.ns_per_ms,
                             .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
@@ -259,7 +260,7 @@ pub const Loop = struct {
             var n: usize = 0;
             switch (wasi.poll_oneoff(&subs[0], &events[0], subs.len, &n)) {
                 .SUCCESS => {},
-                else => |err| return std.os.unexpectedErrno(err),
+                else => |err| return posix.unexpectedErrno(err),
             }
 
             // Poll!
@@ -370,13 +371,13 @@ pub const Loop = struct {
                 break :res .{
                     .shutdown = switch (wasi.sock_shutdown(v.socket, how)) {
                         .SUCCESS => {},
-                        else => |err| std.os.unexpectedErrno(err),
+                        else => |err| posix.unexpectedErrno(err),
                     },
                 };
             },
 
             .close => |v| res: {
-                std.os.close(v.fd);
+                posix.close(v.fd);
                 break :res .{ .close = {} };
             },
 
@@ -568,7 +569,7 @@ pub const Loop = struct {
     fn timer_next(next_ms: u64) wasi.timestamp_t {
         // Get the absolute time we'll execute this timer next.
         var now_ts: wasi.timestamp_t = undefined;
-        switch (wasi.clock_time_get(@as(u32, @bitCast(std.os.CLOCK.MONOTONIC)), 1, &now_ts)) {
+        switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &now_ts)) {
             .SUCCESS => {},
             .INVAL => unreachable,
             else => unreachable,
@@ -581,10 +582,10 @@ pub const Loop = struct {
 
     fn get_now() !wasi.timestamp_t {
         var ts: wasi.timestamp_t = undefined;
-        return switch (wasi.clock_time_get(@as(u32, @bitCast(std.os.CLOCK.MONOTONIC)), 1, &ts)) {
+        return switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &ts)) {
             .SUCCESS => ts,
             .INVAL => error.UnsupportedClock,
-            else => |err| std.os.unexpectedErrno(err),
+            else => |err| posix.unexpectedErrno(err),
         };
     }
 };
@@ -759,19 +760,19 @@ pub const Completion = struct {
             => unreachable,
 
             .accept => |*op| res: {
-                var out_fd: std.os.fd_t = undefined;
+                var out_fd: posix.fd_t = undefined;
                 break :res .{
                     .accept = switch (wasi.sock_accept(op.socket, 0, &out_fd)) {
                         .SUCCESS => out_fd,
-                        else => |err| std.os.unexpectedErrno(err),
+                        else => |err| posix.unexpectedErrno(err),
                     },
                 };
             },
 
             .read => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.read(op.fd, v),
-                    .array => |*v| std.os.read(op.fd, v),
+                    .slice => |v| posix.read(op.fd, v),
+                    .array => |*v| posix.read(op.fd, v),
                 };
 
                 break :res .{
@@ -784,8 +785,8 @@ pub const Completion = struct {
 
             .pread => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.pread(op.fd, v, op.offset),
-                    .array => |*v| std.os.pread(op.fd, v, op.offset),
+                    .slice => |v| posix.pread(op.fd, v, op.offset),
+                    .array => |*v| posix.pread(op.fd, v, op.offset),
                 };
 
                 break :res .{
@@ -798,8 +799,8 @@ pub const Completion = struct {
 
             .write => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.write(op.fd, v),
-                    .array => |*v| std.os.write(op.fd, v.array[0..v.len]),
+                    .slice => |v| posix.write(op.fd, v),
+                    .array => |*v| posix.write(op.fd, v.array[0..v.len]),
                 };
 
                 break :res .{
@@ -809,8 +810,8 @@ pub const Completion = struct {
 
             .pwrite => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.pwrite(op.fd, v, op.offset),
-                    .array => |*v| std.os.pwrite(op.fd, v.array[0..v.len], op.offset),
+                    .slice => |v| posix.pwrite(op.fd, v, op.offset),
+                    .array => |*v| posix.pwrite(op.fd, v.array[0..v.len], op.offset),
                 };
 
                 break :res .{
@@ -823,7 +824,7 @@ pub const Completion = struct {
                 var roflags: wasi.roflags_t = undefined;
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
-                        var iovs = [1]std.os.iovec{std.os.iovec{
+                        var iovs = [1]posix.iovec{posix.iovec{
                             .iov_base = v.ptr,
                             .iov_len = v.len,
                         }};
@@ -839,7 +840,7 @@ pub const Completion = struct {
                     },
 
                     .array => |*v| array: {
-                        var iovs = [1]std.os.iovec{std.os.iovec{
+                        var iovs = [1]posix.iovec{posix.iovec{
                             .iov_base = v,
                             .iov_len = v.len,
                         }};
@@ -858,7 +859,7 @@ pub const Completion = struct {
                 break :res .{
                     .recv = switch (errno) {
                         .SUCCESS => n,
-                        else => |err| std.os.unexpectedErrno(err),
+                        else => |err| posix.unexpectedErrno(err),
                     },
                 };
             },
@@ -867,7 +868,7 @@ pub const Completion = struct {
                 var n: usize = undefined;
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
-                        var iovs = [1]std.os.iovec_const{std.os.iovec_const{
+                        var iovs = [1]posix.iovec_const{posix.iovec_const{
                             .iov_base = v.ptr,
                             .iov_len = v.len,
                         }};
@@ -882,7 +883,7 @@ pub const Completion = struct {
                     },
 
                     .array => |*v| array: {
-                        var iovs = [1]std.os.iovec_const{std.os.iovec_const{
+                        var iovs = [1]posix.iovec_const{posix.iovec_const{
                             .iov_base = &v.array,
                             .iov_len = v.len,
                         }};
@@ -900,7 +901,7 @@ pub const Completion = struct {
                 break :res .{
                     .send = switch (errno) {
                         .SUCCESS => n,
-                        else => |err| std.os.unexpectedErrno(err),
+                        else => |err| posix.unexpectedErrno(err),
                     },
                 };
             },
@@ -929,7 +930,7 @@ pub const OperationType = enum {
 pub const Result = union(OperationType) {
     noop: void,
     cancel: CancelError!void,
-    accept: AcceptError!std.os.fd_t,
+    accept: AcceptError!posix.fd_t,
     read: ReadError!usize,
     pread: ReadError!usize,
     write: WriteError!usize,
@@ -954,48 +955,48 @@ pub const Operation = union(OperationType) {
     },
 
     accept: struct {
-        socket: std.os.socket_t,
+        socket: posix.socket_t,
     },
 
     read: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
     },
 
     pread: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
         offset: u64,
     },
 
     write: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
     },
 
     pwrite: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
         offset: u64,
     },
 
     send: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
     },
 
     recv: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
     },
 
     shutdown: struct {
-        socket: std.os.socket_t,
-        how: std.os.ShutdownHow = .both,
+        socket: posix.socket_t,
+        how: posix.ShutdownHow = .both,
     },
 
     close: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
     },
 
     timer: Timer,
@@ -1007,13 +1008,13 @@ pub const Operation = union(OperationType) {
 
 const Timer = struct {
     /// The absolute time to fire this timer next.
-    next: std.os.wasi.timestamp_t,
+    next: wasi.timestamp_t,
 
     /// Only used internally. If this is non-null and timer is
     /// CANCELLED, then the timer is rearmed automatically with this
     /// as the next time. The callback will not be called on the
     /// cancellation.
-    reset: ?std.os.wasi.timestamp_t = null,
+    reset: ?wasi.timestamp_t = null,
 
     /// Internal heap fields.
     heap: heap.IntrusiveField(Timer) = .{},
@@ -1047,13 +1048,13 @@ pub const ShutdownError = error{
     Unexpected,
 };
 
-pub const ReadError = Batch.Error || std.os.ReadError || std.os.PReadError ||
+pub const ReadError = Batch.Error || posix.ReadError || posix.PReadError ||
     error{
     EOF,
     Unknown,
 };
 
-pub const WriteError = Batch.Error || std.os.WriteError || std.os.PWriteError ||
+pub const WriteError = Batch.Error || posix.WriteError || posix.PWriteError ||
     error{
     Unknown,
 };
@@ -1527,7 +1528,7 @@ test "wasi: file" {
             w.RIGHT.FD_FILESTAT_GET |
             w.RIGHT.POLL_FD_READWRITE;
         const fdflags: w.fdflags_t = w.FDFLAG.SYNC | w.FDFLAG.RSYNC | w.FDFLAG.DSYNC;
-        const fd = try std.os.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags);
+        const fd = try posix.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags);
         break :f std.fs.File{ .handle = fd };
     };
     defer dir.deleteFile(path) catch unreachable;
