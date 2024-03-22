@@ -263,7 +263,7 @@ pub const Loop = struct {
                 self.asyncs = .{};
 
                 while (asyncs.pop()) |c| {
-                    const c_wakeup = c.op.async_wait.wakeup.swap(false, .seq_cst);
+                    const c_wakeup = c.op.async_wait.wakeup.swap(false, .SeqCst);
 
                     // If we aren't waking this one up, requeue
                     if (!c_wakeup) {
@@ -830,7 +830,7 @@ pub const Loop = struct {
 
         // The completion has been wakeup, this is used to see which completion in the async queue
         // needs to be removed.
-        completion.op.async_wait.wakeup.store(true, .seq_cst);
+        completion.op.async_wait.wakeup.store(true, .SeqCst);
 
         const result = windows.kernel32.PostQueuedCompletionStatus(
             self.iocp_handle,
