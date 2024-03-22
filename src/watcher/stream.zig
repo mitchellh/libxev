@@ -506,7 +506,7 @@ pub fn GenericStream(comptime xev: type) type {
         const Self = @This();
 
         /// The underlying file
-        fd: std.os.fd_t,
+        fd: std.posix.fd_t,
 
         pub usingnamespace Stream(xev, Self, .{
             .close = true,
@@ -515,7 +515,7 @@ pub fn GenericStream(comptime xev: type) type {
         });
 
         /// Initialize a generic stream from a file descriptor.
-        pub fn initFd(fd: std.os.fd_t) Self {
+        pub fn initFd(fd: std.posix.fd_t) Self {
             return .{
                 .fd = fd,
             };
@@ -764,8 +764,8 @@ const Pty = struct {
     /// to the master/slave side respectively, and while that terminology is
     /// the officially used terminology of the syscall, I will use parent/child
     /// here.
-    parent: std.os.fd_t,
-    child: std.os.fd_t,
+    parent: std.posix.fd_t,
+    child: std.posix.fd_t,
 
     /// Redeclare this winsize struct so we can just use a Zig struct. This
     /// layout should be correct on all tested platforms.
@@ -778,8 +778,8 @@ const Pty = struct {
 
     // libc pty.h
     extern "c" fn openpty(
-        parent: *std.os.fd_t,
-        child: *std.os.fd_t,
+        parent: *std.posix.fd_t,
+        child: *std.posix.fd_t,
         name: ?[*]u8,
         termios: ?*const anyopaque, // termios but we don't use it
         winsize: ?*const Winsize,
@@ -794,8 +794,8 @@ const Pty = struct {
             .ws_ypixel = 600,
         };
 
-        var parent_fd: std.os.fd_t = undefined;
-        var child_fd: std.os.fd_t = undefined;
+        var parent_fd: std.posix.fd_t = undefined;
+        var child_fd: std.posix.fd_t = undefined;
         if (openpty(
             &parent_fd,
             &child_fd,
@@ -805,8 +805,8 @@ const Pty = struct {
         ) < 0)
             return error.OpenptyFailed;
         errdefer {
-            _ = std.os.system.close(parent_fd);
-            _ = std.os.system.close(child_fd);
+            _ = std.posix.system.close(parent_fd);
+            _ = std.posix.system.close(child_fd);
         }
 
         return .{
@@ -816,7 +816,7 @@ const Pty = struct {
     }
 
     pub fn deinit(self: *Pty) void {
-        std.os.close(self.parent);
-        std.os.close(self.child);
+        std.posix.close(self.parent);
+        std.posix.close(self.child);
     }
 };

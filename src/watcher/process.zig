@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
-const os = std.os;
+const posix = std.posix;
 const common = @import("common.zig");
 
 /// Process management, such as waiting for process exit.
@@ -32,21 +32,21 @@ fn ProcessPidFd(comptime xev: type) type {
         };
 
         /// pidfd file descriptor
-        fd: os.fd_t,
+        fd: posix.fd_t,
 
         /// Create a new process watcher for the given pid.
-        pub fn init(pid: os.pid_t) !Self {
+        pub fn init(pid: posix.pid_t) !Self {
             // Note: SOCK_NONBLOCK == PIDFD_NONBLOCK but we should PR that
             // over to Zig.
-            const res = os.linux.pidfd_open(pid, os.SOCK.NONBLOCK);
-            const fd = switch (os.errno(res)) {
-                .SUCCESS => @as(os.fd_t, @intCast(res)),
+            const res = posix.linux.pidfd_open(pid, posix.SOCK.NONBLOCK);
+            const fd = switch (posix.errno(res)) {
+                .SUCCESS => @as(posix.fd_t, @intCast(res)),
                 .INVAL => return error.InvalidArgument,
                 .MFILE => return error.ProcessFdQuotaExceeded,
                 .NFILE => return error.SystemFdQuotaExceeded,
                 .NODEV => return error.SystemResources,
                 .NOMEM => return error.SystemResources,
-                else => |err| return os.unexpectedErrno(err),
+                else => |err| return posix.unexpectedErrno(err),
             };
 
             return .{
@@ -56,7 +56,7 @@ fn ProcessPidFd(comptime xev: type) type {
 
         /// Clean up the process watcher.
         pub fn deinit(self: *Self) void {
-            std.os.close(self.fd);
+            std.posix.close(self.fd);
         }
 
         /// Wait for the process to exit. This will automatically call
@@ -75,8 +75,8 @@ fn ProcessPidFd(comptime xev: type) type {
             ) xev.CallbackAction,
         ) void {
             const events: u32 = comptime switch (xev.backend) {
-                .io_uring => os.POLL.IN,
-                .epoll => os.linux.EPOLL.IN,
+                .io_uring => posix.POLL.IN,
+                .epoll => posix.linux.EPOLL.IN,
                 else => unreachable,
             };
 
@@ -102,10 +102,10 @@ fn ProcessPidFd(comptime xev: type) type {
 
                             // We need to wait on the pidfd because it is noted as ready
                             const fd = c_inner.op.poll.fd;
-                            var info: os.linux.siginfo_t = undefined;
-                            const res = os.linux.waitid(.PIDFD, fd, &info, os.linux.W.EXITED);
+                            var info: posix.linux.siginfo_t = undefined;
+                            const res = posix.linux.waitid(.PIDFD, fd, &info, posix.linux.W.EXITED);
 
-                            break :arg switch (os.errno(res)) {
+                            break :arg switch (posix.errno(res)) {
                                 .SUCCESS => @as(u32, @intCast(info.fields.common.second.sigchld.status)),
                                 .CHILD => error.InvalidChild,
 
@@ -143,10 +143,10 @@ fn ProcessKqueue(comptime xev: type) type {
         pub const WaitError = xev.Sys.ProcError;
 
         /// The pid to watch.
-        pid: os.pid_t,
+        pid: posix.pid_t,
 
         /// Create a new process watcher for the given pid.
-        pub fn init(pid: os.pid_t) !Self {
+        pub fn init(pid: posix.pid_t) !Self {
             return .{
                 .pid = pid,
             };
@@ -176,7 +176,7 @@ fn ProcessKqueue(comptime xev: type) type {
                 .op = .{
                     .proc = .{
                         .pid = self.pid,
-                        .flags = os.system.NOTE_EXIT | os.system.NOTE_EXITSTATUS,
+                        .flags = posix.system.NOTE_EXIT | posix.system.NOTE_EXITSTATUS,
                     },
                 },
 
@@ -215,7 +215,7 @@ fn ProcessIocp(comptime xev: type) type {
         job: windows.HANDLE,
         process: windows.HANDLE,
 
-        pub fn init(process: os.pid_t) !Self {
+        pub fn init(process: posix.pid_t) !Self {
             const current_process = windows.kernel32.GetCurrentProcess();
 
             // Duplicate the process handle so we don't rely on the caller keeping it alive

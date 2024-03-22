@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
-const os = std.os;
+const posix = std.posix;
 const stream = @import("stream.zig");
 const common = @import("common.zig");
 
@@ -16,7 +16,7 @@ const common = @import("common.zig");
 pub fn TCP(comptime xev: type) type {
     return struct {
         const Self = @This();
-        const FdType = if (xev.backend == .iocp) os.windows.HANDLE else os.socket_t;
+        const FdType = if (xev.backend == .iocp) std.os.windows.HANDLE else posix.socket_t;
 
         fd: FdType,
 
@@ -33,16 +33,16 @@ pub fn TCP(comptime xev: type) type {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
             const fd = if (xev.backend == .iocp)
-                try os.windows.WSASocketW(addr.any.family, os.SOCK.STREAM, 0, null, 0, os.windows.ws2_32.WSA_FLAG_OVERLAPPED)
+                try std.os.windows.WSASocketW(addr.any.family, std.os.SOCK.STREAM, 0, null, 0, std.os.windows.ws2_32.WSA_FLAG_OVERLAPPED)
             else fd: {
                 // On io_uring we don't use non-blocking sockets because we may
                 // just get EAGAIN over and over from completions.
                 const flags = flags: {
-                    var flags: u32 = os.SOCK.STREAM | os.SOCK.CLOEXEC;
-                    if (xev.backend != .io_uring) flags |= os.SOCK.NONBLOCK;
+                    var flags: u32 = posix.SOCK.STREAM | posix.SOCK.CLOEXEC;
+                    if (xev.backend != .io_uring) flags |= posix.SOCK.NONBLOCK;
                     break :flags flags;
                 };
-                break :fd try os.socket(addr.any.family, flags, 0);
+                break :fd try posix.socket(addr.any.family, flags, 0);
             };
 
             return .{
@@ -61,10 +61,10 @@ pub fn TCP(comptime xev: type) type {
         pub fn bind(self: Self, addr: std.net.Address) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            const fd = if (xev.backend == .iocp) @as(os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
+            const fd = if (xev.backend == .iocp) @as(std.os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
 
-            try os.setsockopt(fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(fd, &addr.any, addr.getOsSockLen());
+            try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.bind(fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Listen for connections on the socket. This puts the socket into passive
@@ -72,9 +72,9 @@ pub fn TCP(comptime xev: type) type {
         pub fn listen(self: Self, backlog: u31) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            const fd = if (xev.backend == .iocp) @as(os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
+            const fd = if (xev.backend == .iocp) @as(std.os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
 
-            try os.listen(fd, backlog);
+            try posix.listen(fd, backlog);
         }
 
         /// Accept a single connection.
@@ -247,8 +247,8 @@ pub fn TCP(comptime xev: type) type {
 
             // Retrieve bound port and initialize client
             var sock_len = address.getOsSockLen();
-            const fd = if (xev.backend == .iocp) @as(os.windows.ws2_32.SOCKET, @ptrCast(server.fd)) else server.fd;
-            try os.getsockname(fd, &address.any, &sock_len);
+            const fd = if (xev.backend == .iocp) @as(std.os.windows.ws2_32.SOCKET, @ptrCast(server.fd)) else server.fd;
+            try posix.getsockname(fd, &address.any, &sock_len);
             const client = try Self.init(address);
 
             //const address = try std.net.Address.parseIp4("127.0.0.1", 3132);
@@ -419,7 +419,7 @@ pub fn TCP(comptime xev: type) type {
 
             // Retrieve bound port and initialize client
             var sock_len = address.getOsSockLen();
-            try os.getsockname(server.fd, &address.any, &sock_len);
+            try posix.getsockname(server.fd, &address.any, &sock_len);
             const client = try Self.init(address);
 
             // Completions we need
@@ -480,7 +480,7 @@ pub fn TCP(comptime xev: type) type {
             try testing.expect(server_closed);
 
             // Unqueued send - Limit send buffer to 8kB, this should force partial writes.
-            try os.setsockopt(client.fd, os.SOL.SOCKET, os.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 8192)));
+            try posix.setsockopt(client.fd, posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 8192)));
 
             const send_buf = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 } ** 100_000;
             var sent_unqueued: usize = 0;

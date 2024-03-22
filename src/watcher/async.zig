@@ -2,7 +2,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
-const os = std.os;
+const posix = std.posix;
 const common = @import("common.zig");
 
 pub fn Async(comptime xev: type) type {
@@ -30,20 +30,20 @@ fn AsyncEventFd(comptime xev: type) type {
         pub const WaitError = xev.ReadError;
 
         /// eventfd file descriptor
-        fd: os.fd_t,
+        fd: posix.fd_t,
 
         /// Create a new async. An async can be assigned to exactly one loop
         /// to be woken up. The completion must be allocated in advance.
         pub fn init() !Self {
             return .{
-                .fd = try std.os.eventfd(0, 0),
+                .fd = try std.posix.eventfd(0, 0),
             };
         }
 
         /// Clean up the async. This will forcibly deinitialize any resources
         /// and may result in erroneous wait callbacks to be fired.
         pub fn deinit(self: *Self) void {
-            std.os.close(self.fd);
+            std.posix.close(self.fd);
         }
 
         /// Wait for a message on this async. Note that async messages may be
@@ -113,7 +113,7 @@ fn AsyncEventFd(comptime xev: type) type {
         pub fn notify(self: Self) !void {
             // We want to just write "1" in the correct byte order as our host.
             const val = @as([8]u8, @bitCast(@as(u64, 1)));
-            _ = os.write(self.fd, &val) catch |err| switch (err) {
+            _ = posix.write(self.fd, &val) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return err,
             };
@@ -136,24 +136,24 @@ fn AsyncMachPort(comptime xev: type) type {
         pub const WaitError = xev.Sys.MachPortError;
 
         /// The mach port
-        port: os.system.mach_port_name_t,
+        port: posix.system.mach_port_name_t,
 
         /// Create a new async. An async can be assigned to exactly one loop
         /// to be woken up. The completion must be allocated in advance.
         pub fn init() !Self {
-            const mach_self = os.system.mach_task_self();
+            const mach_self = posix.system.mach_task_self();
 
             // Allocate the port
-            var mach_port: os.system.mach_port_name_t = undefined;
-            switch (os.system.getKernError(os.system.mach_port_allocate(
+            var mach_port: posix.system.mach_port_name_t = undefined;
+            switch (posix.system.getKernError(posix.system.mach_port_allocate(
                 mach_self,
-                @intFromEnum(os.system.MACH_PORT_RIGHT.RECEIVE),
+                @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
                 &mach_port,
             ))) {
                 .SUCCESS => {}, // Success
                 else => return error.MachPortAllocFailed,
             }
-            errdefer _ = os.system.mach_port_deallocate(mach_self, mach_port);
+            errdefer _ = posix.system.mach_port_deallocate(mach_self, mach_port);
 
             return .{
                 .port = mach_port,
@@ -163,8 +163,8 @@ fn AsyncMachPort(comptime xev: type) type {
         /// Clean up the async. This will forcibly deinitialize any resources
         /// and may result in erroneous wait callbacks to be fired.
         pub fn deinit(self: *Self) void {
-            _ = os.system.mach_port_deallocate(
-                os.system.mach_task_self(),
+            _ = posix.system.mach_port_deallocate(
+                posix.system.mach_task_self(),
                 self.port,
             );
         }
@@ -226,20 +226,20 @@ fn AsyncMachPort(comptime xev: type) type {
         }
 
         /// Drain the given mach port. All message bodies are discarded.
-        fn drain(port: os.system.mach_port_name_t) void {
+        fn drain(port: posix.system.mach_port_name_t) void {
             var message: struct {
-                header: os.system.mach_msg_header_t,
+                header: posix.system.mach_msg_header_t,
             } = undefined;
 
             while (true) {
-                switch (os.system.getMachMsgError(os.system.mach_msg(
+                switch (posix.system.getMachMsgError(posix.system.mach_msg(
                     &message.header,
-                    os.system.MACH_RCV_MSG | os.system.MACH_RCV_TIMEOUT,
+                    posix.system.MACH_RCV_MSG | posix.system.MACH_RCV_TIMEOUT,
                     0,
                     @sizeOf(@TypeOf(message)),
                     port,
-                    os.system.MACH_MSG_TIMEOUT_NONE,
-                    os.system.MACH_PORT_NULL,
+                    posix.system.MACH_MSG_TIMEOUT_NONE,
+                    posix.system.MACH_PORT_NULL,
                 ))) {
                     // This means a read would've blocked, so we drained.
                     .RCV_TIMED_OUT => return,
@@ -265,24 +265,24 @@ fn AsyncMachPort(comptime xev: type) type {
         /// ticking or not).
         pub fn notify(self: Self) !void {
             // This constructs an empty mach message. It has no data.
-            var msg: os.system.mach_msg_header_t = .{
-                .msgh_bits = @intFromEnum(os.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
-                .msgh_size = @sizeOf(os.system.mach_msg_header_t),
+            var msg: posix.system.mach_msg_header_t = .{
+                .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+                .msgh_size = @sizeOf(posix.system.mach_msg_header_t),
                 .msgh_remote_port = self.port,
-                .msgh_local_port = os.system.MACH_PORT_NULL,
+                .msgh_local_port = posix.system.MACH_PORT_NULL,
                 .msgh_voucher_port = undefined,
                 .msgh_id = undefined,
             };
 
-            return switch (os.system.getMachMsgError(
-                os.system.mach_msg(
+            return switch (posix.system.getMachMsgError(
+                posix.system.mach_msg(
                     &msg,
-                    os.system.MACH_SEND_MSG,
+                    posix.system.MACH_SEND_MSG,
                     msg.msgh_size,
                     0,
-                    os.system.MACH_PORT_NULL,
-                    os.system.MACH_MSG_TIMEOUT_NONE,
-                    os.system.MACH_PORT_NULL,
+                    posix.system.MACH_PORT_NULL,
+                    posix.system.MACH_MSG_TIMEOUT_NONE,
+                    posix.system.MACH_PORT_NULL,
                 ),
             )) {
                 .SUCCESS => {},

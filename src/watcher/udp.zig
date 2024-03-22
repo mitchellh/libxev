@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const os = std.os;
+const posix = std.posix;
 const stream = @import("stream.zig");
 const common = @import("common.zig");
 
@@ -35,7 +35,7 @@ fn UDPSendto(comptime xev: type) type {
     return struct {
         const Self = @This();
 
-        fd: os.socket_t,
+        fd: posix.socket_t,
 
         /// See UDPSendMsg.State
         pub const State = struct {
@@ -53,16 +53,16 @@ fn UDPSendto(comptime xev: type) type {
         /// resource.
         pub fn init(addr: std.net.Address) !Self {
             return .{
-                .fd = try os.socket(
+                .fd = try posix.socket(
                     addr.any.family,
-                    os.SOCK.NONBLOCK | os.SOCK.DGRAM | os.SOCK.CLOEXEC,
+                    posix.SOCK.NONBLOCK | posix.SOCK.DGRAM | posix.SOCK.CLOEXEC,
                     0,
                 ),
             };
         }
 
         /// Initialize a UDP socket from a file descriptor.
-        pub fn initFd(fd: os.socket_t) Self {
+        pub fn initFd(fd: posix.socket_t) Self {
             return .{
                 .fd = fd,
             };
@@ -70,9 +70,9 @@ fn UDPSendto(comptime xev: type) type {
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
-            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(self.fd, &addr.any, addr.getOsSockLen());
+            try posix.setsockopt(self.fd, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.setsockopt(self.fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.bind(self.fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Read from the socket. This performs a single read. The callback must
@@ -214,7 +214,7 @@ fn UDPSendto(comptime xev: type) type {
 fn UDPSendtoIOCP(comptime xev: type) type {
     return struct {
         const Self = @This();
-        const windows = std.os.windows;
+        const windows = std.posix.windows;
 
         fd: windows.HANDLE,
 
@@ -233,7 +233,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
         /// the family is used, the actual address has no impact on the created
         /// resource.
         pub fn init(addr: std.net.Address) !Self {
-            const socket = try windows.WSASocketW(addr.any.family, os.SOCK.DGRAM, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+            const socket = try windows.WSASocketW(addr.any.family, posix.SOCK.DGRAM, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
 
             return .{
                 .fd = socket,
@@ -250,8 +250,8 @@ fn UDPSendtoIOCP(comptime xev: type) type {
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
             const socket = @as(windows.ws2_32.SOCKET, @ptrCast(self.fd));
-            try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(socket, &addr.any, addr.getOsSockLen());
+            try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.bind(socket, &addr.any, addr.getOsSockLen());
         }
 
         /// Read from the socket. This performs a single read. The callback must
@@ -396,7 +396,7 @@ fn UDPSendMsg(comptime xev: type) type {
     return struct {
         const Self = @This();
 
-        fd: os.socket_t,
+        fd: posix.socket_t,
 
         /// UDP requires some extra state to perform operations. The state is
         /// opaque. This isn't part of xev.Completion because it is relatively
@@ -407,16 +407,16 @@ fn UDPSendMsg(comptime xev: type) type {
             op: union {
                 recv: struct {
                     buf: xev.ReadBuffer,
-                    addr_buffer: std.os.sockaddr.storage = undefined,
-                    msghdr: std.os.msghdr,
-                    iov: [1]std.os.iovec,
+                    addr_buffer: std.posix.sockaddr.storage = undefined,
+                    msghdr: std.posix.msghdr,
+                    iov: [1]std.posix.iovec,
                 },
 
                 send: struct {
                     buf: xev.WriteBuffer,
                     addr: std.net.Address,
-                    msghdr: std.os.msghdr_const,
-                    iov: [1]std.os.iovec_const,
+                    msghdr: std.posix.msghdr_const,
+                    iov: [1]std.posix.iovec_const,
                 },
             },
         };
@@ -434,18 +434,18 @@ fn UDPSendMsg(comptime xev: type) type {
             // On io_uring we don't use non-blocking sockets because we may
             // just get EAGAIN over and over from completions.
             const flags = flags: {
-                var flags: u32 = os.SOCK.DGRAM | os.SOCK.CLOEXEC;
-                if (xev.backend != .io_uring) flags |= os.SOCK.NONBLOCK;
+                var flags: u32 = posix.SOCK.DGRAM | posix.SOCK.CLOEXEC;
+                if (xev.backend != .io_uring) flags |= posix.SOCK.NONBLOCK;
                 break :flags flags;
             };
 
             return .{
-                .fd = try os.socket(addr.any.family, flags, 0),
+                .fd = try posix.socket(addr.any.family, flags, 0),
             };
         }
 
         /// Initialize a UDP socket from a file descriptor.
-        pub fn initFd(fd: os.socket_t) Self {
+        pub fn initFd(fd: posix.socket_t) Self {
             return .{
                 .fd = fd,
             };
@@ -453,9 +453,9 @@ fn UDPSendMsg(comptime xev: type) type {
 
         /// Bind the address to the socket.
         pub fn bind(self: Self, addr: std.net.Address) !void {
-            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
-            try os.setsockopt(self.fd, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try os.bind(self.fd, &addr.any, addr.getOsSockLen());
+            try posix.setsockopt(self.fd, posix.SOL.SOCKET, posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.setsockopt(self.fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+            try posix.bind(self.fd, &addr.any, addr.getOsSockLen());
         }
 
         /// Read from the socket. This performs a single read. The callback must

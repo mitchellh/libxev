@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const common = @import("common.zig");
 const assert = std.debug.assert;
-const os = std.os;
+const posix = std.posix;
 const main = @import("../main.zig");
 const stream = @import("stream.zig");
 
@@ -27,7 +27,7 @@ const stream = @import("stream.zig");
 pub fn File(comptime xev: type) type {
     return struct {
         const Self = @This();
-        const FdType = if (xev.backend == .iocp) os.windows.HANDLE else os.socket_t;
+        const FdType = if (xev.backend == .iocp) std.windows.HANDLE else posix.socket_t;
 
         /// The underlying file
         fd: FdType,
