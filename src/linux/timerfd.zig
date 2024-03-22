@@ -1,5 +1,6 @@
 const std = @import("std");
 const linux = std.os.linux;
+const posix = std.posix;
 
 /// Timerfd is a wrapper around the timerfd system calls. See the
 /// timerfd_create man page for information on timerfd and associated
@@ -15,14 +16,14 @@ pub const Timerfd = struct {
     /// timerfd_create
     pub fn init(clock: Clock, flags: linux.TFD) !Timerfd {
         const res = linux.timerfd_create(@intFromEnum(clock), flags);
-        return switch (linux.getErrno(res)) {
+        return switch (posix.errno(res)) {
             .SUCCESS => .{ .fd = @as(i32, @intCast(res)) },
             else => error.UnknownError,
         };
     }
 
     pub fn deinit(self: *const Timerfd) void {
-        std.os.close(self.fd);
+        posix.close(self.fd);
     }
 
     /// timerfd_settime
@@ -39,7 +40,7 @@ pub const Timerfd = struct {
             @as(?*linux.itimerspec, @ptrCast(old_value)),
         );
 
-        return switch (linux.getErrno(res)) {
+        return switch (posix.errno(res)) {
             .SUCCESS => {},
             else => error.UnknownError,
         };
@@ -49,7 +50,7 @@ pub const Timerfd = struct {
     pub fn get(self: *const Timerfd) !Spec {
         var out: Spec = undefined;
         const res = linux.timerfd_gettime(self.fd, @as(*linux.itimerspec, @ptrCast(&out)));
-        return switch (linux.getErrno(res)) {
+        return switch (posix.errno(res)) {
             .SUCCESS => out,
             else => error.UnknownError,
         };

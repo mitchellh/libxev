@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
+const posix = std.posix;
 const queue = @import("../queue.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
@@ -18,7 +19,7 @@ pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Operation.Timer, void, Operation.Timer.less);
     const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);
 
-    fd: std.os.fd_t,
+    fd: posix.fd_t,
 
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
@@ -40,7 +41,7 @@ pub const Loop = struct {
     thread_pool_completions: TaskCompletionQueue,
 
     /// Cached time
-    cached_now: std.os.timespec,
+    cached_now: posix.timespec,
 
     /// Some internal fields we can pack for better space.
     flags: packed struct {
@@ -56,7 +57,7 @@ pub const Loop = struct {
 
     pub fn init(options: xev.Options) !Loop {
         var res: Loop = .{
-            .fd = try std.os.epoll_create1(std.posix.linux.EPOLL.CLOEXEC),
+            .fd = try posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC),
             .thread_pool = options.thread_pool,
             .thread_pool_completions = undefined,
             .cached_now = undefined,
@@ -66,7 +67,7 @@ pub const Loop = struct {
     }
 
     pub fn deinit(self: *Loop) void {
-        std.os.close(self.fd);
+        posix.close(self.fd);
     }
 
     /// Run the event loop. See RunMode documentation for details on modes.
@@ -156,7 +157,7 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.cached_now) catch {};
+        posix.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now) catch {};
     }
 
     /// Add a timer to the loop. The timer will execute in "next_ms". This
@@ -223,11 +224,11 @@ pub const Loop = struct {
         }
     }
 
-    fn timer_next(self: *Loop, next_ms: u64) std.os.timespec {
+    fn timer_next(self: *Loop, next_ms: u64) posix.timespec {
         // Get the timestamp of the absolute time that we'll execute this timer.
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
-        const max: std.os.timespec = .{
+        const max: posix.timespec = .{
             .tv_sec = std.math.maxInt(isize),
             .tv_nsec = std.math.maxInt(isize),
         };
@@ -358,11 +359,11 @@ pub const Loop = struct {
                 break :timeout @as(i32, @intCast(ms_next -| ms_now));
             };
 
-            const n = std.os.epoll_wait(self.fd, &events, timeout);
+            const n = posix.epoll_wait(self.fd, &events, timeout);
             if (n < 0) {
-                switch (std.os.errno(n)) {
+                switch (posix.errno(n)) {
                     .INTR => continue,
-                    else => |err| return std.os.unexpectedErrno(err),
+                    else => |err| return posix.unexpectedErrno(err),
                 }
             }
 
@@ -383,7 +384,7 @@ pub const Loop = struct {
                         // We can't use self.stop because we can't trust
                         // that c is still a valid pointer.
                         if (fd) |v| {
-                            std.os.epoll_ctl(
+                            posix.epoll_ctl(
                                 self.fd,
                                 linux.EPOLL.CTL_DEL,
                                 v,
@@ -391,7 +392,7 @@ pub const Loop = struct {
                             ) catch unreachable;
 
                             if (close_dup) {
-                                std.os.close(v);
+                                posix.close(v);
                             }
                         }
 
@@ -468,7 +469,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .accept = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -479,7 +480,7 @@ pub const Loop = struct {
             .connect => |*v| res: {
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .connect = err };
 
-                if (std.os.connect(fd, &v.addr.any, v.addr.getOsSockLen())) {
+                if (posix.connect(fd, &v.addr.any, v.addr.getOsSockLen())) {
                     break :res .{ .connect = {} };
                 } else |err| switch (err) {
                     // If we would block then we register with epoll
@@ -496,7 +497,7 @@ pub const Loop = struct {
                     .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -518,7 +519,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -540,7 +541,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -562,7 +563,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -584,7 +585,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -599,7 +600,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .send = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -614,7 +615,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recv = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -633,7 +634,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .sendmsg = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -648,7 +649,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recvmsg = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -657,12 +658,12 @@ pub const Loop = struct {
             },
 
             .close => |v| res: {
-                std.os.close(v.fd);
+                posix.close(v.fd);
                 break :res .{ .close = {} };
             },
 
             .shutdown => |v| res: {
-                break :res .{ .shutdown = std.os.shutdown(v.socket, v.how) };
+                break :res .{ .shutdown = posix.shutdown(v.socket, v.how) };
             },
 
             .timer => |*v| res: {
@@ -684,7 +685,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .poll = err };
-                break :res if (std.os.epoll_ctl(
+                break :res if (posix.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -730,7 +731,7 @@ pub const Loop = struct {
         // Delete. This should never fail.
         const maybe_fd = if (completion.flags.dup) completion.flags.dup_fd else completion.fd();
         if (maybe_fd) |fd| {
-            std.os.epoll_ctl(
+            posix.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_DEL,
                 fd,
@@ -818,7 +819,7 @@ pub const Completion = struct {
         /// a single fd for multiple ops. We don't want to track that esp
         /// since epoll isn't the primary Linux interface.
         dup: bool = false,
-        dup_fd: std.os.fd_t = 0,
+        dup_fd: posix.fd_t = 0,
     } = .{},
 
     /// Intrusive queue field
@@ -872,7 +873,7 @@ pub const Completion = struct {
             => unreachable,
 
             .accept => |*op| .{
-                .accept = if (std.os.accept(
+                .accept = if (posix.accept(
                     op.socket,
                     &op.addr,
                     &op.addr_size,
@@ -884,15 +885,15 @@ pub const Completion = struct {
             },
 
             .connect => |*op| .{
-                .connect = if (std.os.getsockoptError(op.socket)) {} else |err| err,
+                .connect = if (posix.getsockoptError(op.socket)) {} else |err| err,
             },
 
             .poll => .{ .poll = {} },
 
             .read => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.read(op.fd, v),
-                    .array => |*v| std.os.read(op.fd, v),
+                    .slice => |v| posix.read(op.fd, v),
+                    .array => |*v| posix.read(op.fd, v),
                 };
 
                 break :res .{
@@ -905,8 +906,8 @@ pub const Completion = struct {
 
             .pread => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.pread(op.fd, v, op.offset),
-                    .array => |*v| std.os.pread(op.fd, v, op.offset),
+                    .slice => |v| posix.pread(op.fd, v, op.offset),
+                    .array => |*v| posix.pread(op.fd, v, op.offset),
                 };
 
                 break :res .{
@@ -919,27 +920,27 @@ pub const Completion = struct {
 
             .write => |*op| .{
                 .write = switch (op.buffer) {
-                    .slice => |v| std.os.write(op.fd, v),
-                    .array => |*v| std.os.write(op.fd, v.array[0..v.len]),
+                    .slice => |v| posix.write(op.fd, v),
+                    .array => |*v| posix.write(op.fd, v.array[0..v.len]),
                 },
             },
 
             .pwrite => |*op| .{
                 .pwrite = switch (op.buffer) {
-                    .slice => |v| std.os.pwrite(op.fd, v, op.offset),
-                    .array => |*v| std.os.pwrite(op.fd, v.array[0..v.len], op.offset),
+                    .slice => |v| posix.pwrite(op.fd, v, op.offset),
+                    .array => |*v| posix.pwrite(op.fd, v.array[0..v.len], op.offset),
                 },
             },
 
             .send => |*op| .{
                 .send = switch (op.buffer) {
-                    .slice => |v| std.os.send(op.fd, v, 0),
-                    .array => |*v| std.os.send(op.fd, v.array[0..v.len], 0),
+                    .slice => |v| posix.send(op.fd, v, 0),
+                    .array => |*v| posix.send(op.fd, v.array[0..v.len], 0),
                 },
             },
 
             .sendmsg => |*op| .{
-                .sendmsg = if (std.os.sendmsg(op.fd, op.msghdr, 0)) |v|
+                .sendmsg = if (posix.sendmsg(op.fd, op.msghdr, 0)) |v|
                     v
                 else |err|
                     err,
@@ -952,16 +953,16 @@ pub const Completion = struct {
                         error.EOF
                     else if (res > 0)
                         res
-                    else switch (std.os.errno(res)) {
-                        else => |err| std.os.unexpectedErrno(err),
+                    else switch (posix.errno(res)) {
+                        else => |err| posix.unexpectedErrno(err),
                     },
                 };
             },
 
             .recv => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| std.os.recv(op.fd, v, 0),
-                    .array => |*v| std.os.recv(op.fd, v, 0),
+                    .slice => |v| posix.recv(op.fd, v, 0),
+                    .array => |*v| posix.recv(op.fd, v, 0),
                 };
 
                 break :res .{
@@ -976,17 +977,17 @@ pub const Completion = struct {
 
     /// Return the fd for the completion. This will perform a dup(2) if
     /// requested.
-    fn fd_maybe_dup(self: *Completion) error{DupFailed}!std.os.fd_t {
+    fn fd_maybe_dup(self: *Completion) error{DupFailed}!posix.fd_t {
         const old_fd = self.fd().?;
         if (!self.flags.dup) return old_fd;
         if (self.flags.dup_fd > 0) return self.flags.dup_fd;
 
-        self.flags.dup_fd = std.os.dup(old_fd) catch return error.DupFailed;
+        self.flags.dup_fd = posix.dup(old_fd) catch return error.DupFailed;
         return self.flags.dup_fd;
     }
 
     /// Returns the fd associated with the completion (if any).
-    fn fd(self: *Completion) ?std.os.fd_t {
+    fn fd(self: *Completion) ?posix.fd_t {
         return switch (self.op) {
             .accept => |v| v.socket,
             .connect => |v| v.socket,
@@ -1035,7 +1036,7 @@ pub const OperationType = enum {
 pub const Result = union(OperationType) {
     noop: void,
     cancel: CancelError!void,
-    accept: AcceptError!std.os.socket_t,
+    accept: AcceptError!posix.socket_t,
     connect: ConnectError!void,
     poll: PollError!void,
     read: ReadError!usize,
@@ -1063,80 +1064,80 @@ pub const Operation = union(OperationType) {
     },
 
     accept: struct {
-        socket: std.os.socket_t,
-        addr: std.os.sockaddr = undefined,
-        addr_size: std.os.socklen_t = @sizeOf(std.os.sockaddr),
-        flags: u32 = std.os.SOCK.CLOEXEC,
+        socket: posix.socket_t,
+        addr: posix.sockaddr = undefined,
+        addr_size: posix.socklen_t = @sizeOf(posix.sockaddr),
+        flags: u32 = posix.SOCK.CLOEXEC,
     },
 
     connect: struct {
-        socket: std.os.socket_t,
+        socket: posix.socket_t,
         addr: std.net.Address,
     },
 
     /// Poll for events but do not perform any operations on them being
     /// ready. The "events" field are a OR-ed list of EPOLL events.
     poll: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         events: u32,
     },
 
     read: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
     },
 
     pread: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
         offset: u64,
     },
 
     write: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
     },
 
     pwrite: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
         offset: u64,
     },
 
     send: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
     },
 
     recv: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
     },
 
     sendmsg: struct {
-        fd: std.os.fd_t,
-        msghdr: *std.os.msghdr_const,
+        fd: posix.fd_t,
+        msghdr: *posix.msghdr_const,
 
         /// Optionally, a write buffer can be specified and the given
         /// msghdr will be populated with information about this buffer.
         buffer: ?WriteBuffer = null,
 
         /// Do not use this, it is only used internally.
-        iov: [1]std.os.iovec_const = undefined,
+        iov: [1]posix.iovec_const = undefined,
     },
 
     recvmsg: struct {
-        fd: std.os.fd_t,
-        msghdr: *std.os.msghdr,
+        fd: posix.fd_t,
+        msghdr: *posix.msghdr,
     },
 
     close: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
     },
 
     shutdown: struct {
-        socket: std.os.socket_t,
-        how: std.os.ShutdownHow = .both,
+        socket: posix.socket_t,
+        how: posix.ShutdownHow = .both,
     },
 
     timer: Timer,
@@ -1228,44 +1229,44 @@ pub const CancelError = ThreadPoolError || error{
     NotFound,
 };
 
-pub const AcceptError = std.os.EpollCtlError || error{
+pub const AcceptError = posix.EpollCtlError || error{
     DupFailed,
     Unknown,
 };
 
-pub const CloseError = std.os.EpollCtlError || error{
+pub const CloseError = posix.EpollCtlError || error{
     Unknown,
 };
 
-pub const PollError = std.os.EpollCtlError || error{
+pub const PollError = posix.EpollCtlError || error{
     DupFailed,
     Unknown,
 };
 
-pub const ShutdownError = std.os.EpollCtlError || std.os.ShutdownError || error{
+pub const ShutdownError = posix.EpollCtlError || posix.ShutdownError || error{
     Unknown,
 };
 
-pub const ConnectError = std.os.EpollCtlError || std.os.ConnectError || error{
+pub const ConnectError = posix.EpollCtlError || posix.ConnectError || error{
     DupFailed,
     Unknown,
 };
 
-pub const ReadError = ThreadPoolError || std.os.EpollCtlError ||
-    std.os.ReadError ||
-    std.os.PReadError ||
-    std.os.RecvFromError ||
+pub const ReadError = ThreadPoolError || posix.EpollCtlError ||
+    posix.ReadError ||
+    posix.PReadError ||
+    posix.RecvFromError ||
     error{
     DupFailed,
     EOF,
     Unknown,
 };
 
-pub const WriteError = ThreadPoolError || std.os.EpollCtlError ||
-    std.os.WriteError ||
-    std.os.PWriteError ||
-    std.os.SendError ||
-    std.os.SendMsgError ||
+pub const WriteError = ThreadPoolError || posix.EpollCtlError ||
+    posix.WriteError ||
+    posix.PWriteError ||
+    posix.SendError ||
+    posix.SendMsgError ||
     error{
     DupFailed,
     Unknown,
@@ -1581,7 +1582,7 @@ test "epoll: timerfd" {
 test "epoll: socket accept/connect/send/recv/close" {
     const mem = std.mem;
     const net = std.net;
-    const os = std.os;
+    const os = posix;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});

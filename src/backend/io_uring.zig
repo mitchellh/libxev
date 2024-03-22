@@ -1,6 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const linux = std.os.linux;
+const posix = std.posix;
 const queue = @import("../queue.zig");
 const xev = @import("../main.zig").IO_Uring;
 
@@ -15,7 +16,7 @@ pub const Loop = struct {
     submissions: queue.Intrusive(Completion) = .{},
 
     /// Cached time
-    cached_now: std.os.timespec = undefined,
+    cached_now: posix.timespec = undefined,
 
     flags: packed struct {
         /// True if the "now" field is outdated and should be updated
@@ -95,7 +96,7 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        std.os.clock_gettime(std.os.CLOCK.MONOTONIC, &self.cached_now) catch {};
+        posix.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now) catch {};
         self.flags.now_outdated = false;
     }
 
@@ -284,11 +285,11 @@ pub const Loop = struct {
         self.add(c_cancel);
     }
 
-    fn timer_next(self: *Loop, next_ms: u64) std.os.linux.timespec {
+    fn timer_next(self: *Loop, next_ms: u64) linux.timespec {
         // Get the timestamp of the absolute time that we'll execute this timer.
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
-        const max: std.os.linux.timespec = .{
+        const max: linux.timespec = .{
             .tv_sec = std.math.maxInt(isize),
             .tv_nsec = std.math.maxInt(isize),
         };
@@ -628,32 +629,32 @@ pub const Completion = struct {
             .accept => .{
                 .accept = if (res >= 0)
                     @intCast(res)
-                else switch (@as(std.os.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     .AGAIN => error.Again,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .close => .{
-                .close = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
-                    else => |errno| std.os.unexpectedErrno(errno),
+                .close = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .connect => .{
-                .connect = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
+                .connect = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     .CONNREFUSED => error.ConnectionRefused,
                     .TIMEDOUT => error.TimedOut,
                     .HOSTUNREACH => error.HostUnreachable,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .poll => .{
-                .poll = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
-                    else => |errno| std.os.unexpectedErrno(errno),
+                .poll = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
@@ -676,34 +677,34 @@ pub const Completion = struct {
             .send => .{
                 .send = if (res >= 0)
                     @intCast(res)
-                else switch (@as(std.os.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     .PIPE => error.BrokenPipe,
                     .CONNRESET => error.ConnectionReset,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .sendmsg => .{
                 .sendmsg = if (res >= 0)
                     @intCast(res)
-                else switch (@as(std.os.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
                     .PIPE => error.BrokenPipe,
                     .CONNRESET => error.ConnectionReset,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .shutdown => .{
-                .shutdown = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
+                .shutdown = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .timer => |*op| timer: {
-                const e = @as(std.os.E, @enumFromInt(-res));
+                const e = @as(posix.E, @enumFromInt(-res));
 
                 // If we have reset set, that means that we were canceled so
                 // that we can update our expiration time.
@@ -717,13 +718,13 @@ pub const Completion = struct {
                     .timer = if (res >= 0) .request else switch (e) {
                         .TIME => .expiration,
                         .CANCELED => .cancel,
-                        else => |errno| std.os.unexpectedErrno(errno),
+                        else => |errno| posix.unexpectedErrno(errno),
                     },
                 };
             },
 
             .timer_remove => .{
-                .timer_remove = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
+                .timer_remove = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
                     .NOENT => error.NotFound,
                     .BUSY => error.ExpirationInProgress,
 
@@ -734,33 +735,33 @@ pub const Completion = struct {
                     // the meaning of this, I'd be curious.
                     .TIME => {},
 
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .write => .{
                 .write = if (res >= 0)
                     @intCast(res)
-                else switch (@as(std.os.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .pwrite => .{
                 .pwrite = if (res >= 0)
                     @intCast(res)
-                else switch (@as(std.os.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .cancel => .{
-                .cancel = if (res >= 0) {} else switch (@as(std.os.E, @enumFromInt(-res))) {
+                .cancel = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
                     .NOENT => error.NotFound,
                     .ALREADY => error.ExpirationInProgress,
-                    else => |errno| std.os.unexpectedErrno(errno),
+                    else => |errno| posix.unexpectedErrno(errno),
                 },
             },
         };
@@ -785,10 +786,10 @@ pub const Completion = struct {
             };
         }
 
-        return switch (@as(std.os.E, @enumFromInt(-res))) {
+        return switch (@as(posix.E, @enumFromInt(-res))) {
             .CANCELED => error.Canceled,
             .CONNRESET => error.ConnectionReset,
-            else => |errno| std.os.unexpectedErrno(errno),
+            else => |errno| posix.unexpectedErrno(errno),
         };
     }
 };
@@ -853,7 +854,7 @@ pub const OperationType = enum {
 /// result tag will ALWAYS match the operation tag.
 pub const Result = union(OperationType) {
     noop: void,
-    accept: AcceptError!std.os.socket_t,
+    accept: AcceptError!posix.socket_t,
     close: CloseError!void,
     connect: ConnectError!void,
     poll: PollError!void,
@@ -879,88 +880,88 @@ pub const Operation = union(OperationType) {
     noop: void,
 
     accept: struct {
-        socket: std.os.socket_t,
-        addr: std.os.sockaddr = undefined,
-        addr_size: std.os.socklen_t = @sizeOf(std.os.sockaddr),
-        flags: u32 = std.os.SOCK.CLOEXEC,
+        socket: posix.socket_t,
+        addr: posix.sockaddr = undefined,
+        addr_size: posix.socklen_t = @sizeOf(posix.sockaddr),
+        flags: u32 = posix.SOCK.CLOEXEC,
     },
 
     close: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
     },
 
     connect: struct {
-        socket: std.os.socket_t,
+        socket: posix.socket_t,
         addr: std.net.Address,
     },
 
     poll: struct {
-        fd: std.os.fd_t,
-        events: u32 = std.os.POLL.IN,
+        fd: posix.fd_t,
+        events: u32 = posix.POLL.IN,
     },
 
     read: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
     },
 
     pread: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
         offset: u64,
     },
 
     recv: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: ReadBuffer,
     },
 
     send: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
     },
 
     sendmsg: struct {
-        fd: std.os.fd_t,
-        msghdr: *std.os.msghdr_const,
+        fd: posix.fd_t,
+        msghdr: *posix.msghdr_const,
 
         /// Optionally, a write buffer can be specified and the given
         /// msghdr will be populated with information about this buffer.
         buffer: ?WriteBuffer = null,
 
         /// Do not use this, it is only used internally.
-        iov: [1]std.os.iovec_const = undefined,
+        iov: [1]posix.iovec_const = undefined,
     },
 
     recvmsg: struct {
-        fd: std.os.fd_t,
-        msghdr: *std.os.msghdr,
+        fd: posix.fd_t,
+        msghdr: *posix.msghdr,
     },
 
     shutdown: struct {
-        socket: std.os.socket_t,
-        how: std.os.ShutdownHow = .both,
+        socket: posix.socket_t,
+        how: posix.ShutdownHow = .both,
     },
 
     pwrite: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
         offset: u64,
     },
 
     write: struct {
-        fd: std.os.fd_t,
+        fd: posix.fd_t,
         buffer: WriteBuffer,
     },
 
     timer: struct {
-        next: std.os.linux.timespec,
+        next: linux.timespec,
 
         /// Only used internally. If this is non-null and timer is
         /// CANCELLED, then the timer is rearmed automatically with this
         /// as the next time. The callback will not be called on the
         /// cancellation.
-        reset: ?std.os.linux.timespec = null,
+        reset: ?linux.timespec = null,
     },
 
     timer_remove: struct {
@@ -1358,7 +1359,7 @@ test "io_uring: timer remove" {
 test "io_uring: socket accept/connect/send/recv/close" {
     const mem = std.mem;
     const net = std.net;
-    const os = std.os;
+    const os = posix;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});
@@ -1583,7 +1584,7 @@ test "io_uring: socket accept/connect/send/recv/close" {
 test "io_uring: sendmsg/recvmsg" {
     const mem = std.mem;
     const net = std.net;
-    const os = std.os;
+    const os = posix;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});
@@ -1591,14 +1592,14 @@ test "io_uring: sendmsg/recvmsg" {
 
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    const server = try std.os.socket(address.any.family, std.os.SOCK.DGRAM, 0);
-    defer std.os.close(server);
-    try std.os.setsockopt(server, std.os.SOL.SOCKET, std.os.SO.REUSEPORT, &mem.toBytes(@as(c_int, 1)));
-    try std.os.setsockopt(server, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try std.os.bind(server, &address.any, address.getOsSockLen());
+    const server = try posix.socket(address.any.family, posix.SOCK.DGRAM, 0);
+    defer posix.close(server);
+    try posix.setsockopt(server, posix.SOL.SOCKET, posix.SO.REUSEPORT, &mem.toBytes(@as(c_int, 1)));
+    try posix.setsockopt(server, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try posix.bind(server, &address.any, address.getOsSockLen());
 
-    const client = try std.os.socket(address.any.family, std.os.SOCK.DGRAM, 0);
-    defer std.os.close(client);
+    const client = try posix.socket(address.any.family, posix.SOCK.DGRAM, 0);
+    defer posix.close(client);
 
     // Send
     const buffer_send = [_]u8{42} ** 128;
@@ -1682,7 +1683,6 @@ test "io_uring: sendmsg/recvmsg" {
 test "io_uring: socket read cancellation" {
     const mem = std.mem;
     const net = std.net;
-    const os = std.os;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});
@@ -1690,10 +1690,10 @@ test "io_uring: socket read cancellation" {
 
     // Create a UDP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    const socket = try os.socket(address.any.family, os.SOCK.DGRAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.close(socket);
-    try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try os.bind(socket, &address.any, address.getOsSockLen());
+    const socket = try posix.socket(address.any.family, posix.SOCK.DGRAM | posix.SOCK.CLOEXEC, 0);
+    errdefer posix.close(socket);
+    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try posix.bind(socket, &address.any, address.getOsSockLen());
 
     // Read
     var read_result: xev.Result = undefined;

@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
+const linux = std.os.linux;
 const posix = std.posix;
 const common = @import("common.zig");
 
@@ -38,7 +39,7 @@ fn ProcessPidFd(comptime xev: type) type {
         pub fn init(pid: posix.pid_t) !Self {
             // Note: SOCK_NONBLOCK == PIDFD_NONBLOCK but we should PR that
             // over to Zig.
-            const res = posix.linux.pidfd_open(pid, posix.SOCK.NONBLOCK);
+            const res = linux.pidfd_open(pid, posix.SOCK.NONBLOCK);
             const fd = switch (posix.errno(res)) {
                 .SUCCESS => @as(posix.fd_t, @intCast(res)),
                 .INVAL => return error.InvalidArgument,
@@ -76,7 +77,7 @@ fn ProcessPidFd(comptime xev: type) type {
         ) void {
             const events: u32 = comptime switch (xev.backend) {
                 .io_uring => posix.POLL.IN,
-                .epoll => posix.linux.EPOLL.IN,
+                .epoll => linux.EPOLL.IN,
                 else => unreachable,
             };
 
@@ -102,8 +103,8 @@ fn ProcessPidFd(comptime xev: type) type {
 
                             // We need to wait on the pidfd because it is noted as ready
                             const fd = c_inner.op.poll.fd;
-                            var info: posix.linux.siginfo_t = undefined;
-                            const res = posix.linux.waitid(.PIDFD, fd, &info, posix.linux.W.EXITED);
+                            var info: linux.siginfo_t = undefined;
+                            const res = linux.waitid(.PIDFD, fd, &info, linux.W.EXITED);
 
                             break :arg switch (posix.errno(res)) {
                                 .SUCCESS => @as(u32, @intCast(info.fields.common.second.sigchld.status)),
