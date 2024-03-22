@@ -33,7 +33,7 @@ pub fn TCP(comptime xev: type) type {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
             const fd = if (xev.backend == .iocp)
-                try std.os.windows.WSASocketW(addr.any.family, std.os.SOCK.STREAM, 0, null, 0, std.os.windows.ws2_32.WSA_FLAG_OVERLAPPED)
+                try std.os.windows.WSASocketW(addr.any.family, posix.SOCK.STREAM, 0, null, 0, std.os.windows.ws2_32.WSA_FLAG_OVERLAPPED)
             else fd: {
                 // On io_uring we don't use non-blocking sockets because we may
                 // just get EAGAIN over and over from completions.

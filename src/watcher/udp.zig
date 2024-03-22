@@ -214,7 +214,7 @@ fn UDPSendto(comptime xev: type) type {
 fn UDPSendtoIOCP(comptime xev: type) type {
     return struct {
         const Self = @This();
-        const windows = std.posix.windows;
+        const windows = std.os.windows;
 
         fd: windows.HANDLE,
 

@@ -5,6 +5,7 @@ const windows = @import("../windows.zig");
 const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").IOCP;
+const posix = std.posix;
 
 const log = std.log.scoped(.libxev_iocp);
 
@@ -263,7 +264,7 @@ pub const Loop = struct {
                 self.asyncs = .{};
 
                 while (asyncs.pop()) |c| {
-                    const c_wakeup = c.op.async_wait.wakeup.swap(false, .SeqCst);
+                    const c_wakeup = c.op.async_wait.wakeup.swap(false, .seq_cst);
 
                     // If we aren't waking this one up, requeue
                     if (!c_wakeup) {
@@ -477,15 +478,15 @@ pub const Loop = struct {
 
             .accept => |*v| action: {
                 if (v.internal_accept_socket == null) {
-                    var addr: std.os.sockaddr.storage = undefined;
-                    var addr_len: i32 = @sizeOf(std.os.sockaddr.storage);
+                    var addr: posix.sockaddr.storage = undefined;
+                    var addr_len: i32 = @sizeOf(posix.sockaddr.storage);
 
-                    std.debug.assert(windows.ws2_32.getsockname(asSocket(v.socket), @as(*std.os.sockaddr, @ptrCast(&addr)), &addr_len) == 0);
+                    std.debug.assert(windows.ws2_32.getsockname(asSocket(v.socket), @as(*posix.sockaddr, @ptrCast(&addr)), &addr_len) == 0);
 
                     var socket_type: i32 = 0;
                     const socket_type_bytes = std.mem.asBytes(&socket_type);
                     var opt_len: i32 = @as(i32, @intCast(socket_type_bytes.len));
-                    std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.socket), std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
+                    std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.socket), posix.SOL.SOCKET, posix.SO.TYPE, socket_type_bytes, &opt_len) == 0);
 
                     v.internal_accept_socket = windows.WSASocketW(addr.family, socket_type, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED) catch |err| {
                         break :action .{ .result = .{ .accept = err } };
@@ -501,7 +502,7 @@ pub const Loop = struct {
                     &v.storage,
                     0,
                     0,
-                    @as(u32, @intCast(@sizeOf(std.os.sockaddr.storage))),
+                    @as(u32, @intCast(@sizeOf(posix.sockaddr.storage))),
                     &discard,
                     &completion.overlapped,
                 );
@@ -560,7 +561,7 @@ pub const Loop = struct {
                     };
             },
 
-            .shutdown => |*v| .{ .result = .{ .shutdown = std.os.shutdown(asSocket(v.socket), v.how) } },
+            .shutdown => |*v| .{ .result = .{ .shutdown = posix.shutdown(asSocket(v.socket), v.how) } },
 
             .write => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
@@ -830,7 +831,7 @@ pub const Loop = struct {
 
         // The completion has been wakeup, this is used to see which completion in the async queue
         // needs to be removed.
-        completion.op.async_wait.wakeup.store(true, .SeqCst);
+        completion.op.async_wait.wakeup.store(true, .seq_cst);
 
         const result = windows.kernel32.PostQueuedCompletionStatus(
             self.iocp_handle,
@@ -1065,11 +1066,11 @@ pub const Completion = struct {
                     var opt_len: i32 = @as(i32, @intCast(socket_type_bytes.len));
 
                     // Here we assume the call will succeed because the socket should be valid.
-                    std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.fd), std.os.SOL.SOCKET, std.os.SO.TYPE, socket_type_bytes, &opt_len) == 0);
+                    std.debug.assert(windows.ws2_32.getsockopt(asSocket(v.fd), posix.SOL.SOCKET, posix.SO.TYPE, socket_type_bytes, &opt_len) == 0);
                     break :t socket_type;
                 };
 
-                if (socket_type == std.os.SOCK.STREAM and bytes_transferred == 0) {
+                if (socket_type == posix.SOCK.STREAM and bytes_transferred == 0) {
                     break :r .{ .recv = error.EOF };
                 }
 
@@ -1197,7 +1198,7 @@ pub const Operation = union(OperationType) {
 
     accept: struct {
         socket: windows.HANDLE,
-        storage: [@sizeOf(std.os.sockaddr.storage)]u8 = undefined,
+        storage: [@sizeOf(posix.sockaddr.storage)]u8 = undefined,
 
         internal_accept_socket: ?windows.HANDLE = null,
     },
@@ -1224,7 +1225,7 @@ pub const Operation = union(OperationType) {
 
     shutdown: struct {
         socket: windows.HANDLE,
-        how: std.os.ShutdownHow = .both,
+        how: posix.ShutdownHow = .both,
     },
 
     write: struct {
@@ -1260,8 +1261,8 @@ pub const Operation = union(OperationType) {
     recvfrom: struct {
         fd: windows.HANDLE,
         buffer: ReadBuffer,
-        addr: std.os.sockaddr = undefined,
-        addr_size: std.os.socklen_t = @sizeOf(std.os.sockaddr),
+        addr: posix.sockaddr = undefined,
+        addr_size: posix.socklen_t = @sizeOf(posix.sockaddr),
         wsa_buffer: windows.ws2_32.WSABUF = undefined,
     },
 
@@ -1329,7 +1330,7 @@ pub const ConnectError = error{
     Unexpected,
 };
 
-pub const ShutdownError = std.os.ShutdownError || error{
+pub const ShutdownError = posix.ShutdownError || error{
     Unexpected,
 };
 
@@ -1954,16 +1955,16 @@ test "iocp: socket accept/connect/send/recv/close" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    const ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.close(ln);
+    const ln = try windows.WSASocketW(posix.AF.INET, posix.SOCK.STREAM, posix.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    errdefer posix.close(ln);
 
-    try std.os.setsockopt(ln, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try std.os.bind(ln, &address.any, address.getOsSockLen());
-    try std.os.listen(ln, kernel_backlog);
+    try posix.setsockopt(ln, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try posix.bind(ln, &address.any, address.getOsSockLen());
+    try posix.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    const client_conn = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.close(client_conn);
+    const client_conn = try windows.WSASocketW(posix.AF.INET, posix.SOCK.STREAM, posix.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    errdefer posix.close(client_conn);
 
     var server_conn_result: Result = undefined;
     var c_accept: Completion = .{
@@ -2220,11 +2221,11 @@ test "iocp: recv cancellation" {
 
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    const socket = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.DGRAM, std.os.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.close(socket);
+    const socket = try windows.WSASocketW(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    errdefer posix.close(socket);
 
-    try std.os.setsockopt(socket, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try std.os.bind(socket, &address.any, address.getOsSockLen());
+    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try posix.bind(socket, &address.any, address.getOsSockLen());
 
     var recv_buf: [128]u8 = undefined;
     var recv_result: Result = undefined;
@@ -2293,12 +2294,12 @@ test "iocp: accept cancellation" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    const ln = try windows.WSASocketW(std.os.AF.INET, std.os.SOCK.STREAM, std.os.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
-    errdefer std.os.close(ln);
+    const ln = try windows.WSASocketW(posix.AF.INET, posix.SOCK.STREAM, posix.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    errdefer posix.close(ln);
 
-    try std.os.setsockopt(ln, std.os.SOL.SOCKET, std.os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try std.os.bind(ln, &address.any, address.getOsSockLen());
-    try std.os.listen(ln, kernel_backlog);
+    try posix.setsockopt(ln, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try posix.bind(ln, &address.any, address.getOsSockLen());
+    try posix.listen(ln, kernel_backlog);
 
     var server_conn_result: Result = undefined;
     var c_accept: Completion = .{

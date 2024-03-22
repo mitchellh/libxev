@@ -1,5 +1,6 @@
 const std = @import("std");
 const windows = std.os.windows;
+const posix = std.posix;
 
 pub usingnamespace std.os.windows;
 
@@ -103,7 +104,7 @@ pub const exp = struct {
         ) callconv(windows.WINAPI) windows.BOOL;
     };
 
-    pub const CreateFileError = error{} || std.os.UnexpectedError;
+    pub const CreateFileError = error{} || posix.UnexpectedError;
 
     pub fn CreateFile(
         lpFileName: [*:0]const u16,
@@ -161,7 +162,7 @@ pub const exp = struct {
         return @as(usize, @intCast(written));
     }
 
-    pub const DeleteFileError = error{} || std.os.UnexpectedError;
+    pub const DeleteFileError = error{} || posix.UnexpectedError;
 
     pub fn DeleteFile(name: [*:0]const u16) DeleteFileError!void {
         const result: windows.BOOL = windows.kernel32.DeleteFileW(name);
@@ -173,7 +174,7 @@ pub const exp = struct {
         }
     }
 
-    pub const CreateJobObjectError = error{AlreadyExists} || std.os.UnexpectedError;
+    pub const CreateJobObjectError = error{AlreadyExists} || posix.UnexpectedError;
     pub fn CreateJobObject(
         lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
         lpName: ?windows.LPCSTR,
@@ -186,7 +187,7 @@ pub const exp = struct {
         };
     }
 
-    pub fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) std.os.UnexpectedError!void {
+    pub fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) posix.UnexpectedError!void {
         const result: windows.BOOL = kernel32.AssignProcessToJobObject(hJob, hProcess);
         if (result == windows.FALSE) {
             const err = windows.kernel32.GetLastError();
@@ -201,7 +202,7 @@ pub const exp = struct {
         JobObjectInformationClass: JOBOBJECT_INFORMATION_CLASS,
         lpJobObjectInformation: windows.LPVOID,
         cbJobObjectInformationLength: windows.DWORD,
-    ) std.os.UnexpectedError!void {
+    ) posix.UnexpectedError!void {
         const result: windows.BOOL = kernel32.SetInformationJobObject(
             hJob,
             JobObjectInformationClass,
