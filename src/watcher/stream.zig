@@ -220,7 +220,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             /// originally is from a write request. This is useful for getting
             /// the WriteRequest back in a callback from queuedWrite.
             pub fn from(c: *xev.Completion) *WriteRequest {
-                return @fieldParentPtr(WriteRequest, "completion", c);
+                return @fieldParentPtr("completion", c);
             }
         };
 

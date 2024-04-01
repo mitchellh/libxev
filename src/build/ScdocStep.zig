@@ -49,7 +49,7 @@ pub fn init(builder: *Build) ScdocStep {
 fn make(step: *std.Build.Step, progress: *std.Progress.Node) !void {
     _ = progress;
 
-    const self = @fieldParentPtr(ScdocStep, "step", step);
+    const self: *ScdocStep = @fieldParentPtr("step", step);
 
     // Create our cache path
     // TODO(mitchellh): ideally this would be pure zig
@@ -129,7 +129,7 @@ const InstallStep = struct {
     }
 
     fn make(step: *Step, progress: *std.Progress.Node) !void {
-        const self = @fieldParentPtr(InstallStep, "step", step);
+        const self: *InstallStep = @fieldParentPtr("step", step);
 
         // Get our absolute output path
         var path = self.scdoc.out_path;
