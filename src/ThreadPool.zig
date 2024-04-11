@@ -376,7 +376,7 @@ const Thread = struct {
                     thread_pool.notify(is_waking);
                 is_waking = false;
 
-                const task = @fieldParentPtr(Task, "node", result.node);
+                const task: *Task = @fieldParentPtr("node", result.node);
                 (task.callback)(task);
             }
         }

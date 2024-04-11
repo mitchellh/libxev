@@ -933,7 +933,7 @@ pub const Loop = struct {
     /// This is the main callback for the threadpool to perform work
     /// on completions for the loop.
     fn thread_perform(t: *ThreadPool.Task) void {
-        const c = @fieldParentPtr(Completion, "task", t);
+        const c: *Completion = @fieldParentPtr("task", t);
 
         // Do our task
         c.result = c.perform(null);

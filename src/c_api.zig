@@ -97,11 +97,11 @@ export fn xev_threadpool_task_init(
     t.* = .{
         .callback = (struct {
             fn callback(inner_t: *xev.ThreadPool.Task) void {
-                @fieldParentPtr(
-                    Task,
+                const outer_t: *Task = @alignCast(@fieldParentPtr(
                     "data",
                     @as(*Task.Data, @ptrCast(inner_t)),
-                ).c_callback(inner_t);
+                ));
+                outer_t.c_callback(inner_t);
             }
         }).callback,
     };
