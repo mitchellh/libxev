@@ -172,7 +172,11 @@ pub fn build(b: *std.Build) !void {
         , .{b.install_prefix});
         defer pkgconfig_file.close();
 
-        b.installFile(file, "share/pkgconfig/libxev.pc");
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+            .{ .path = file },
+            .prefix,
+            "share/pkgconfig/libxev.pc",
+        ).step);
     }
 
     // Benchmarks
