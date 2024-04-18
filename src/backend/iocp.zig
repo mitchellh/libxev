@@ -323,7 +323,7 @@ pub const Loop = struct {
                         continue;
                     }
 
-                    break :completion @fieldParentPtr("overlapped", overlapped_ptr.?);
+                    break :completion @alignCast(@fieldParentPtr("overlapped", overlapped_ptr.?));
                 } else completion: {
                     // JobObjects are a special case where the OVERLAPPED_ENTRY fields are interpreted differently.
                     // When JOBOBJECT_ASSOCIATE_COMPLETION_PORT is used, lpOverlapped actually contains the message
