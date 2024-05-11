@@ -204,6 +204,14 @@ Create a `build.zig.zon` file like this:
 }
 ```
 
+Or you can run:
+
+```bash
+zig fetch --save https://github.com/mitchellh/libxev/archive/refs/heads/main.tar.gz
+```
+
+To add it into your `build.zig.zon`
+
 And in your `build.zig`:
 
 ```zig
