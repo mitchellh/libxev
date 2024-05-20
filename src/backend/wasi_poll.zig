@@ -241,10 +241,10 @@ pub const Loop = struct {
             self.batch.array[0] = .{
                 .userdata = 0,
                 .u = .{
-                    .tag = wasi.EVENTTYPE_CLOCK,
+                    .tag = wasi.eventtype_t.CLOCK,
                     .u = .{
                         .clock = .{
-                            .id = @as(u32, @bitCast(posix.CLOCK.MONOTONIC)),
+                            .id = posix.CLOCK.MONOTONIC,
                             .timeout = timeout,
                             .precision = 1 * std.time.ns_per_ms,
                             .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
@@ -363,9 +363,9 @@ pub const Loop = struct {
 
             .shutdown => |v| res: {
                 const how: wasi.sdflags_t = switch (v.how) {
-                    .both => wasi.SHUT.WR | wasi.SHUT.RD,
-                    .recv => wasi.SHUT.RD,
-                    .send => wasi.SHUT.WR,
+                    .both => .{ .RD = true, .WR = true },
+                    .recv => .{ .RD = true },
+                    .send => .{ .WR = true },
                 };
 
                 break :res .{
@@ -569,7 +569,7 @@ pub const Loop = struct {
     fn timer_next(next_ms: u64) wasi.timestamp_t {
         // Get the absolute time we'll execute this timer next.
         var now_ts: wasi.timestamp_t = undefined;
-        switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &now_ts)) {
+        switch (wasi.clock_time_get(posix.CLOCK.MONOTONIC, 1, &now_ts)) {
             .SUCCESS => {},
             .INVAL => unreachable,
             else => unreachable,
@@ -582,7 +582,7 @@ pub const Loop = struct {
 
     fn get_now() !wasi.timestamp_t {
         var ts: wasi.timestamp_t = undefined;
-        return switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &ts)) {
+        return switch (wasi.clock_time_get(posix.CLOCK.MONOTONIC, 1, &ts)) {
             .SUCCESS => ts,
             .INVAL => error.UnsupportedClock,
             else => |err| posix.unexpectedErrno(err),
@@ -654,7 +654,7 @@ pub const Completion = struct {
             .read => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.fd,
@@ -666,7 +666,7 @@ pub const Completion = struct {
             .pread => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.fd,
@@ -678,7 +678,7 @@ pub const Completion = struct {
             .write => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_write = .{
                             .fd = v.fd,
@@ -690,7 +690,7 @@ pub const Completion = struct {
             .pwrite => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .tag = wasi.eventtype_t.FD_WRITE,
                     .u = .{
                         .fd_write = .{
                             .fd = v.fd,
@@ -702,7 +702,7 @@ pub const Completion = struct {
             .accept => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.socket,
@@ -714,7 +714,7 @@ pub const Completion = struct {
             .recv => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.fd,
@@ -726,7 +726,7 @@ pub const Completion = struct {
             .send => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .tag = wasi.eventtype_t.FD_WRITE,
                     .u = .{
                         .fd_write = .{
                             .fd = v.fd,
@@ -762,7 +762,7 @@ pub const Completion = struct {
             .accept => |*op| res: {
                 var out_fd: posix.fd_t = undefined;
                 break :res .{
-                    .accept = switch (wasi.sock_accept(op.socket, 0, &out_fd)) {
+                    .accept = switch (wasi.sock_accept(op.socket, .{}, &out_fd)) {
                         .SUCCESS => out_fd,
                         else => |err| posix.unexpectedErrno(err),
                     },
@@ -825,8 +825,8 @@ pub const Completion = struct {
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
                         var iovs = [1]posix.iovec{posix.iovec{
-                            .iov_base = v.ptr,
-                            .iov_len = v.len,
+                            .base = v.ptr,
+                            .len = v.len,
                         }};
 
                         break :slice wasi.sock_recv(
@@ -841,8 +841,8 @@ pub const Completion = struct {
 
                     .array => |*v| array: {
                         var iovs = [1]posix.iovec{posix.iovec{
-                            .iov_base = v,
-                            .iov_len = v.len,
+                            .base = v,
+                            .len = v.len,
                         }};
 
                         break :array wasi.sock_recv(
@@ -869,8 +869,8 @@ pub const Completion = struct {
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
                         var iovs = [1]posix.iovec_const{posix.iovec_const{
-                            .iov_base = v.ptr,
-                            .iov_len = v.len,
+                            .base = v.ptr,
+                            .len = v.len,
                         }};
 
                         break :slice wasi.sock_send(
@@ -884,8 +884,8 @@ pub const Completion = struct {
 
                     .array => |*v| array: {
                         var iovs = [1]posix.iovec_const{posix.iovec_const{
-                            .iov_base = &v.array,
-                            .iov_len = v.len,
+                            .base = &v.array,
+                            .len = v.len,
                         }};
 
                         break :array wasi.sock_send(
@@ -1513,22 +1513,23 @@ test "wasi: file" {
     // We can't use dir.createFile yet: https://github.com/ziglang/zig/issues/14324
     const f = f: {
         const w = wasi;
-        const oflags = w.O.CREAT | w.O.TRUNC;
-        const base: w.rights_t = w.RIGHT.FD_WRITE |
-            w.RIGHT.FD_READ |
-            w.RIGHT.FD_DATASYNC |
-            w.RIGHT.FD_SEEK |
-            w.RIGHT.FD_TELL |
-            w.RIGHT.FD_FDSTAT_SET_FLAGS |
-            w.RIGHT.FD_SYNC |
-            w.RIGHT.FD_ALLOCATE |
-            w.RIGHT.FD_ADVISE |
-            w.RIGHT.FD_FILESTAT_SET_TIMES |
-            w.RIGHT.FD_FILESTAT_SET_SIZE |
-            w.RIGHT.FD_FILESTAT_GET |
-            w.RIGHT.POLL_FD_READWRITE;
-        const fdflags: w.fdflags_t = w.FDFLAG.SYNC | w.FDFLAG.RSYNC | w.FDFLAG.DSYNC;
-        const fd = try posix.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags);
+        const oflags = w.oflags_t{ .CREAT = true, .TRUNC = true };
+        const base = w.rights_t{
+            .FD_WRITE = true,
+            .FD_READ = true,
+            .FD_DATASYNC = true,
+            .FD_SEEK = true,
+            .FD_TELL = true,
+            .FD_FDSTAT_SET_FLAGS = true,
+            .FD_SYNC = true,
+            .FD_ALLOCATE = true,
+            .FD_ADVISE = true,
+            .FD_FILESTAT_SET_TIMES = true,
+            .FD_FILESTAT_SET_SIZE = true,
+            .FD_FILESTAT_GET = true,
+            .POLL_FD_READWRITE = true,
+        };
+        const fd = try posix.openatWasi(dir.fd, path, .{}, oflags, .{}, base, base);
         break :f std.fs.File{ .handle = fd };
     };
     defer dir.deleteFile(path) catch unreachable;
