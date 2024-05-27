@@ -156,7 +156,7 @@ const InstallStep = struct {
             );
 
             const fileStep = self.builder.addInstallFile(
-                .{ .path = src },
+                self.builder.path(src),
                 output,
             );
             try fileStep.step.make(progress);

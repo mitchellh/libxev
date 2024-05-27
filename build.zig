@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("xev", .{ .root_source_file = .{ .path = "src/main.zig" } });
+    _ = b.addModule("xev", .{ .root_source_file = b.path("src/main.zig") });
 
     const man_pages = b.option(
         bool,
@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) !void {
     // we can easily run it manually without digging through the cache.
     const test_exe = b.addTest(.{
         .name = "xev-test",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) !void {
     const static_c_lib: ?*std.Build.Step.Compile = if (target.result.os.tag != .wasi) lib: {
         const static_lib = b.addStaticLibrary(.{
             .name = "xev",
-            .root_source_file = .{ .path = "src/c_api.zig" },
+            .root_source_file = b.path("src/c_api.zig"),
             .target = target,
             .optimize = optimize,
         });
@@ -98,9 +98,9 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         });
         static_binding_test.linkLibC();
-        static_binding_test.addIncludePath(.{ .path = "include" });
+        static_binding_test.addIncludePath(b.path("include"));
         static_binding_test.addCSourceFile(.{
-            .file = .{ .path = "examples/_basic.c" },
+            .file = b.path("examples/_basic.c"),
             .flags = &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" },
         });
         static_binding_test.linkLibrary(static_lib);
@@ -119,7 +119,7 @@ pub fn build(b: *std.Build) !void {
 
         const dynamic_lib = b.addSharedLibrary(.{
             .name = dynamic_lib_name,
-            .root_source_file = .{ .path = "src/c_api.zig" },
+            .root_source_file = b.path("src/c_api.zig"),
             .target = target,
             .optimize = optimize,
         });
@@ -132,9 +132,9 @@ pub fn build(b: *std.Build) !void {
             .optimize = optimize,
         });
         dynamic_binding_test.linkLibC();
-        dynamic_binding_test.addIncludePath(.{ .path = "include" });
+        dynamic_binding_test.addIncludePath(b.path("include"));
         dynamic_binding_test.addCSourceFile(.{
-            .file = .{ .path = "examples/_basic.c" },
+            .file = b.path("examples/_basic.c"),
             .flags = &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99" },
         });
         dynamic_binding_test.linkLibrary(dynamic_lib);
@@ -146,7 +146,7 @@ pub fn build(b: *std.Build) !void {
 
     // C Headers
     const c_header = b.addInstallFileWithDir(
-        .{ .path = "include/xev.h" },
+        b.path("include/xev.h"),
         .header,
         "xev.h",
     );
@@ -173,7 +173,7 @@ pub fn build(b: *std.Build) !void {
         defer pkgconfig_file.close();
 
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-            .{ .path = file },
+            b.path(file),
             .prefix,
             "share/pkgconfig/libxev.pc",
         ).step);
@@ -230,7 +230,7 @@ fn benchTargets(
         // Executable builder.
         const c_exe = b.addExecutable(.{
             .name = name,
-            .root_source_file = .{ .path = path },
+            .root_source_file = b.path(path),
             .target = target,
             .optimize = .ReleaseFast, // benchmarks are always release fast
         });
@@ -288,7 +288,7 @@ fn exampleTargets(
         if (is_zig) {
             const c_exe = b.addExecutable(.{
                 .name = name,
-                .root_source_file = .{ .path = path },
+                .root_source_file = b.path(path),
                 .target = target,
                 .optimize = optimize,
             });
@@ -307,9 +307,9 @@ fn exampleTargets(
                 .optimize = optimize,
             });
             c_exe.linkLibC();
-            c_exe.addIncludePath(.{ .path = "include" });
+            c_exe.addIncludePath(b.path("include"));
             c_exe.addCSourceFile(.{
-                .file = .{ .path = path },
+                .file = b.path(path),
                 .flags = &[_][]const u8{
                     "-Wall",
                     "-Wextra",
