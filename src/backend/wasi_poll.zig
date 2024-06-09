@@ -582,7 +582,7 @@ pub const Loop = struct {
 
     fn get_now() !wasi.timestamp_t {
         var ts: wasi.timestamp_t = undefined;
-        return switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &ts)) {
+        return switch (wasi.clock_time_get(posix.CLOCK.MONOTONIC, 1, &ts)) {
             .SUCCESS => ts,
             .INVAL => error.UnsupportedClock,
             else => |err| posix.unexpectedErrno(err),
