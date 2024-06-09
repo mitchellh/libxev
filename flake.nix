@@ -24,7 +24,7 @@
       # Other overlays
       (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
-        zig = zigpkgs.master;
+        zig = inputs.zig.packages.${prev.system}."0.13.0";
 
         # Latest versions
         wasmtime = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmtime;
@@ -46,7 +46,7 @@
           nativeBuildInputs = with pkgs; [
             mandoc
             scdoc
-            zigpkgs.master
+            zig
 
             # Wasm
             wabt
