@@ -12,8 +12,8 @@ var packet_counter: usize = 1e6;
 var send_cb_called: usize = 0;
 var recv_cb_called: usize = 0;
 
-pub const std_options = struct {
-    pub const log_level: std.log.Level = .info;
+pub const std_options: std.Options = .{
+    .log_level = .info,
 };
 
 pub fn main() !void {
