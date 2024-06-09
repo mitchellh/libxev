@@ -100,7 +100,7 @@ pub fn build(b: *std.Build) !void {
         static_binding_test.linkLibC();
         static_binding_test.addIncludePath(b.path("include"));
         static_binding_test.addCSourceFile(.{
-            .file = b.path("examples/basic.c"),
+            .file = b.path("examples/_basic.c"),
             .flags = &[_][]const u8{ "-Wall", "-Wextra", "-pedantic", "-std=c99", "-D_POSIX_C_SOURCE=199309L" },
         });
         static_binding_test.linkLibrary(static_lib);
