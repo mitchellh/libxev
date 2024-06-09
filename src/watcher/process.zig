@@ -347,7 +347,7 @@ fn ProcessTests(
             const testing = std.testing;
             const alloc = testing.allocator;
 
-            var child = std.ChildProcess.init(argv_0, alloc);
+            var child = std.process.Child.init(argv_0, alloc);
             try child.spawn();
 
             var loop = try xev.Loop.init(.{});
@@ -380,7 +380,7 @@ fn ProcessTests(
             const testing = std.testing;
             const alloc = testing.allocator;
 
-            var child = std.ChildProcess.init(argv_42, alloc);
+            var child = std.process.Child.init(argv_42, alloc);
             try child.spawn();
 
             var loop = try xev.Loop.init(.{});
@@ -413,7 +413,7 @@ fn ProcessTests(
             const testing = std.testing;
             const alloc = testing.allocator;
 
-            var child = std.ChildProcess.init(argv_0, alloc);
+            var child = std.process.Child.init(argv_0, alloc);
             try child.spawn();
 
             var loop = try xev.Loop.init(.{});
