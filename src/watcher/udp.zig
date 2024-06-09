@@ -504,15 +504,15 @@ fn UDPSendMsg(comptime xev: type) type {
             switch (s.op.recv.buf) {
                 .slice => |v| {
                     s.op.recv.iov[0] = .{
-                        .iov_base = v.ptr,
-                        .iov_len = v.len,
+                        .base = v.ptr,
+                        .len = v.len,
                     };
                 },
 
                 .array => |*arr| {
                     s.op.recv.iov[0] = .{
-                        .iov_base = arr,
-                        .iov_len = arr.len,
+                        .base = arr,
+                        .len = arr.len,
                     };
                 },
             }
@@ -609,15 +609,15 @@ fn UDPSendMsg(comptime xev: type) type {
             switch (s.op.send.buf) {
                 .slice => |v| {
                     s.op.send.iov[0] = .{
-                        .iov_base = v.ptr,
-                        .iov_len = v.len,
+                        .base = v.ptr,
+                        .len = v.len,
                     };
                 },
 
                 .array => |*arr| {
                     s.op.send.iov[0] = .{
-                        .iov_base = &arr.array,
-                        .iov_len = arr.len,
+                        .base = &arr.array,
+                        .len = arr.len,
                     };
                 },
             }

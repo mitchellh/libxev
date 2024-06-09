@@ -43,8 +43,8 @@ pub fn main() !void {
     std.log.info("{d:.2} seconds cleanup", .{@as(f64, @floatFromInt(after_all.since(after_run))) / 1e9});
 }
 
-pub const std_options = struct {
-    pub const log_level: std.log.Level = .info;
+pub const std_options: std.Options = .{
+    .log_level = .info,
 };
 
 var timer_callback_count: usize = 0;

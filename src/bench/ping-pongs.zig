@@ -4,8 +4,8 @@ const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
 
-pub const std_options = struct {
-    pub const log_level: std.log.Level = .info;
+pub const std_options: std.Options = .{
+    .log_level = .info,
 };
 
 pub fn main() !void {

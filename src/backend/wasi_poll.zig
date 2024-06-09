@@ -582,7 +582,7 @@ pub const Loop = struct {
 
     fn get_now() !wasi.timestamp_t {
         var ts: wasi.timestamp_t = undefined;
-        return switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &ts)) {
+        return switch (wasi.clock_time_get(posix.CLOCK.MONOTONIC, 1, &ts)) {
             .SUCCESS => ts,
             .INVAL => error.UnsupportedClock,
             else => |err| posix.unexpectedErrno(err),
@@ -825,8 +825,8 @@ pub const Completion = struct {
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
                         var iovs = [1]posix.iovec{posix.iovec{
-                            .iov_base = v.ptr,
-                            .iov_len = v.len,
+                            .base = v.ptr,
+                            .len = v.len,
                         }};
 
                         break :slice wasi.sock_recv(
@@ -841,8 +841,8 @@ pub const Completion = struct {
 
                     .array => |*v| array: {
                         var iovs = [1]posix.iovec{posix.iovec{
-                            .iov_base = v,
-                            .iov_len = v.len,
+                            .base = v,
+                            .len = v.len,
                         }};
 
                         break :array wasi.sock_recv(
@@ -869,8 +869,8 @@ pub const Completion = struct {
                 const errno = switch (op.buffer) {
                     .slice => |v| slice: {
                         var iovs = [1]posix.iovec_const{posix.iovec_const{
-                            .iov_base = v.ptr,
-                            .iov_len = v.len,
+                            .base = v.ptr,
+                            .len = v.len,
                         }};
 
                         break :slice wasi.sock_send(
@@ -884,8 +884,8 @@ pub const Completion = struct {
 
                     .array => |*v| array: {
                         var iovs = [1]posix.iovec_const{posix.iovec_const{
-                            .iov_base = &v.array,
-                            .iov_len = v.len,
+                            .base = &v.array,
+                            .len = v.len,
                         }};
 
                         break :array wasi.sock_send(
