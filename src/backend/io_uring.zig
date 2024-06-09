@@ -1604,7 +1604,7 @@ test "io_uring: sendmsg/recvmsg" {
     // Send
     const buffer_send = [_]u8{42} ** 128;
     const iovecs_send = [_]os.iovec_const{
-        os.iovec_const{ .iov_base = &buffer_send, .iov_len = buffer_send.len },
+        os.iovec_const{ .base = &buffer_send, .len = buffer_send.len },
     };
     var msg_send = os.msghdr_const{
         .name = &address.any,
@@ -1639,7 +1639,7 @@ test "io_uring: sendmsg/recvmsg" {
 
     var buffer_recv = [_]u8{0} ** 128;
     var iovecs_recv = [_]os.iovec{
-        os.iovec{ .iov_base = &buffer_recv, .iov_len = buffer_recv.len },
+        os.iovec{ .base = &buffer_recv, .len = buffer_recv.len },
     };
     const addr = [_]u8{0} ** 4;
     var address_recv = net.Address.initIp4(addr, 0);
