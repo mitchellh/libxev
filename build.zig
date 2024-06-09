@@ -288,7 +288,7 @@ fn exampleTargets(
         if (is_zig) {
             const c_exe = b.addExecutable(.{
                 .name = name,
-                .root_source_file = b.path(path),
+                .root_source_file = .{ .cwd_relative = path },
                 .target = target,
                 .optimize = optimize,
             });
@@ -309,7 +309,7 @@ fn exampleTargets(
             c_exe.linkLibC();
             c_exe.addIncludePath(b.path("include"));
             c_exe.addCSourceFile(.{
-                .file = b.path(path),
+                .file = .{ .cwd_relative = path },
                 .flags = &[_][]const u8{
                     "-Wall",
                     "-Wextra",
