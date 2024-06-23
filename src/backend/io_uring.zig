@@ -285,11 +285,11 @@ pub const Loop = struct {
         self.add(c_cancel);
     }
 
-    fn timer_next(self: *Loop, next_ms: u64) linux.timespec {
+    fn timer_next(self: *Loop, next_ms: u64) linux.kernel_timespec {
         // Get the timestamp of the absolute time that we'll execute this timer.
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
-        const max: linux.timespec = .{
+        const max: linux.kernel_timespec = .{
             .tv_sec = std.math.maxInt(isize),
             .tv_nsec = std.math.maxInt(isize),
         };
@@ -955,13 +955,13 @@ pub const Operation = union(OperationType) {
     },
 
     timer: struct {
-        next: linux.timespec,
+        next: linux.kernel_timespec,
 
         /// Only used internally. If this is non-null and timer is
         /// CANCELLED, then the timer is rearmed automatically with this
         /// as the next time. The callback will not be called on the
         /// cancellation.
-        reset: ?linux.timespec = null,
+        reset: ?linux.kernel_timespec = null,
     },
 
     timer_remove: struct {
