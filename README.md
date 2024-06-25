@@ -208,7 +208,7 @@ And in your `build.zig`:
 
 ```zig
 const xev = b.dependency("libxev", .{ .target = target, .optimize = optimize });
-exe.addModule("xev", xev.module("xev"));
+exe.root_module.addImport("xev", libxev_dep.module("xev"));
 ```
 
 ## Documentation
