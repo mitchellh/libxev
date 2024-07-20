@@ -46,7 +46,7 @@ pub fn init(builder: *Build) ScdocStep {
     };
 }
 
-fn make(step: *std.Build.Step, _: std.Progress.Node) !void {
+fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
     const self: *ScdocStep = @fieldParentPtr("step", step);
 
     // Create our cache path
@@ -126,7 +126,7 @@ const InstallStep = struct {
         };
     }
 
-    fn make(step: *Step, progress: std.Progress.Node) !void {
+    fn make(step: *Step, options: std.Build.Step.MakeOptions) !void {
         const self: *InstallStep = @fieldParentPtr("step", step);
 
         // Get our absolute output path
@@ -157,7 +157,7 @@ const InstallStep = struct {
                 .{ .cwd_relative = src },
                 output,
             );
-            try fileStep.step.make(progress);
+            try fileStep.step.make(options);
         }
     }
 };
