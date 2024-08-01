@@ -146,6 +146,10 @@ fn AsyncMachPort(comptime xev: type) type {
             info: *anyopaque,
             count: posix.system.mach_msg_type_number_t,
         ) posix.system.kern_return_t;
+        extern "c" fn mach_port_destroy(
+            task: posix.system.ipc_space_t,
+            name: posix.system.mach_port_name_t,
+        ) posix.system.kern_return_t;
 
         /// The mach port
         port: posix.system.mach_port_name_t,
@@ -165,7 +169,7 @@ fn AsyncMachPort(comptime xev: type) type {
                 .SUCCESS => {}, // Success
                 else => return error.MachPortAllocFailed,
             }
-            errdefer _ = posix.system.mach_port_deallocate(mach_self, mach_port);
+            errdefer _ = posix.system.mach_port_destroy(mach_self, mach_port);
 
             // Insert a send right into the port since we also use this to send
             switch (posix.system.getKernError(posix.system.mach_port_insert_right(
@@ -200,7 +204,7 @@ fn AsyncMachPort(comptime xev: type) type {
         /// Clean up the async. This will forcibly deinitialize any resources
         /// and may result in erroneous wait callbacks to be fired.
         pub fn deinit(self: *Self) void {
-            _ = posix.system.mach_port_deallocate(
+            _ = mach_port_destroy(
                 posix.system.mach_task_self(),
                 self.port,
             );
