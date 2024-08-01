@@ -24,7 +24,7 @@ pub const Loop = struct {
     /// an empty message to this port can be used to wake up the loop
     /// at any time. Waking up the loop via this port won't trigger any
     /// particular completion, it just forces tick to cycle.
-    mach_port: posix.system.mach_port_name_t,
+    mach_port: xev.Async,
     mach_port_buffer: [32]u8 = undefined,
 
     /// The number of active completions. This DOES NOT include completions that
@@ -80,18 +80,8 @@ pub const Loop = struct {
         const fd = try posix.kqueue();
         errdefer posix.close(fd);
 
-        // Create our mach port that we use for wakeups.
-        const mach_self = posix.system.mach_task_self();
-        var mach_port: posix.system.mach_port_name_t = undefined;
-        switch (posix.system.getKernError(posix.system.mach_port_allocate(
-            mach_self,
-            @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
-            &mach_port,
-        ))) {
-            .SUCCESS => {}, // Success
-            else => return error.MachPortAllocFailed,
-        }
-        errdefer _ = posix.system.mach_port_deallocate(mach_self, mach_port);
+        var mach_port = try xev.Async.init();
+        errdefer mach_port.deinit();
 
         var res: Loop = .{
             .kqueue_fd = fd,
@@ -108,10 +98,7 @@ pub const Loop = struct {
     /// were unprocessed are lost -- their callbacks will never be called.
     pub fn deinit(self: *Loop) void {
         posix.close(self.kqueue_fd);
-        _ = posix.system.mach_port_deallocate(
-            posix.system.mach_task_self(),
-            self.mach_port,
-        );
+        self.mach_port.deinit();
     }
 
     /// Stop the loop. This can only be called from the main thread.
@@ -300,7 +287,7 @@ pub const Loop = struct {
             // Add our event so that we wake up when our mach port receives an
             // event. We have to add here because we need a stable self pointer.
             const events = [_]Kevent{.{
-                .ident = @as(usize, @intCast(self.mach_port)),
+                .ident = @as(usize, @intCast(self.mach_port.port)),
                 .filter = posix.system.EVFILT_MACHPORT,
                 .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
                 .fflags = posix.system.MACH_RCV_MSG,
@@ -948,31 +935,7 @@ pub const Loop = struct {
     /// Sends an empty message to this loop's mach port so that it wakes
     /// up if it is blocking on kevent().
     fn wakeup(self: *Loop) !void {
-        // This constructs an empty mach message. It has no data.
-        var msg: posix.system.mach_msg_header_t = .{
-            .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
-            .msgh_size = @sizeOf(posix.system.mach_msg_header_t),
-            .msgh_remote_port = self.mach_port,
-            .msgh_local_port = posix.system.MACH_PORT_NULL,
-            .msgh_voucher_port = undefined,
-            .msgh_id = undefined,
-        };
-
-        return switch (posix.system.getMachMsgError(
-            posix.system.mach_msg(
-                &msg,
-                posix.system.MACH_SEND_MSG,
-                msg.msgh_size,
-                0,
-                posix.system.MACH_PORT_NULL,
-                posix.system.MACH_MSG_TIMEOUT_NONE,
-                posix.system.MACH_PORT_NULL,
-            ),
-        )) {
-            .SUCCESS => {},
-            .SEND_NO_BUFFER => {}, // Buffer full, will wake up
-            else => error.MachMsgFailed,
-        };
+        try self.mach_port.notify();
     }
 };
 
