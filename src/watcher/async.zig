@@ -169,7 +169,7 @@ fn AsyncMachPort(comptime xev: type) type {
                 .SUCCESS => {}, // Success
                 else => return error.MachPortAllocFailed,
             }
-            errdefer _ = posix.system.mach_port_destroy(mach_self, mach_port);
+            errdefer _ = mach_port_destroy(mach_self, mach_port);
 
             // Insert a send right into the port since we also use this to send
             switch (posix.system.getKernError(posix.system.mach_port_insert_right(
