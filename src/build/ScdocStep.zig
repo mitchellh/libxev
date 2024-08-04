@@ -50,14 +50,9 @@ fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
     const self: *ScdocStep = @fieldParentPtr("step", step);
 
     // Create our cache path
-    // TODO(mitchellh): ideally this would be pure zig
     {
-        const command = try std.fmt.allocPrint(
-            self.builder.allocator,
-            "rm -f {[path]s}/* && mkdir -p {[path]s}",
-            .{ .path = self.out_path },
-        );
-        _ = self.builder.run(&[_][]const u8{ "sh", "-c", command });
+        try std.fs.cwd().deleteTree(self.out_path);
+        try std.fs.cwd().makePath(self.out_path);
     }
 
     // Find all our man pages which are in our src path ending with ".scd".
