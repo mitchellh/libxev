@@ -344,5 +344,5 @@ fn exampleTargets(
 
 /// Path to the directory with the build.zig.
 fn thisDir() []const u8 {
-    return std.fs.path.dirname(@src().file) orelse unreachable;
+    return std.fs.path.dirname(@src().file) orelse "./";
 }
