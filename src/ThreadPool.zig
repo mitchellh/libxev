@@ -335,12 +335,8 @@ fn unregister(noalias self: *ThreadPool, noalias maybe_thread: ?*Thread) void {
 
 fn join(self: *ThreadPool) void {
     // Wait for the thread pool to be shutdown() then for all threads to enter a joinable state
-    var sync: Sync = @bitCast(self.sync.load(.monotonic));
-    if (!(sync.state == .shutdown and sync.spawned == 0)) {
-        self.join_event.wait();
-        sync = @bitCast(self.sync.load(.monotonic));
-    }
-
+    self.join_event.wait();
+    const sync: Sync = @bitCast(self.sync.load(.monotonic));
     assert(sync.state == .shutdown);
     assert(sync.spawned == 0);
 
