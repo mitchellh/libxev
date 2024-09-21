@@ -120,12 +120,13 @@ fn UDPSendto(comptime xev: type) type {
                                 r: xev.Result,
                             ) xev.CallbackAction {
                                 const s_inner = @as(?*State, @ptrCast(@alignCast(ud))).?;
+                                const addr = if (r.recvfrom) |_| std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)) else |_| std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
                                 return @call(.always_inline, cb, .{
                                     common.userdataValue(Userdata, s_inner.userdata),
                                     l_inner,
                                     c_inner,
                                     s_inner,
-                                    std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)),
+                                    addr,
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
