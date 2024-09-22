@@ -57,7 +57,8 @@ pub const Backend = enum {
 
 pub const backend = Backend.default();
 
-pub const Sys = backend.Api().Sys;
+const T = backend.Api();
+pub const Sys = T.Sys;
 
 const loop = @import("loop.zig");
 
@@ -102,7 +103,7 @@ pub const Callback = *const fn (
     result: Result,
 ) CallbackAction;
 
-pub const noopCallback = Sys.noopCallback;
+pub const noopCallback = T.noopCallback;
 
 test {
     // Tested on all platforms
