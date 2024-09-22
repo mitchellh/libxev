@@ -76,7 +76,7 @@ pub const CompletionState = loop.CompletionState;
 /// Error types
 pub const AcceptError = Sys.AcceptError;
 pub const CancelError = Sys.CancelError;
-pub const CloseError = Sys.CloseEror;
+pub const CloseError = Sys.CloseError;
 pub const ConnectError = Sys.ConnectError;
 pub const ShutdownError = Sys.ShutdownError;
 pub const WriteError = Sys.WriteError;
