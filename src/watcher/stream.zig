@@ -19,7 +19,8 @@ pub const Options = struct {
 };
 
 /// Creates a stream type that is meant to be embedded within other
-/// types using "usingnamespace". A stream is something that supports read,
+/// types using "usingnamespace" (or by using its decls directly).
+/// A stream is something that supports read,
 /// write, close, etc. The exact operations supported are defined by the
 /// "options" struct.
 ///
@@ -28,10 +29,21 @@ pub const Options = struct {
 ///   - decl named "initFd" to initialize a new T from a fd
 ///
 pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) type {
+    const C = if (options.close) Closeable(xev, T, options);
+    const R = if (options.read != .none) Readable(xev, T, options);
+    const W = if (options.write != .none) Writeable(xev, T, options);
     return struct {
-        pub usingnamespace if (options.close) Closeable(xev, T, options) else struct {};
-        pub usingnamespace if (options.read != .none) Readable(xev, T, options) else struct {};
-        pub usingnamespace if (options.write != .none) Writeable(xev, T, options) else struct {};
+        pub const CloseError = if (options.close) C.CloseError;
+        pub const close = if (options.close) C.close;
+
+        pub const ReadError = if (options.read != .none) R.ReadError;
+        pub const read = if (options.read != .none) R.read;
+
+        pub const WriteError = if (options.write != .none) W.WriteError;
+        pub const WriteQueue = if (options.write != .none) W.WriteQueue;
+        pub const WriteRequest = if (options.write != .none) W.WriteRequest;
+        pub const queueWrite = if (options.write != .none) W.queueWrite;
+        pub const write = if (options.write != .none) W.write;
     };
 }
 
@@ -258,7 +270,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             // Initialize our completion
             req.* = .{ .full_write_buffer = buf };
             // Must be kept in sync with partial write logic inside the callback
-            self.write_init(&req.completion, buf);
+            write_init(self, &req.completion, buf);
             req.completion.userdata = q;
             req.completion.callback = (struct {
                 fn callback(
@@ -289,7 +301,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         if (written_len < queued_len) {
                             // Write remainder of the buffer, reusing the same completion
                             const rem_buf = writeBufferRemainder(cb_res.buf, written_len);
-                            cb_res.writer.write_init(&req_inner.completion, rem_buf);
+                            write_init(cb_res.writer, &req_inner.completion, rem_buf);
                             req_inner.completion.userdata = q_inner;
                             req_inner.completion.callback = callback;
                             l_inner.add(&req_inner.completion);
@@ -364,7 +376,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 r: WriteError!usize,
             ) xev.CallbackAction,
         ) void {
-            self.write_init(c, buf);
+            write_init(self, c, buf);
             c.userdata = userdata;
             c.callback = (struct {
                 fn callback(
@@ -508,11 +520,23 @@ pub fn GenericStream(comptime xev: type) type {
         /// The underlying file
         fd: std.posix.fd_t,
 
-        pub usingnamespace Stream(xev, Self, .{
+        const S = Stream(xev, Self, .{
             .close = true,
             .read = .read,
             .write = .write,
         });
+
+        pub const CloseError = S.CloseError;
+        pub const close = S.close;
+
+        pub const ReadError = S.ReadError;
+        pub const read = S.read;
+
+        pub const WriteError = S.WriteError;
+        pub const WriteQueue = S.WriteQueue;
+        pub const WriteRequest = S.WriteRequest;
+        pub const queueWrite = S.queueWrite;
+        pub const write = S.write;
 
         /// Initialize a generic stream from a file descriptor.
         pub fn initFd(fd: std.posix.fd_t) Self {

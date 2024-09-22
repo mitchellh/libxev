@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const common = @import("common.zig");
 const assert = std.debug.assert;
 const posix = std.posix;
-const main = @import("../main.zig");
+const main = @import("../lib.zig");
 const stream = @import("stream.zig");
 
 /// File operations.
@@ -32,12 +32,24 @@ pub fn File(comptime xev: type) type {
         /// The underlying file
         fd: FdType,
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .read = .read,
             .write = .write,
             .threadpool = true,
         });
+
+        pub const CloseError = S.CloseError;
+        pub const close = S.close;
+
+        pub const ReadError = S.ReadError;
+        pub const read = S.read;
+
+        pub const WriteError = S.WriteError;
+        pub const WriteQueue = S.WriteQueue;
+        pub const WriteRequest = S.WriteRequest;
+        pub const queueWrite = S.queueWrite;
+        pub const write = S.write;
 
         /// Initialize a File from a std.fs.File.
         pub fn init(file: std.fs.File) !Self {

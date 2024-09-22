@@ -20,11 +20,23 @@ pub fn TCP(comptime xev: type) type {
 
         fd: FdType,
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .read = .recv,
             .write = .send,
         });
+
+        pub const CloseError = S.CloseError;
+        pub const close = S.close;
+
+        pub const ReadError = S.ReadError;
+        pub const read = S.read;
+
+        pub const WriteError = S.WriteError;
+        pub const WriteQueue = S.WriteQueue;
+        pub const WriteRequest = S.WriteRequest;
+        pub const queueWrite = S.queueWrite;
+        pub const write = S.write;
 
         /// Initialize a new TCP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
