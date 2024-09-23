@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const assert = std.debug.assert;
-const xev = @import("main.zig");
+const xev = @import("lib.zig");
 
 /// Common options across backends. Not all options apply to all backends.
 /// Read the doc comment for individual fields to learn what backends they
