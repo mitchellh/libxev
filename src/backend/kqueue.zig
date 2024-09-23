@@ -437,6 +437,9 @@ pub const Loop = struct {
                     // Only resubmit if we aren't already active (in the queue)
                     .rearm => if (!c_active) self.submissions.push(c),
                 }
+
+                // If we filled the events slice, we break to avoid overflow.
+                if (changes == events.len) break;
             }
 
             // Determine our next timeout based on the timers
