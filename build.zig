@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("xev", .{ .root_source_file = b.path("src/main.zig") });
+    _ = b.addModule("xev", .{ .root_source_file = b.path("src/lib.zig") });
 
     const man_pages = b.option(
         bool,
@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) !void {
     // we can easily run it manually without digging through the cache.
     const test_exe = b.addTest(.{
         .name = "xev-test",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,
     });

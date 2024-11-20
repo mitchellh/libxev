@@ -5,7 +5,7 @@ const wasi = std.os.wasi;
 const posix = std.posix;
 const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
-const xev = @import("../main.zig").WasiPoll;
+const xev = @import("../lib.zig").WasiPoll;
 
 pub const Loop = struct {
     pub const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
