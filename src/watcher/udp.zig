@@ -42,11 +42,14 @@ fn UDPSendto(comptime xev: type) type {
             userdata: ?*anyopaque,
         };
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .read = .none,
             .write = .none,
         });
+
+        pub const CloseError = S.CloseError;
+        pub const close = S.close;
 
         /// Initialize a new UDP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
@@ -223,11 +226,14 @@ fn UDPSendtoIOCP(comptime xev: type) type {
             userdata: ?*anyopaque,
         };
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .read = .none,
             .write = .none,
         });
+
+        pub const CloseError = S.CloseError;
+        pub const close = S.close;
 
         /// Initialize a new UDP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
@@ -421,11 +427,14 @@ fn UDPSendMsg(comptime xev: type) type {
             },
         };
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .read = .none,
             .write = .none,
         });
+
+        pub const CloseError = S.CloseError;
+        pub const close = S.close;
 
         /// Initialize a new UDP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
