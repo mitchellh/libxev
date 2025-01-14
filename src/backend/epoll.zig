@@ -280,7 +280,7 @@ pub const Loop = struct {
 
             var ev: linux.epoll_event = .{
                 .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
-                .data = .{ .ptr = 0 },
+                .data = .{ .fd = self.eventfd.fd },
             };
             posix.epoll_ctl(
                 self.fd,
@@ -397,9 +397,12 @@ pub const Loop = struct {
 
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
-                // Zero data values are internal events that we do nothing
-                // on such as the eventfd wakeup.
-                if (ev.data.ptr == 0) continue;
+                // Handle wakeup eventfd
+                if (ev.data.fd == self.eventfd.fd) {
+                    var buffer: u64 = undefined;
+                    _ = posix.read(self.eventfd.fd, std.mem.asBytes(&buffer)) catch {};
+                    continue;
+                }
 
                 const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.data.ptr)));
 
