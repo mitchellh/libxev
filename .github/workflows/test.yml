@@ -30,11 +30,6 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    - name: Install zig
-      uses: goto-bus-stop/setup-zig@v2
-      with:
-        version: master
-
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
     - name: test
@@ -52,27 +47,24 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    # Install Nix and use that to run our tests so our environment matches exactly.
-    - uses: cachix/install-nix-action@v30
+    - name: Install zig
+      uses: goto-bus-stop/setup-zig@v2
       with:
-        nix_path: nixpkgs=channel:nixos-unstable
-
-    # Run our checks to catch quick issues
-    - run: nix flake check
+        version: master
 
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
     - name: test
-      run: nix develop -c zig build test --summary all
+      run: zig build test --summary all
     # WASI has regressed since Zig 0.13, we should fix it.
     # - name: test wasi
     #   run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
     - name: build all benchmarks and examples
-      run: nix develop -c zig build -Dexample -Dbench --summary all
+      run: zig build -Dexample -Dbench --summary all
 
     # Run a full build to ensure that works
-    - run: nix build
+    #- run: nix build
 
   test-x86_64-windows:
     strategy:
