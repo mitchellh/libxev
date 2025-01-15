@@ -13,13 +13,12 @@ jobs:
           x86_64-linux-musl,
           aarch64-macos,
           x86_64-macos,
-          # wasm32-wasi, - regressed in Zig 0.13
+          wasm32-wasi
           x86_64-windows-gnu
 
-          # Broken but not in any obvious way:
-          # x86-linux-gnu,
-          # x86-linux-musl,
-          # x86-windows,
+          x86-linux-gnu,
+          x86-linux-musl,
+          x86-windows,
         ]
     runs-on: ${{ matrix.os }}
     needs: [test-x86_64-linux, test-x86_64-windows]
@@ -51,14 +50,12 @@ jobs:
       uses: goto-bus-stop/setup-zig@v2
       with:
         version: master
-
-    # Run our go tests within the context of the dev shell from the flake. This
-    # will ensure we have all our dependencies.
+.
     - name: test
       run: zig build test --summary all
-    # WASI has regressed since Zig 0.13, we should fix it.
-    # - name: test wasi
-    #   run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
+
+    - name: test wasi
+       run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
     - name: build all benchmarks and examples
       run: zig build -Dexample -Dbench --summary all
