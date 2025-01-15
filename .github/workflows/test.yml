@@ -28,10 +28,14 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0
-
+        
+    - name: Install zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: master
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
-    - name: test
+    - name: build all
       run: zig build --summary all -Dtarget=${{ matrix.target }}
 
   test-x86_64-linux:
