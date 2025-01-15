@@ -1,3 +1,50 @@
+# A fork of libxev with Zig 0.14+ compatibility
+
+This is a fork of the original [library](https://github.com/mitchellh/libxev), with compatibility added to support nightly versions of Zig. 
+
+Additionally, it also has the following patches:
+
+- Re-enabled CI tests for wasm32-wasi target
+- [backend/epoll: implement eventfd wakeup notification](https://github.com/mitchellh/libxev/pull/128)
+- [fix: allow UDPSendto to be canceled](https://github.com/mitchellh/libxev/pull/127)
+
+## Installation (for Zig 0.14+)
+
+**These instructions are for Zig downstream users only.** If you are
+using the C API to libxev, see the "Build" section.
+
+First, make sure to have created the files `build.zig` and `build.zig.zon`. You can also use the command `zig init` on an empty directory to create them.
+
+Then, install the library: 
+
+```sh
+zig fetch --save https://github.com/dadadani/libxev/archive/888165093b9ea5ec42e27767b8481dcda559cfb9.zip
+```
+
+**Note:** You should always replace the commit hash with the latest one to get the most recent version of the library.
+
+
+And in your `build.zig`:
+
+```zig
+
+...
+    // This should be already in your build.zig
+    const exe = b.addExecutable(.{ 
+        .name = "my-executable",
+        .root_module = exe_mod,
+    });
+
+    // Add the dependency to the library
+    const libxev = b.dependency("libxev", .{ .target = target, .optimize = optimize });
+    exe.root_module.addImport("libxev", libxev.module("xev"));
+
+...
+
+
+```
+The rest of the instructions are the same as the original README.
+
 # libxev
 
 libxev is a cross-platform event loop. libxev provides a unified event loop
@@ -182,34 +229,6 @@ int main(void) {
 </td>
 </tr>
 </table>
-
-## Installation (Zig)
-
-**These instructions are for Zig downstream users only.** If you are
-using the C API to libxev, see the "Build" section.
-
-This package works with the Zig package manager introduced in Zig 0.11.
-Create a `build.zig.zon` file like this:
-
-```zig
-.{
-    .name = "my-project",
-    .version = "0.0.0",
-    .dependencies = .{
-        .libxev = .{
-            .url = "https://github.com/mitchellh/libxev/archive/<git-ref-here>.tar.gz",
-            .hash = "12208070233b17de6be05e32af096a6760682b48598323234824def41789e993432c",
-        },
-    },
-}
-```
-
-And in your `build.zig`:
-
-```zig
-const xev = b.dependency("libxev", .{ .target = target, .optimize = optimize });
-exe.addModule("xev", xev.module("xev"));
-```
 
 ## Documentation
 
