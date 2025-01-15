@@ -57,7 +57,9 @@ jobs:
 
     - name: test
       run: zig build test --summary all
-
+      
+    - name: Setup `wasmtime`
+      uses: bytecodealliance/actions/wasmtime/setup@v1
     - name: test wasi
       run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
