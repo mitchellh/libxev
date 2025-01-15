@@ -1,4 +1,4 @@
-# A fork of libxev with Zig 0.14+ compatibility
+    # A fork of libxev with Zig 0.14+ compatibility
 
 This is a fork of the original [library](https://github.com/mitchellh/libxev), with compatibility added to support nightly versions of Zig. 
 
@@ -37,7 +37,7 @@ And in your `build.zig`:
 
     // Add the dependency to the library
     const libxev = b.dependency("libxev", .{ .target = target, .optimize = optimize });
-    exe.root_module.addImport("libxev", libxev.module("xev"));
+    exe.root_module.addImport("xev", libxev.module("xev"));
 
 ...
 
