@@ -161,8 +161,8 @@ pub const Loop = struct {
 
         // Calculate all the values, being careful about overflows in order
         // to just return the maximum value.
-        const sec = std.math.mul(isize, self.cached_now.tv_sec, std.time.ms_per_s) catch return max;
-        const nsec = @divFloor(self.cached_now.tv_nsec, std.time.ns_per_ms);
+        const sec = std.math.mul(isize, self.cached_now.sec, std.time.ms_per_s) catch return max;
+        const nsec = @divFloor(self.cached_now.nsec, std.time.ns_per_ms);
         return std.math.lossyCast(i64, sec +| nsec);
     }
 
@@ -240,8 +240,8 @@ pub const Loop = struct {
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
         const max: posix.timespec = .{
-            .tv_sec = std.math.maxInt(isize),
-            .tv_nsec = std.math.maxInt(isize),
+            .sec = std.math.maxInt(isize),
+            .nsec = std.math.maxInt(isize),
         };
 
         const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
@@ -252,9 +252,9 @@ pub const Loop = struct {
         ) orelse return max;
 
         return .{
-            .tv_sec = std.math.add(isize, self.cached_now.tv_sec, next_s) catch
+            .sec = std.math.add(isize, self.cached_now.sec, next_s) catch
                 return max,
-            .tv_nsec = std.math.add(isize, self.cached_now.tv_nsec, next_ns) catch
+            .nsec = std.math.add(isize, self.cached_now.nsec, next_ns) catch
                 return max,
         };
     }
@@ -380,10 +380,10 @@ pub const Loop = struct {
                 const t = self.timers.peek() orelse break :timeout 100;
 
                 // Determine the time in milliseconds.
-                const ms_now = @as(u64, @intCast(self.cached_now.tv_sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(self.cached_now.tv_nsec)) / std.time.ns_per_ms;
-                const ms_next = @as(u64, @intCast(t.next.tv_sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(t.next.tv_nsec)) / std.time.ns_per_ms;
+                const ms_now = @as(u64, @intCast(self.cached_now.sec)) * std.time.ms_per_s +
+                    @as(u64, @intCast(self.cached_now.nsec)) / std.time.ns_per_ms;
+                const ms_next = @as(u64, @intCast(t.next.sec)) * std.time.ms_per_s +
+                    @as(u64, @intCast(t.next.nsec)) / std.time.ns_per_ms;
                 break :timeout @as(i32, @intCast(ms_next -| ms_now));
             };
 
@@ -1214,16 +1214,16 @@ pub const Operation = union(OperationType) {
         /// any software is running in 584 years waiting on this timer...
         /// shame on me I guess... but I'll be dead.
         fn ns(self: *const Timer) u64 {
-            assert(self.next.tv_sec >= 0);
-            assert(self.next.tv_nsec >= 0);
+            assert(self.next.sec >= 0);
+            assert(self.next.nsec >= 0);
 
             const max = std.math.maxInt(u64);
             const s_ns = std.math.mul(
                 u64,
-                @as(u64, @intCast(self.next.tv_sec)),
+                @as(u64, @intCast(self.next.sec)),
                 std.time.ns_per_s,
             ) catch return max;
-            return std.math.add(u64, s_ns, @as(u64, @intCast(self.next.tv_nsec))) catch
+            return std.math.add(u64, s_ns, @as(u64, @intCast(self.next.nsec))) catch
                 return max;
         }
     };
@@ -1336,7 +1336,7 @@ test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 200), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 208), @sizeOf(Completion));
 }
 
 test "epoll: default completion" {
@@ -1586,7 +1586,7 @@ test "epoll: timerfd" {
 
     // We'll try with a simple timerfd
     const Timerfd = @import("../linux/timerfd.zig").Timerfd;
-    var t = try Timerfd.init(.monotonic, .{});
+    var t = try Timerfd.init(.MONOTONIC, .{});
     defer t.deinit();
     try t.set(.{}, &.{ .value = .{ .nanoseconds = 1 } }, null);
 
