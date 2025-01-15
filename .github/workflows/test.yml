@@ -59,7 +59,7 @@ jobs:
       run: zig build test --summary all
 
     - name: test wasi
-       run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
+      run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
     - name: build all benchmarks and examples
       run: zig build -Dexample -Dbench --summary all
