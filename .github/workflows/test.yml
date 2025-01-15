@@ -13,7 +13,7 @@ jobs:
           x86_64-linux-musl,
           aarch64-macos,
           x86_64-macos,
-          wasm32-wasi
+          wasm32-wasi,
           x86_64-windows-gnu,
 
           x86-linux-gnu,
@@ -34,8 +34,7 @@ jobs:
       with:
         version: master
         
-    - if: matrix.target == 'wasm32-wasi'  
-      name: Setup `wasmtime`
+    - name: Setup `wasmtime`
       uses: bytecodealliance/actions/wasmtime/setup@v1
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
