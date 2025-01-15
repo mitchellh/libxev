@@ -161,7 +161,7 @@ fn AsyncMachPort(comptime xev: type) type {
 
             // Allocate the port
             var mach_port: posix.system.mach_port_name_t = undefined;
-            switch (posix.system.getKernError(posix.system.mach_port_allocate(
+            switch (@import("../backend/darwin.zig").getKernError(posix.system.mach_port_allocate(
                 mach_self,
                 @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
                 &mach_port,
@@ -172,11 +172,11 @@ fn AsyncMachPort(comptime xev: type) type {
             errdefer _ = mach_port_destroy(mach_self, mach_port);
 
             // Insert a send right into the port since we also use this to send
-            switch (posix.system.getKernError(posix.system.mach_port_insert_right(
+            switch (@import("../backend/darwin.zig").getKernError(posix.system.mach_port_insert_right(
                 mach_self,
                 mach_port,
                 mach_port,
-                @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND),
+                @intFromEnum(@import("../backend/darwin.zig").MACH_MSG_TYPE.MAKE_SEND),
             ))) {
                 .SUCCESS => {}, // Success
                 else => return error.MachPortAllocFailed,
@@ -185,7 +185,7 @@ fn AsyncMachPort(comptime xev: type) type {
             // Modify the port queue size to be 1 because we are only
             // using it for notifications and not for any other purpose.
             var limits: mach_port_limits = .{ .mpl_qlimit = 1 };
-            switch (posix.system.getKernError(mach_port_set_attributes(
+            switch (@import("../backend/darwin.zig").getKernError(mach_port_set_attributes(
                 mach_self,
                 mach_port,
                 MACH_PORT_LIMITS_INFO,
@@ -269,18 +269,18 @@ fn AsyncMachPort(comptime xev: type) type {
         /// Drain the given mach port. All message bodies are discarded.
         fn drain(port: posix.system.mach_port_name_t) void {
             var message: struct {
-                header: posix.system.mach_msg_header_t,
+                header: @import("../backend/darwin.zig").mach_msg_header_t,
             } = undefined;
 
             while (true) {
-                switch (posix.system.getMachMsgError(posix.system.mach_msg(
+                switch (@import("../backend/darwin.zig").getMachMsgError(posix.system.mach_msg(
                     &message.header,
-                    posix.system.MACH_RCV_MSG | posix.system.MACH_RCV_TIMEOUT,
+                    @import("../backend/darwin.zig").MACH_RCV_MSG | @import("../backend/darwin.zig").MACH_RCV_TIMEOUT,
                     0,
                     @sizeOf(@TypeOf(message)),
                     port,
-                    posix.system.MACH_MSG_TIMEOUT_NONE,
-                    posix.system.MACH_PORT_NULL,
+                    @import("../backend/darwin.zig").MACH_MSG_TIMEOUT_NONE,
+                    @import("../backend/darwin.zig").MACH_PORT_NULL,
                 ))) {
                     // This means a read would've blocked, so we drained.
                     .RCV_TIMED_OUT => return,
@@ -306,26 +306,26 @@ fn AsyncMachPort(comptime xev: type) type {
         /// ticking or not).
         pub fn notify(self: Self) !void {
             // This constructs an empty mach message. It has no data.
-            var msg: posix.system.mach_msg_header_t = .{
+            var msg: @import("../backend/darwin.zig").mach_msg_header_t = .{
                 // We use COPY_SEND which will not increment any send ref
                 // counts because it'll reuse the existing send right.
                 .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.COPY_SEND),
-                .msgh_size = @sizeOf(posix.system.mach_msg_header_t),
+                .msgh_size = @sizeOf(@import("../backend/darwin.zig").mach_msg_header_t),
                 .msgh_remote_port = self.port,
-                .msgh_local_port = posix.system.MACH_PORT_NULL,
+                .msgh_local_port = @import("../backend/darwin.zig").MACH_PORT_NULL,
                 .msgh_voucher_port = undefined,
                 .msgh_id = undefined,
             };
 
-            return switch (posix.system.getMachMsgError(
+            return switch (@import("../backend/darwin.zig").getMachMsgError(
                 posix.system.mach_msg(
                     &msg,
-                    posix.system.MACH_SEND_MSG | posix.system.MACH_SEND_TIMEOUT,
+                    @import("../backend/darwin.zig").MACH_SEND_MSG | @import("../backend/darwin.zig").MACH_SEND_TIMEOUT,
                     msg.msgh_size,
                     0,
-                    posix.system.MACH_PORT_NULL,
+                    @import("../backend/darwin.zig").MACH_PORT_NULL,
                     0, // Fail instantly if the port is full
-                    posix.system.MACH_PORT_NULL,
+                    @import("../backend/darwin.zig").MACH_PORT_NULL,
                 ),
             )) {
                 .SUCCESS => {},

@@ -177,7 +177,7 @@ fn ProcessKqueue(comptime xev: type) type {
                 .op = .{
                     .proc = .{
                         .pid = self.pid,
-                        .flags = posix.system.NOTE_EXIT | posix.system.NOTE_EXITSTATUS,
+                        .flags = posix.system.NOTE.EXIT | posix.system.NOTE.EXITSTATUS,
                     },
                 },
 

@@ -10,6 +10,7 @@ const heap = @import("../heap.zig");
 const main = @import("../main.zig");
 const xev = main.Kqueue;
 const ThreadPool = main.ThreadPool;
+const darwin = @import("darwin.zig");
 
 const log = std.log.scoped(.libxev_kqueue);
 
@@ -169,7 +170,7 @@ pub const Loop = struct {
                         self.completions.push(c);
 
                         events[events_len] = ev;
-                        events[events_len].flags = posix.system.EV_DELETE;
+                        events[events_len].flags = posix.system.EV.DELETE;
                         events_len += 1;
                         if (events_len >= events.len) break :queue_pop;
                     },
@@ -209,12 +210,12 @@ pub const Loop = struct {
                 const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
 
                 // We handle deletions separately.
-                if (ev.flags & posix.system.EV_DELETE != 0) continue;
+                if (ev.flags & posix.system.EV.DELETE != 0) continue;
 
                 // If EV_ERROR is set, then submission failed for this
                 // completion. We get the syscall errorcode from data and
                 // store it.
-                if (ev.flags & posix.system.EV_ERROR != 0) {
+                if (ev.flags & posix.system.EV.ERROR != 0) {
                     c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
                 } else {
                     // No error, means that this completion is ready to work.
@@ -288,9 +289,9 @@ pub const Loop = struct {
             // event. We have to add here because we need a stable self pointer.
             const events = [_]Kevent{.{
                 .ident = @as(usize, @intCast(self.mach_port.port)),
-                .filter = posix.system.EVFILT_MACHPORT,
-                .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
-                .fflags = posix.system.MACH_RCV_MSG,
+                .filter = posix.system.EVFILT.MACHPORT,
+                .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
+                .fflags = darwin.MACH_RCV_MSG,
                 .data = 0,
                 .udata = 0,
                 .ext = .{
@@ -425,7 +426,7 @@ pub const Loop = struct {
                     .disarm => {
                         if (disarm_ev) |ev| {
                             events[changes] = ev;
-                            events[changes].flags = posix.system.EV_DELETE;
+                            events[changes].flags = posix.system.EV.DELETE;
                             events[changes].udata = 0;
                             changes += 1;
                             assert(changes <= events.len);
@@ -451,16 +452,16 @@ pub const Loop = struct {
                 const t = self.timers.peek() orelse break :timeout null;
 
                 // Determine the time in milliseconds.
-                const ms_now = @as(u64, @intCast(self.cached_now.tv_sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(self.cached_now.tv_nsec)) / std.time.ns_per_ms;
-                const ms_next = @as(u64, @intCast(t.next.tv_sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(t.next.tv_nsec)) / std.time.ns_per_ms;
+                const ms_now = @as(u64, @intCast(self.cached_now.sec)) * std.time.ms_per_s +
+                    @as(u64, @intCast(self.cached_now.nsec)) / std.time.ns_per_ms;
+                const ms_next = @as(u64, @intCast(t.next.sec)) * std.time.ms_per_s +
+                    @as(u64, @intCast(t.next.nsec)) / std.time.ns_per_ms;
                 const ms = ms_next -| ms_now;
 
                 // Convert to s/ns for the timespec
                 const sec = ms / std.time.ms_per_s;
                 const nsec = (ms % std.time.ms_per_s) * std.time.ns_per_ms;
-                break :timeout .{ .tv_sec = @intCast(sec), .tv_nsec = @intCast(nsec) };
+                break :timeout .{ .sec = @intCast(sec), .nsec = @intCast(nsec) };
             };
 
             // Wait for changes. Note that we ALWAYS attempt to get completions
@@ -498,13 +499,13 @@ pub const Loop = struct {
                 // Ignore any successful deletions. This can only happen
                 // from disarms below and in that case we already processed
                 // their callback.
-                if (ev.flags & posix.system.EV_DELETE != 0) continue;
+                if (ev.flags & posix.system.EV.DELETE != 0) continue;
 
                 // This can only be set during changelist processing so
                 // that means that this event was never actually active.
                 // Therefore, we only decrement the waiters by 1 if we
                 // processed an active change.
-                if (ev.flags & posix.system.EV_ERROR != 0) {
+                if (ev.flags & posix.system.EV.ERROR != 0) {
                     // We cannot use c here because c is already dead
                     // at this point for this event.
                     continue;
@@ -524,7 +525,7 @@ pub const Loop = struct {
                         // Mark this event for deletion, it'll happen
                         // on the next tick.
                         events[changes] = ev;
-                        events[changes].flags = posix.system.EV_DELETE;
+                        events[changes].flags = posix.system.EV.DELETE;
                         events[changes].udata = 0;
                         changes += 1;
                         assert(changes <= events.len);
@@ -562,8 +563,8 @@ pub const Loop = struct {
 
         // Calculate all the values, being careful about overflows in order
         // to just return the maximum value.
-        const sec = std.math.mul(isize, self.cached_now.tv_sec, std.time.ms_per_s) catch return max;
-        const nsec = @divFloor(self.cached_now.tv_nsec, std.time.ns_per_ms);
+        const sec = std.math.mul(isize, self.cached_now.nsec, std.time.ms_per_s) catch return max;
+        const nsec = @divFloor(self.cached_now.nsec, std.time.ns_per_ms);
         return std.math.lossyCast(i64, sec +| nsec);
     }
 
@@ -641,8 +642,8 @@ pub const Loop = struct {
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
         const max: posix.timespec = .{
-            .tv_sec = std.math.maxInt(isize),
-            .tv_nsec = std.math.maxInt(isize),
+            .sec = std.math.maxInt(isize),
+            .nsec = std.math.maxInt(isize),
         };
 
         const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
@@ -653,9 +654,9 @@ pub const Loop = struct {
         ) orelse return max;
 
         return .{
-            .tv_sec = std.math.add(isize, self.cached_now.tv_sec, next_s) catch
+            .sec = std.math.add(isize, self.cached_now.sec, next_s) catch
                 return max,
-            .tv_nsec = std.math.add(isize, self.cached_now.tv_nsec, next_ns) catch
+            .nsec = std.math.add(isize, self.cached_now.nsec, next_ns) catch
                 return max,
         };
     }
@@ -1029,8 +1030,8 @@ pub const Completion = struct {
 
             .accept => |v| kevent_init(.{
                 .ident = @intCast(v.socket),
-                .filter = posix.system.EVFILT_READ,
-                .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
+                .filter = posix.system.EVFILT.READ,
+                .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @intFromPtr(self),
@@ -1038,8 +1039,8 @@ pub const Completion = struct {
 
             .connect => |v| kevent_init(.{
                 .ident = @intCast(v.socket),
-                .filter = posix.system.EVFILT_WRITE,
-                .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
+                .filter = posix.system.EVFILT.WRITE,
+                .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @intFromPtr(self),
@@ -1059,9 +1060,9 @@ pub const Completion = struct {
                 // buffer since MACH_RCV_MSG is set.
                 break :kevent .{
                     .ident = @intCast(v.port),
-                    .filter = posix.system.EVFILT_MACHPORT,
-                    .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
-                    .fflags = posix.system.MACH_RCV_MSG,
+                    .filter = posix.system.EVFILT.MACHPORT,
+                    .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
+                    .fflags = darwin.MACH_RCV_MSG,
                     .data = 0,
                     .udata = @intFromPtr(self),
                     .ext = .{ @intFromPtr(slice.ptr), slice.len },
@@ -1070,8 +1071,8 @@ pub const Completion = struct {
 
             .proc => |v| kevent_init(.{
                 .ident = @intCast(v.pid),
-                .filter = posix.system.EVFILT_PROC,
-                .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
+                .filter = posix.system.EVFILT.PROC,
+                .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
                 .fflags = v.flags,
                 .data = 0,
                 .udata = @intFromPtr(self),
@@ -1079,8 +1080,8 @@ pub const Completion = struct {
 
             inline .write, .pwrite, .send, .sendto => |v| kevent_init(.{
                 .ident = @intCast(v.fd),
-                .filter = posix.system.EVFILT_WRITE,
-                .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
+                .filter = posix.system.EVFILT.WRITE,
+                .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @intFromPtr(self),
@@ -1088,8 +1089,8 @@ pub const Completion = struct {
 
             inline .read, .pread, .recv, .recvfrom => |v| kevent_init(.{
                 .ident = @intCast(v.fd),
-                .filter = posix.system.EVFILT_READ,
-                .flags = posix.system.EV_ADD | posix.system.EV_ENABLE,
+                .filter = posix.system.EVFILT.READ,
+                .flags = posix.system.EV.ADD | posix.system.EV.ENABLE,
                 .fflags = 0,
                 .data = 0,
                 .udata = @intFromPtr(self),
@@ -1223,7 +1224,7 @@ pub const Completion = struct {
                 const ev = ev_ orelse break :res .{ .proc = ProcError.MissingKevent };
 
                 // If we have the exit status, we read it.
-                if (ev.fflags & (posix.system.NOTE_EXIT | posix.system.NOTE_EXITSTATUS) > 0) {
+                if (ev.fflags & (posix.system.NOTE.EXIT | posix.system.NOTE.EXITSTATUS) > 0) {
                     const data: u32 = @intCast(ev.data);
                     if (posix.W.IFEXITED(data)) break :res .{
                         .proc = posix.W.EXITSTATUS(data),
@@ -1493,7 +1494,7 @@ pub const Operation = union(OperationType) {
 
     proc: struct {
         pid: posix.pid_t,
-        flags: u32 = posix.system.NOTE_EXIT | posix.system.NOTE_EXITSTATUS,
+        flags: u32 = posix.system.NOTE.EXIT | posix.system.NOTE.EXITSTATUS,
     },
 };
 
@@ -1656,25 +1657,24 @@ const Timer = struct {
     /// any software is running in 584 years waiting on this timer...
     /// shame on me I guess... but I'll be dead.
     fn ns(self: *const Timer) u64 {
-        assert(self.next.tv_sec >= 0);
-        assert(self.next.tv_nsec >= 0);
+        assert(self.next.sec >= 0);
+        assert(self.next.nsec >= 0);
 
         const max = std.math.maxInt(u64);
         const s_ns = std.math.mul(
             u64,
-            @as(u64, @intCast(self.next.tv_sec)),
+            @as(u64, @intCast(self.next.sec)),
             std.time.ns_per_s,
         ) catch return max;
-        return std.math.add(u64, s_ns, @as(u64, @intCast(self.next.tv_nsec))) catch
+        return std.math.add(u64, s_ns, @as(u64, @intCast(self.next.nsec))) catch
             return max;
     }
 };
 
-/// Kevent is either kevent_s or kevent64_s depending on the target platform.
-/// This lets us support both Mac and non-Mac platforms.
+/// Zig provides posix.system.Kevent which supports both Darwin and BSD kqueue
 const Kevent = switch (builtin.os.tag) {
-    .ios, .macos => posix.system.kevent64_s,
-    else => @compileError("kqueue not supported yet for target OS"),
+    .ios, .macos => @typeInfo(@typeInfo(@TypeOf(std.c.kevent64)).@"fn".params[1].type.?).pointer.child, // "Hack" to access kevent64_s, which is currently not published. Also see https://github.com/ziglang/zig/issues/21200
+    else => @compileError("kqueue not supported yet for target OS"), // TODO: Support BSD-like kqueue
 };
 
 /// kevent calls either kevent or kevent64 depending on the
@@ -2459,8 +2459,8 @@ test "kqueue: mach port" {
     const mach_self = posix.system.mach_task_self();
     var mach_port: posix.system.mach_port_name_t = undefined;
     try testing.expectEqual(
-        posix.system.KernE.SUCCESS,
-        posix.system.getKernError(posix.system.mach_port_allocate(
+        darwin.KernE.SUCCESS,
+        darwin.getKernError(posix.system.mach_port_allocate(
             mach_self,
             @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
             &mach_port,
@@ -2502,23 +2502,23 @@ test "kqueue: mach port" {
     try testing.expect(!called);
 
     // Send a message to the port
-    var msg: posix.system.mach_msg_header_t = .{
+    var msg: darwin.mach_msg_header_t = .{
         .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
-        .msgh_size = @sizeOf(posix.system.mach_msg_header_t),
+        .msgh_size = @sizeOf(darwin.mach_msg_header_t),
         .msgh_remote_port = mach_port,
-        .msgh_local_port = posix.system.MACH_PORT_NULL,
+        .msgh_local_port = darwin.MACH_PORT_NULL,
         .msgh_voucher_port = undefined,
         .msgh_id = undefined,
     };
-    try testing.expectEqual(posix.system.MachMsgE.SUCCESS, posix.system.getMachMsgError(
+    try testing.expectEqual(darwin.MachMsgE.SUCCESS, darwin.getMachMsgError(
         posix.system.mach_msg(
             &msg,
-            posix.system.MACH_SEND_MSG,
+            darwin.MACH_SEND_MSG,
             msg.msgh_size,
             0,
-            posix.system.MACH_PORT_NULL,
-            posix.system.MACH_MSG_TIMEOUT_NONE,
-            posix.system.MACH_PORT_NULL,
+            darwin.MACH_PORT_NULL,
+            darwin.MACH_MSG_TIMEOUT_NONE,
+            darwin.MACH_PORT_NULL,
         ),
     ));
 
