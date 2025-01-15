@@ -4,6 +4,8 @@ const posix = std.posix;
 
 pub usingnamespace std.os.windows;
 
+pub extern "kernel32" fn DeleteFileW(lpFileName: [*:0]const u16) callconv(std.os.windows.WINAPI) std.os.windows.BOOL;
+
 /// Namespace containing missing utils from std
 pub const exp = struct {
     pub const STATUS_PENDING = 0x00000103;
@@ -165,7 +167,7 @@ pub const exp = struct {
     pub const DeleteFileError = error{} || posix.UnexpectedError;
 
     pub fn DeleteFile(name: [*:0]const u16) DeleteFileError!void {
-        const result: windows.BOOL = windows.kernel32.DeleteFileW(name);
+        const result: windows.BOOL = DeleteFileW(name);
         if (result == windows.FALSE) {
             const err = windows.kernel32.GetLastError();
             return switch (err) {

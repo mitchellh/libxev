@@ -958,7 +958,7 @@ pub const Completion = struct {
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    const r = .{
+                    const r: Result = .{
                         .accept = switch (err) {
                             windows.ws2_32.WinsockError.WSA_OPERATION_ABORTED => error.Canceled,
                             else => windows.unexpectedWSAError(err),
