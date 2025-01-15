@@ -33,6 +33,10 @@ jobs:
       uses: goto-bus-stop/setup-zig@v2
       with:
         version: master
+        
+    - if: matrix.target == 'wasm32-wasi'  
+      name: Setup `wasmtime`
+      uses: bytecodealliance/actions/wasmtime/setup@v1
     # Run our go tests within the context of the dev shell from the flake. This
     # will ensure we have all our dependencies.
     - name: build all
@@ -60,6 +64,7 @@ jobs:
       
     - name: Setup `wasmtime`
       uses: bytecodealliance/actions/wasmtime/setup@v1
+      
     - name: test wasi
       run: zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
