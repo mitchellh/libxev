@@ -1,4 +1,4 @@
-    # A fork of libxev with Zig 0.14+ compatibility
+# A fork of libxev with Zig 0.14+ compatibility
 
 This is a fork of the original [library](https://github.com/mitchellh/libxev), with compatibility added to support nightly versions of Zig. 
 
