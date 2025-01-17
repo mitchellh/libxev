@@ -700,6 +700,13 @@ pub const Loop = struct {
             },
 
             .close => |v| res: {
+                if (completion.flags.threadpool) {
+                    if (self.thread_schedule(completion)) |_|
+                        return
+                    else |err|
+                        break :res .{ .close = err };
+                }
+
                 posix.close(v.fd);
                 break :res .{ .close = {} };
             },
@@ -909,7 +916,6 @@ pub const Completion = struct {
             // This should never happen because we always do these synchronously
             // or in another location.
             .cancel,
-            .close,
             .noop,
             .shutdown,
             .timer,
@@ -1014,6 +1020,11 @@ pub const Completion = struct {
                     else |err|
                         err,
                 };
+            },
+
+            .close => |*op| res: {
+                posix.close(op.fd);
+                break :res .{ .close = {} };
             },
         };
     }
@@ -1277,7 +1288,7 @@ pub const AcceptError = posix.EpollCtlError || error{
     Unknown,
 };
 
-pub const CloseError = posix.EpollCtlError || error{
+pub const CloseError = posix.EpollCtlError || ThreadPoolError || error{
     Unknown,
 };
 
