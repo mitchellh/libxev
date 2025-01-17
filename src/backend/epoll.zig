@@ -297,6 +297,7 @@ pub const Loop = struct {
 
         // Submit all the submissions. We copy the submission queue so that
         // any resubmits don't cause an infinite loop.
+        var wait_rem: usize = @intCast(wait);
         var queued = self.submissions;
         self.submissions = .{};
         while (queued.pop()) |c| {
@@ -304,6 +305,19 @@ pub const Loop = struct {
             // This usually means that we switched them to be deleted or
             // something.
             if (c.flags.state != .adding) continue;
+
+            // These operations happen synchronously. Ensure they are
+            // decremented from wait_rem.
+            switch (c.op) {
+                .cancel,
+                // should noop be counted?
+                // .noop,
+                .shutdown,
+                .timer,
+                => wait_rem -|= 1,
+                else => {},
+            }
+
             self.start(c);
         }
 
@@ -322,7 +336,6 @@ pub const Loop = struct {
 
         // Wait and process events. We only do this if we have any active.
         var events: [1024]linux.epoll_event = undefined;
-        var wait_rem: usize = @intCast(wait);
         while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
             self.update_now();
             const now_timer: Operation.Timer = .{ .next = self.cached_now };
