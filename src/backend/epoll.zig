@@ -375,9 +375,7 @@ pub const Loop = struct {
             const timeout: i32 = if (wait_rem == 0) 0 else timeout: {
                 // If we have a timer, we want to set the timeout to our next
                 // timer value. If we have no timer, we wait forever.
-                // TODO: do not wait 100ms here, use an eventfd for our
-                // thread pool to wake us up.
-                const t = self.timers.peek() orelse break :timeout 100;
+                const t = self.timers.peek() orelse break :timeout -1;
 
                 // Determine the time in milliseconds.
                 const ms_now = @as(u64, @intCast(self.cached_now.tv_sec)) * std.time.ms_per_s +
