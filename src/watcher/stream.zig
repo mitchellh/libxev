@@ -80,6 +80,22 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
                 }).callback,
             };
 
+            // If we're dup-ing, then we ask the backend to manage the fd.
+            switch (xev.backend) {
+                .io_uring,
+                .wasi_poll,
+                .iocp,
+                => {},
+
+                .epoll => {
+                    c.flags.threadpool = true;
+                },
+
+                .kqueue => {
+                    c.flags.threadpool = true;
+                },
+            }
+
             loop.add(c);
         }
     };
