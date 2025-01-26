@@ -1,6 +1,5 @@
 const std = @import("std");
 const CompileStep = std.build.Step.Compile;
-const ScdocStep = @import("src/build/ScdocStep.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -18,30 +17,6 @@ pub fn build(b: *std.Build) !void {
         error.FileNotFound => false,
         else => return err,
     };
-
-    const bench_name = b.option(
-        []const u8,
-        "bench-name",
-        "Build and install a single benchmark",
-    );
-
-    const bench_install = b.option(
-        bool,
-        "bench",
-        "Install the benchmark binaries to zig-out/bench",
-    ) orelse (bench_name != null);
-
-    const example_name = b.option(
-        []const u8,
-        "example-name",
-        "Build and install a single example",
-    );
-
-    const example_install = b.option(
-        bool,
-        "example",
-        "Install the example binaries to zig-out/example",
-    ) orelse (example_name != null);
 
     const test_install = b.option(
         bool,
@@ -180,169 +155,151 @@ pub fn build(b: *std.Build) !void {
     }
 
     // Benchmarks
-    _ = try benchTargets(b, target, optimize, bench_install, bench_name);
+    _ = bench(b, target, "src/bench/async1.zig");
+    _ = bench(b, target, "src/bench/async2.zig");
+    _ = bench(b, target, "src/bench/async4.zig");
+    _ = bench(b, target, "src/bench/async8.zig");
+    _ = bench(b, target, "src/bench/async_pummel_1.zig");
+    _ = bench(b, target, "src/bench/async_pummel_2.zig");
+    _ = bench(b, target, "src/bench/async_pummel_4.zig");
+    _ = bench(b, target, "src/bench/async_pummel_8.zig");
+    _ = bench(b, target, "src/bench/million-timers.zig");
+    _ = bench(b, target, "src/bench/ping-pongs.zig");
+    _ = bench(b, target, "src/bench/ping-udp1.zig");
+    _ = bench(b, target, "src/bench/udp_pummel_1v1.zig");
 
     // Examples
-    _ = try exampleTargets(b, target, optimize, static_c_lib, example_install, example_name);
+    example(b, target, optimize, "examples/_basic.zig");
+
+    if (static_c_lib) |c_lib| {
+        c_example(b, target, optimize, c_lib, "examples/_basic.c");
+        c_example(b, target, optimize, c_lib, "examples/async.c");
+        c_example(b, target, optimize, c_lib, "examples/million-timers.c");
+        c_example(b, target, optimize, c_lib, "examples/threadpool.c");
+    }
+
+    const install_docs_step = b.step("docs", "Generate and install docs");
+    install_docs_step.dependOn(&scdoc(b, "docs/xev.7.scd").step);
+    install_docs_step.dependOn(&scdoc(b, "docs/xev-c.7.scd").step);
+    install_docs_step.dependOn(&scdoc(b, "docs/xev-faq.7.scd").step);
+    install_docs_step.dependOn(&scdoc(b, "docs/xev-zig.7.scd").step);
+    install_docs_step.dependOn(&scdoc(b, "docs/xev_completion_state.3.scd").step);
+    install_docs_step.dependOn(&scdoc(b, "docs/xev_completion_zero.3.scd").step);
+    install_docs_step.dependOn(&scdoc(b, "docs/xev_threadpool.3.scd").step);
 
     // Man pages
     if (man_pages) {
-        const scdoc_step = ScdocStep.create(b);
-        try scdoc_step.install();
+        b.default_step.dependOn(install_docs_step);
     }
 }
 
-fn benchTargets(
+fn bench(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    mode: std.builtin.OptimizeMode,
-    install: bool,
-    install_name: ?[]const u8,
-) !std.StringHashMap(*std.Build.Step.Compile) {
-    _ = mode;
+    sub_path: []const u8,
+) *std.Build.Step.Compile {
+    // Name of the app
+    const name = std.fs.path.stem(sub_path);
 
-    var map = std.StringHashMap(*std.Build.Step.Compile).init(b.allocator);
+    // Executable builder.
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_source_file = b.path(sub_path),
+        .target = target,
+        .optimize = .ReleaseFast, // benchmarks are always release fast
+    });
+    exe.root_module.addImport("xev", b.modules.get("xev").?);
 
-    // Open the directory
-    const c_dir_path = "src/bench";
-    var c_dir = try std.fs.cwd().openDir(comptime thisDir() ++ "/" ++ c_dir_path, .{ .iterate = true });
-    defer c_dir.close();
+    const install_artifact = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .{ .custom = "bench" } },
+    });
+    const install_step = b.step(name, b.fmt("install {s} benchmark", .{name}));
+    install_step.dependOn(&install_artifact.step);
+    b.getInstallStep().dependOn(install_step);
 
-    // Go through and add each as a step
-    var c_dir_it = c_dir.iterate();
-    while (try c_dir_it.next()) |entry| {
-        // Get the index of the last '.' so we can strip the extension.
-        const index = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
-        if (index == 0) continue;
-
-        // Name of the app and full path to the entrypoint.
-        const name = entry.name[0..index];
-        const path = try std.fs.path.join(b.allocator, &[_][]const u8{
-            c_dir_path,
-            entry.name,
-        });
-
-        // If we have specified a specific name, only install that one.
-        if (install_name) |n| {
-            if (!std.mem.eql(u8, n, name)) continue;
-        }
-
-        // Executable builder.
-        const c_exe = b.addExecutable(.{
-            .name = name,
-            .root_source_file = b.path(path),
-            .target = target,
-            .optimize = .ReleaseFast, // benchmarks are always release fast
-        });
-        c_exe.root_module.addImport("xev", b.modules.get("xev").?);
-        if (install) {
-            const install_step = b.addInstallArtifact(c_exe, .{
-                .dest_dir = .{ .override = .{ .custom = "bench" } },
-            });
-            b.getInstallStep().dependOn(&install_step.step);
-        }
-
-        // Store the mapping
-        try map.put(try b.allocator.dupe(u8, name), c_exe);
-    }
-
-    return map;
+    return exe;
 }
 
-fn exampleTargets(
+fn example(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    c_lib_: ?*std.Build.Step.Compile,
-    install: bool,
-    install_name: ?[]const u8,
-) !void {
-    // Ignore if we're not installing
-    if (!install) return;
+    sub_path: []const u8,
+) void {
+    // Name of the app
+    const name = std.fs.path.basename(sub_path);
 
-    // Open the directory
-    const c_dir_path = (comptime thisDir()) ++ "/examples";
-    var c_dir = try std.fs.cwd().openDir(c_dir_path, .{ .iterate = true });
-    defer c_dir.close();
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_source_file = b.path(sub_path),
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.root_module.addImport("xev", b.modules.get("xev").?);
 
-    // Go through and add each as a step
-    var c_dir_it = c_dir.iterate();
-    while (try c_dir_it.next()) |entry| {
-        // Get the index of the last '.' so we can strip the extension.
-        const index = std.mem.lastIndexOfScalar(u8, entry.name, '.') orelse continue;
-        if (index == 0) continue;
-
-        // If we have specified a specific name, only install that one.
-        if (install_name) |n| {
-            if (!std.mem.eql(u8, n, entry.name)) continue;
-        }
-
-        // Name of the app and full path to the entrypoint.
-        const name = entry.name[0..index];
-        const path = try std.fs.path.join(b.allocator, &[_][]const u8{
-            c_dir_path,
-            entry.name,
-        });
-
-        const is_zig = std.mem.eql(u8, entry.name[index + 1 ..], "zig");
-        if (is_zig) {
-            const c_exe = b.addExecutable(.{
-                .name = name,
-                .root_source_file = .{ .cwd_relative = path },
-                .target = target,
-                .optimize = optimize,
-            });
-            c_exe.root_module.addImport("xev", b.modules.get("xev").?);
-            if (install) {
-                const install_step = b.addInstallArtifact(c_exe, .{
-                    .dest_dir = .{ .override = .{ .custom = "example" } },
-                });
-                b.getInstallStep().dependOn(&install_step.step);
-            }
-        } else {
-            const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
-            const c_exe = b.addExecutable(.{
-                .name = name,
-                .target = target,
-                .optimize = optimize,
-            });
-            c_exe.linkLibC();
-            c_exe.addIncludePath(b.path("include"));
-            c_exe.addCSourceFile(.{
-                .file = .{ .cwd_relative = path },
-                .flags = &[_][]const u8{
-                    "-Wall",
-                    "-Wextra",
-                    "-pedantic",
-                    "-std=c99",
-                    "-D_POSIX_C_SOURCE=199309L",
-                },
-            });
-            c_exe.linkLibrary(c_lib);
-            if (install) {
-                const install_step = b.addInstallArtifact(c_exe, .{
-                    .dest_dir = .{ .override = .{ .custom = "example" } },
-                });
-                b.getInstallStep().dependOn(&install_step.step);
-            }
-        }
-
-        // If we have specified a specific name, only install that one.
-        if (install_name) |_| break;
-    } else {
-        if (install_name) |n| {
-            std.debug.print("No example file named: {s}\n", .{n});
-            std.debug.print("Choices:\n", .{});
-            var c_dir_it2 = c_dir.iterate();
-            while (try c_dir_it2.next()) |entry| {
-                std.debug.print("\t{s}\n", .{entry.name});
-            }
-            return error.InvalidExampleName;
-        }
-    }
+    const install_artifact = b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .{ .custom = "example" } },
+    });
+    const install_step = b.step(name, b.fmt("install {s} example", .{name}));
+    install_step.dependOn(&install_artifact.step);
+    b.getInstallStep().dependOn(install_step);
 }
 
-/// Path to the directory with the build.zig.
-fn thisDir() []const u8 {
-    return std.fs.path.dirname(@src().file) orelse unreachable;
+fn c_example(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    c_lib: *std.Build.Step.Compile,
+    sub_path: []const u8,
+) void {
+    // Name of the app
+    const name = std.fs.path.basename(sub_path);
+
+    const c_exe = b.addExecutable(.{
+        .name = name,
+        .target = target,
+        .optimize = optimize,
+    });
+    c_exe.linkLibC();
+    c_exe.addIncludePath(b.path("include"));
+    c_exe.addCSourceFile(.{
+        .file = b.path(sub_path),
+        .flags = &[_][]const u8{
+            "-Wall",
+            "-Wextra",
+            "-pedantic",
+            "-std=c99",
+            "-D_POSIX_C_SOURCE=199309L",
+        },
+    });
+    c_exe.linkLibrary(c_lib);
+
+    const install_artifact = b.addInstallArtifact(c_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "example" } },
+    });
+    const install_step = b.step(name, b.fmt("install {s} example", .{name}));
+    install_step.dependOn(&install_artifact.step);
+    b.getInstallStep().dependOn(install_step);
+}
+
+fn scdoc(
+    b: *std.Build,
+    src_path: []const u8,
+) *std.Build.Step.InstallFile {
+    // We expect filenames to be "foo.3.scd" and this gets us "foo.3"
+    const src_filename = std.fs.path.basename(src_path);
+    const src_stem = std.fs.path.stem(src_filename);
+    const src_extension = std.fs.path.extension(src_stem); // this gets ".3"
+
+    const section = src_extension[1..];
+
+    const output_path = b.fmt(
+        "share/man/man{s}/{s}",
+        .{ section, src_filename },
+    );
+
+    const run_scdoc = b.addSystemCommand(&.{"scdoc"});
+    run_scdoc.setStdIn(.{ .lazy_path = b.path(src_path) });
+
+    return b.addInstallFile(run_scdoc.captureStdOut(), output_path);
 }
