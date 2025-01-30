@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
 const queue = @import("../queue.zig");
-const xev = @import("../main.zig").IO_Uring;
+const xev = @import("../lib.zig").IO_Uring;
 
 pub const Loop = struct {
     ring: linux.IoUring,

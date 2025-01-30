@@ -5,7 +5,7 @@ const posix = std.posix;
 const queue = @import("../queue.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
-const main = @import("../main.zig");
+const main = @import("../lib.zig");
 const xev = main.Epoll;
 const ThreadPool = main.ThreadPool;
 
