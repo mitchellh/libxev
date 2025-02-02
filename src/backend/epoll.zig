@@ -157,7 +157,9 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        posix.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now) catch {};
+        if (posix.clock_gettime(posix.CLOCK.MONOTONIC)) |new_time| {
+            self.cached_now = new_time;
+        } else |_| {}
     }
 
     /// Add a timer to the loop. The timer will execute in "next_ms". This

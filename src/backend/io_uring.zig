@@ -96,8 +96,10 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        posix.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now) catch {};
-        self.flags.now_outdated = false;
+        if (posix.clock_gettime(posix.CLOCK.MONOTONIC)) |new_time| {
+            self.cached_now = new_time;
+            self.flags.now_outdated = false;
+        } else |_| {}
     }
 
     /// Tick the loop. The mode is comptime so we can do some tricks to

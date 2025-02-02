@@ -14,7 +14,7 @@ pub const Timerfd = struct {
     fd: i32,
 
     /// timerfd_create
-    pub fn init(clock: linux.clockid_t, flags: linux.TFD) !Timerfd {
+    pub fn init(clock: linux.timerfd_clockid_t, flags: linux.TFD) !Timerfd {
         const res = linux.timerfd_create(clock, flags);
         return switch (posix.errno(res)) {
             .SUCCESS => .{ .fd = @as(i32, @intCast(res)) },
