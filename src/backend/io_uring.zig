@@ -89,15 +89,17 @@ pub const Loop = struct {
 
         // Calculate all the values, being careful about overflows in order
         // to just return the maximum value.
-        const sec = std.math.mul(isize, self.cached_now.tv_sec, std.time.ms_per_s) catch return max;
-        const nsec = @divFloor(self.cached_now.tv_nsec, std.time.ns_per_ms);
+        const sec = std.math.mul(isize, self.cached_now.sec, std.time.ms_per_s) catch return max;
+        const nsec = @divFloor(self.cached_now.nsec, std.time.ns_per_ms);
         return std.math.lossyCast(i64, sec +| nsec);
     }
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        posix.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now) catch {};
-        self.flags.now_outdated = false;
+        if (posix.clock_gettime(posix.CLOCK.MONOTONIC)) |new_time| {
+            self.cached_now = new_time;
+            self.flags.now_outdated = false;
+        } else |_| {}
     }
 
     /// Tick the loop. The mode is comptime so we can do some tricks to
@@ -290,8 +292,8 @@ pub const Loop = struct {
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
         const max: linux.kernel_timespec = .{
-            .tv_sec = std.math.maxInt(isize),
-            .tv_nsec = std.math.maxInt(isize),
+            .sec = std.math.maxInt(isize),
+            .nsec = std.math.maxInt(isize),
         };
 
         const next_s = std.math.cast(isize, next_ms / std.time.ms_per_s) orelse
@@ -304,9 +306,9 @@ pub const Loop = struct {
         if (self.flags.now_outdated) self.update_now();
 
         return .{
-            .tv_sec = std.math.add(isize, self.cached_now.tv_sec, next_s) catch
+            .sec = std.math.add(isize, self.cached_now.sec, next_s) catch
                 return max,
-            .tv_nsec = std.math.add(isize, self.cached_now.tv_nsec, next_ns) catch
+            .nsec = std.math.add(isize, self.cached_now.nsec, next_ns) catch
                 return max,
         };
     }
@@ -1141,7 +1143,7 @@ test "io_uring: timerfd" {
 
     // We'll try with a simple timerfd
     const Timerfd = @import("../linux/timerfd.zig").Timerfd;
-    var t = try Timerfd.init(.monotonic, .{});
+    var t = try Timerfd.init(.MONOTONIC, .{});
     defer t.deinit();
     try t.set(.{}, &.{ .value = .{ .nanoseconds = 1 } }, null);
 
