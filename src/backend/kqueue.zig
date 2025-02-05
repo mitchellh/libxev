@@ -1106,7 +1106,6 @@ pub const Completion = struct {
     fn perform(self: *Completion, ev_: ?*const Kevent) Result {
         return switch (self.op) {
             .cancel,
-            .close,
             .noop,
             .timer,
             .shutdown,
@@ -1235,6 +1234,11 @@ pub const Completion = struct {
                 }
 
                 break :res .{ .proc = 0 };
+            },
+
+            .close => |*op| res: {
+                posix.close(op.fd);
+                break :res .{ .close = {} };
             },
         };
     }
