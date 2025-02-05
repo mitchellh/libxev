@@ -206,10 +206,14 @@ pub const Loop = struct {
             // event list to zero length) because it was leading to
             // memory corruption we need to investigate.
             for (events[0..completed]) |ev| {
-                const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
+                // Zero udata values are internal events that we do nothing
+                // on such as the mach port wakeup.
+                if (ev.udata == 0) continue;
 
                 // We handle deletions separately.
                 if (ev.flags & posix.system.EV_DELETE != 0) continue;
+
+                const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
 
                 // If EV_ERROR is set, then submission failed for this
                 // completion. We get the syscall errorcode from data and
