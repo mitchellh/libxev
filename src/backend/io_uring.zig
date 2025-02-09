@@ -96,7 +96,9 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        posix.clock_gettime(posix.CLOCK.MONOTONIC, &self.cached_now) catch {};
+        self.cached_now = posix.clock_gettime(posix.CLOCK.MONOTONIC) catch {
+            return;
+        };
         self.flags.now_outdated = false;
     }
 

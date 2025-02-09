@@ -59,7 +59,7 @@ pub const Timerfd = struct {
     /// The clocks available for a Timerfd. This is a non-exhaustive enum
     /// so that unsupported values can be attempted to be passed into the
     /// system calls.
-    pub const Clock = std.os.linux.clockid_t;
+    pub const Clock = std.os.linux.timerfd_clockid_t;
 
     /// itimerspec
     pub const Spec = extern struct {
