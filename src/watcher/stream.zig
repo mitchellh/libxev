@@ -36,8 +36,6 @@ pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) t
 }
 
 pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    _ = options;
-
     return struct {
         const Self = T;
 
@@ -88,11 +86,13 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
                 => {},
 
                 .epoll => {
-                    c.flags.threadpool = true;
+                    if (options.threadpool and loop.thread_pool != null)
+                        c.flags.threadpool = true;
                 },
 
                 .kqueue => {
-                    c.flags.threadpool = true;
+                    if (options.threadpool and loop.thread_pool != null)
+                        c.flags.threadpool = true;
                 },
             }
 
@@ -188,14 +188,14 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                         => {},
 
                         .epoll => {
-                            if (options.threadpool)
+                            if (options.threadpool and loop.thread_pool != null)
                                 c.flags.threadpool = true
                             else
                                 c.flags.dup = true;
                         },
 
                         .kqueue => {
-                            if (options.threadpool) c.flags.threadpool = true;
+                            if (options.threadpool and loop.thread_pool != null) c.flags.threadpool = true;
                         },
                     }
 
@@ -274,7 +274,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             // Initialize our completion
             req.* = .{ .full_write_buffer = buf };
             // Must be kept in sync with partial write logic inside the callback
-            self.write_init(&req.completion, buf);
+            self.write_init(&req.completion, buf, loop);
             req.completion.userdata = q;
             req.completion.callback = (struct {
                 fn callback(
@@ -305,7 +305,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         if (written_len < queued_len) {
                             // Write remainder of the buffer, reusing the same completion
                             const rem_buf = writeBufferRemainder(cb_res.buf, written_len);
-                            cb_res.writer.write_init(&req_inner.completion, rem_buf);
+                            cb_res.writer.write_init(&req_inner.completion, rem_buf, l_inner);
                             req_inner.completion.userdata = q_inner;
                             req_inner.completion.callback = callback;
                             l_inner.add(&req_inner.completion);
@@ -380,7 +380,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 r: WriteError!usize,
             ) xev.CallbackAction,
         ) void {
-            self.write_init(c, buf);
+            self.write_init(c, buf, loop);
             c.userdata = userdata;
             c.callback = (struct {
                 fn callback(
@@ -433,6 +433,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             self: Self,
             c: *xev.Completion,
             buf: xev.WriteBuffer,
+            loop: *xev.Loop,
         ) void {
             switch (buf) {
                 inline .slice, .array => {
@@ -464,7 +465,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         => {},
 
                         .epoll => {
-                            if (options.threadpool) {
+                            if (options.threadpool and loop.thread_pool != null) {
                                 c.flags.threadpool = true;
                             } else {
                                 c.flags.dup = true;
@@ -472,7 +473,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         },
 
                         .kqueue => {
-                            if (options.threadpool) c.flags.threadpool = true;
+                            if (options.threadpool and loop.thread_pool != null) c.flags.threadpool = true;
                         },
                     }
                 },
