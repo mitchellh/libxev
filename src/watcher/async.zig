@@ -36,7 +36,7 @@ fn AsyncEventFd(comptime xev: type) type {
         /// to be woken up. The completion must be allocated in advance.
         pub fn init() !Self {
             return .{
-                .fd = try std.posix.eventfd(0, 0),
+                .fd = try std.posix.eventfd(0, std.os.linux.EFD.CLOEXEC),
             };
         }
 

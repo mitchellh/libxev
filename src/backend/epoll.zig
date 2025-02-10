@@ -299,6 +299,7 @@ pub const Loop = struct {
 
         // Submit all the submissions. We copy the submission queue so that
         // any resubmits don't cause an infinite loop.
+        var wait_rem: usize = @intCast(wait);
         var queued = self.submissions;
         self.submissions = .{};
         while (queued.pop()) |c| {
@@ -306,6 +307,19 @@ pub const Loop = struct {
             // This usually means that we switched them to be deleted or
             // something.
             if (c.flags.state != .adding) continue;
+
+            // These operations happen synchronously. Ensure they are
+            // decremented from wait_rem.
+            switch (c.op) {
+                .cancel,
+                // should noop be counted?
+                // .noop,
+                .shutdown,
+                .timer,
+                => wait_rem -|= 1,
+                else => {},
+            }
+
             self.start(c);
         }
 
@@ -324,7 +338,6 @@ pub const Loop = struct {
 
         // Wait and process events. We only do this if we have any active.
         var events: [1024]linux.epoll_event = undefined;
-        var wait_rem: usize = @intCast(wait);
         while (self.active > 0 and (wait == 0 or wait_rem > 0)) {
             self.update_now();
             const now_timer: Operation.Timer = .{ .next = self.cached_now };
@@ -377,9 +390,7 @@ pub const Loop = struct {
             const timeout: i32 = if (wait_rem == 0) 0 else timeout: {
                 // If we have a timer, we want to set the timeout to our next
                 // timer value. If we have no timer, we wait forever.
-                // TODO: do not wait 100ms here, use an eventfd for our
-                // thread pool to wake us up.
-                const t = self.timers.peek() orelse break :timeout 100;
+                const t = self.timers.peek() orelse break :timeout -1;
 
                 // Determine the time in milliseconds.
                 const ms_now = @as(u64, @intCast(self.cached_now.sec)) * std.time.ms_per_s +
@@ -704,6 +715,13 @@ pub const Loop = struct {
             },
 
             .close => |v| res: {
+                if (completion.flags.threadpool) {
+                    if (self.thread_schedule(completion)) |_|
+                        return
+                    else |err|
+                        break :res .{ .close = err };
+                }
+
                 posix.close(v.fd);
                 break :res .{ .close = {} };
             },
@@ -913,7 +931,6 @@ pub const Completion = struct {
             // This should never happen because we always do these synchronously
             // or in another location.
             .cancel,
-            .close,
             .noop,
             .shutdown,
             .timer,
@@ -1018,6 +1035,11 @@ pub const Completion = struct {
                     else |err|
                         err,
                 };
+            },
+
+            .close => |*op| res: {
+                posix.close(op.fd);
+                break :res .{ .close = {} };
             },
         };
     }
@@ -1281,7 +1303,7 @@ pub const AcceptError = posix.EpollCtlError || error{
     Unknown,
 };
 
-pub const CloseError = posix.EpollCtlError || error{
+pub const CloseError = posix.EpollCtlError || ThreadPoolError || error{
     Unknown,
 };
 

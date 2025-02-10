@@ -189,6 +189,14 @@ fn ProcessKqueue(comptime xev: type) type {
                         c_inner: *xev.Completion,
                         r: xev.Result,
                     ) xev.CallbackAction {
+                        // Reap the process. We do this because our xev.Process
+                        // docs note that this is the equivalent of calling
+                        // `wait` on a process. The Linux side (pidfd) does this
+                        // automatically since the `waitid` syscall is used.
+                        if (r.proc) |_| {
+                            _ = posix.waitpid(c_inner.op.proc.pid, 0);
+                        } else |_| {}
+
                         return @call(.always_inline, cb, .{
                             common.userdataValue(Userdata, ud),
                             l_inner,
