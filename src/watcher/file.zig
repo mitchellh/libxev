@@ -115,11 +115,13 @@ pub fn File(comptime xev: type) type {
                         => {},
 
                         .epoll => {
-                            c.flags.threadpool = true;
+                            if (loop.thread_pool != null)
+                                c.flags.threadpool = true;
                         },
 
                         .kqueue => {
-                            c.flags.threadpool = true;
+                            if (loop.thread_pool != null)
+                                c.flags.threadpool = true;
                         },
                     }
 
@@ -217,7 +219,7 @@ pub fn File(comptime xev: type) type {
                 r: Self.WriteError!usize,
             ) xev.CallbackAction,
         ) void {
-            self.pwrite_init(c, buf, offset);
+            self.pwrite_init(c, buf, offset, loop);
             c.userdata = userdata;
             c.callback = (struct {
                 fn callback(
@@ -258,6 +260,7 @@ pub fn File(comptime xev: type) type {
             c: *xev.Completion,
             buf: xev.WriteBuffer,
             offset: u64,
+            loop: *xev.Loop,
         ) void {
             switch (buf) {
                 inline .slice, .array => {
@@ -279,11 +282,13 @@ pub fn File(comptime xev: type) type {
                         => {},
 
                         .epoll => {
-                            c.flags.threadpool = true;
+                            if (loop.thread_pool != null)
+                                c.flags.threadpool = true;
                         },
 
                         .kqueue => {
-                            c.flags.threadpool = true;
+                            if (loop.thread_pool != null)
+                                c.flags.threadpool = true;
                         },
                     }
                 },
