@@ -272,7 +272,9 @@ directory.
 
 # Build
 
-Build requires the installation of the latest [Zig nightly](https://ziglang.org/download/).
+Build requires the installation of the Zig 0.13.0. libxev follows stable
+Zig releases and generally does not support nightly builds. When a stable
+release is imminent we may have a branch that supports it.
 **libxev has no other build dependencies.**
 
 Once installed, `zig build install` on its own will build the full library and output
