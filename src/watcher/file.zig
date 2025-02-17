@@ -27,7 +27,7 @@ const stream = @import("stream.zig");
 pub fn File(comptime xev: type) type {
     return struct {
         const Self = @This();
-        const FdType = if (xev.backend == .iocp) std.windows.HANDLE else posix.socket_t;
+        const FdType = if (xev.backend == .iocp) std.os.windows.HANDLE else posix.socket_t;
 
         /// The underlying file
         fd: FdType,
