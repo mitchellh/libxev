@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const stream = @import("stream.zig");
 const common = @import("common.zig");
+const ThreadPool = @import("../ThreadPool.zig");
 
 /// UDP client and server.
 ///
@@ -685,7 +686,10 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
         test "UDP: read/write" {
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(.{});
+            var tpool = ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
             const address = try std.net.Address.parseIp4("127.0.0.1", 3132);

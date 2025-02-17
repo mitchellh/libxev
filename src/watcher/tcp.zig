@@ -4,6 +4,7 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const stream = @import("stream.zig");
 const common = @import("common.zig");
+const ThreadPool = @import("../ThreadPool.zig");
 
 /// TCP client and server.
 ///
@@ -234,7 +235,10 @@ pub fn TCP(comptime xev: type) type {
 
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(.{});
+            var tpool = ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
             // Choose random available port (Zig #14907)
@@ -406,7 +410,10 @@ pub fn TCP(comptime xev: type) type {
 
             const testing = std.testing;
 
-            var loop = try xev.Loop.init(.{});
+            var tpool = ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
             defer loop.deinit();
 
             // Choose random available port (Zig #14907)

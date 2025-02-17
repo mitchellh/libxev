@@ -1362,6 +1362,7 @@ pub const Completion = struct {
                 .close = switch (errno) {
                     .SUCCESS => {},
                     .CANCELED => error.Canceled,
+                    .PERM => error.ThreadPoolRequired,
                     else => |err| posix.unexpectedErrno(err),
                 },
             },
@@ -1525,6 +1526,11 @@ pub const Result = union(OperationType) {
     proc: ProcError!u32,
 };
 
+const ThreadPoolError = error{
+    ThreadPoolRequired,
+    ThreadPoolUnsupported,
+};
+
 pub const CancelError = error{
     Canceled,
 };
@@ -1579,7 +1585,7 @@ pub const ShutdownError = posix.ShutdownError || error{
     Unexpected,
 };
 
-pub const CloseError = error{
+pub const CloseError = ThreadPoolError || error{
     Canceled,
     Unexpected,
 };
