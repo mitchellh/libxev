@@ -4,7 +4,7 @@ const assert = std.debug.assert;
 const windows = @import("../windows.zig");
 const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
-const xev = @import("../main.zig").IOCP;
+const xev = @import("../lib.zig").IOCP;
 const posix = std.posix;
 
 const log = std.log.scoped(.libxev_iocp);

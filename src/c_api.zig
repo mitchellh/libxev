@@ -9,7 +9,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
-const xev = @import("main.zig");
+const xev = @import("lib.zig");
 
 export fn xev_loop_init(loop: *xev.Loop) c_int {
     // TODO: overflow
