@@ -1,11 +1,26 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const dynamic = @import("dynamic.zig");
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system.
 const xev = Backend.default().Api();
 pub usingnamespace xev;
 //pub usingnamespace Epoll;
+
+/// The dynamic interface that allows for runtime selection of the
+/// backend to use. This is useful if you want to support multiple
+/// backends and have a fallback mechanism.
+///
+/// There is a very small overhead to using this API compared to the
+/// static API, but it is generally negligible.
+///
+/// The API for this isn't _exactly_ the same as the static API
+/// since it requires initialization of the main struct to detect
+/// a backend and then this needs to be passed to every high-level
+/// type such as Async, File, etc. so that they can use the correct
+/// backend that is coherent with the loop.
+pub const Dynamic = dynamic.Xev(Backend.candidates());
 
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed
@@ -47,6 +62,20 @@ pub const Backend = enum {
         };
     }
 
+    /// Candidate backends for this platform in priority order.
+    pub fn candidates() []const Backend {
+        return switch (builtin.os.tag) {
+            .linux => &.{ .io_uring, .epoll },
+            .ios, .macos => &.{.kqueue},
+            .wasi => &.{.wasi_poll},
+            .windows => &.{.iocp},
+            else => {
+                @compileLog(builtin.os);
+                @compileError("no candidate backends for this target");
+            },
+        };
+    }
+
     /// Returns the Api (return value of Xev) for the given backend type.
     pub fn Api(comptime self: Backend) type {
         return switch (self) {
@@ -77,6 +106,10 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         /// it is up to the caller to say the right thing. This lets custom
         /// implementations also "quack" like an implementation.
         pub const backend = be;
+
+        /// A function to test if this API is available on the
+        /// current system.
+        pub const available = T.available;
 
         /// The core loop APIs.
         pub const Loop = T.Loop;
@@ -148,6 +181,7 @@ test {
     _ = @import("queue.zig");
     _ = @import("queue_mpsc.zig");
     _ = ThreadPool;
+    _ = Dynamic;
 
     // Test the C API
     if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
