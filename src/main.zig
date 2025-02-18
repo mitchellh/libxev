@@ -35,15 +35,15 @@ pub const Backend = enum {
 
     /// Returns a recommend default backend from inspecting the system.
     pub fn default() Backend {
-        return @as(?Backend, switch (builtin.os.tag) {
+        return switch (builtin.os.tag) {
             .linux => .io_uring,
             .ios, .macos => .kqueue,
             .wasi => .wasi_poll,
             .windows => .iocp,
-            else => null,
-        }) orelse {
-            @compileLog(builtin.os);
-            @compileError("no default backend for this target");
+            else => {
+                @compileLog(builtin.os);
+                @compileError("no default backend for this target");
+            },
         };
     }
 

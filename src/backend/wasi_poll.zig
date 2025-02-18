@@ -7,6 +7,11 @@ const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
 
+/// True if this backend is available on this platform.
+pub fn available() bool {
+    return builtin.os.tag == .wasi;
+}
+
 pub const Loop = struct {
     pub const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
@@ -8,6 +9,11 @@ const heap = @import("../heap.zig");
 const main = @import("../main.zig");
 const xev = main.Epoll;
 const ThreadPool = main.ThreadPool;
+
+/// True if epoll is available on this platform.
+pub fn available() bool {
+    return builtin.os.tag == .linux;
+}
 
 /// Epoll backend.
 ///

@@ -13,6 +13,19 @@ const ThreadPool = main.ThreadPool;
 
 const log = std.log.scoped(.libxev_kqueue);
 
+/// True if this backend is available on this platform.
+pub fn available() bool {
+    return switch (builtin.os.tag) {
+        .ios, .macos => true,
+
+        // Technically other BSDs support kqueue but our implementation
+        // below hard requires mach ports currently. That's not a fundamental
+        // requirement but until someone makes this implementation work
+        // on other BSDs we'll just say it isn't available.
+        else => false,
+    };
+}
+
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
     const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);

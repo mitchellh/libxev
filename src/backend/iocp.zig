@@ -1,5 +1,6 @@
 //! Backend to use win32 IOCP.
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const windows = @import("../windows.zig");
 const queue = @import("../queue.zig");
@@ -8,6 +9,14 @@ const xev = @import("../main.zig").IOCP;
 const posix = std.posix;
 
 const log = std.log.scoped(.libxev_iocp);
+
+/// True if this backend is available on this platform.
+pub fn available() bool {
+    return switch (builtin.os.tag) {
+        .windows => true,
+        else => false,
+    };
+}
 
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
