@@ -10,6 +10,7 @@ pub const Options = struct {
     read: ReadMethod,
     write: WriteMethod,
     close: bool,
+    poll: bool,
 
     /// True to schedule the read/write on the threadpool.
     threadpool: bool = false,
@@ -30,8 +31,153 @@ pub const Options = struct {
 pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) type {
     return struct {
         pub usingnamespace if (options.close) Closeable(xev, T, options) else struct {};
+        pub usingnamespace if (options.poll) Pollable(xev, T, options) else struct {};
         pub usingnamespace if (options.read != .none) Readable(xev, T, options) else struct {};
         pub usingnamespace if (options.write != .none) Writeable(xev, T, options) else struct {};
+    };
+}
+
+pub fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) type {
+    // Do not add the methods for poll if the backend doesn't support it.
+    switch (xev.backend) {
+        .io_uring, .epoll, .kqueue => {},
+        .iocp, .wasi_poll => return struct {},
+    }
+
+    return struct {
+        const Self = T;
+
+        pub const PollError = switch (xev.backend) {
+            .io_uring,
+            .epoll,
+            => xev.Sys.PollError,
+
+            .kqueue,
+            => xev.ReadError,
+
+            .iocp,
+            .wasi_poll,
+            => @compileError("poll not supported on this backend"),
+        };
+
+        pub const PollEvent = enum(u32) {
+            read = switch (xev.backend) {
+                .io_uring => std.posix.POLL.IN,
+                .epoll => std.os.linux.EPOLL.IN,
+                .kqueue => 0, // doesn't matter
+                .iocp, .wasi_poll => @compileError("poll not supported on this backend"),
+            },
+
+            fn fromResult(
+                c: *const xev.Completion,
+                result: xev.Result,
+            ) PollError!PollEvent {
+                return switch (xev.backend) {
+                    .io_uring,
+                    .epoll,
+                    => if (result.poll) |_|
+                        @enumFromInt(c.op.poll.events)
+                    else |err|
+                        err,
+
+                    .kqueue => switch (c.op) {
+                        .read, .recv => .read,
+                        else => unreachable,
+                    },
+
+                    .iocp,
+                    .wasi_poll,
+                    => @compileError("poll not supported on this backend"),
+                };
+            }
+        };
+
+        /// Poll the file descriptor for the given event. The high-level
+        /// abstraction only allows a single event to be polled at a time.
+        /// If you want to be more efficient for multiple events then you
+        /// should use the lower level interfaces for the xev backend.
+        pub fn poll(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            event: PollEvent,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                r: PollError!PollEvent,
+            ) xev.CallbackAction,
+        ) void {
+            c.* = .{
+                .op = switch (xev.backend) {
+                    .io_uring => .{ .poll = .{
+                        .fd = self.fd,
+                        .events = switch (event) {
+                            .read => std.posix.POLL.IN,
+                        },
+                    } },
+
+                    .epoll => .{ .poll = .{
+                        .fd = self.fd,
+                        .events = switch (event) {
+                            .read => std.os.linux.EPOLL.IN,
+                        },
+                    } },
+
+                    .kqueue => switch (options.read) {
+                        .none => unreachable,
+
+                        .recv => .{ .read = .{
+                            .fd = self.fd,
+                            .buffer = .{ .slice = &.{} },
+                        } },
+
+                        .read => .{ .read = .{
+                            .fd = self.fd,
+                            .buffer = .{ .slice = &.{} },
+                        } },
+                    },
+
+                    .iocp,
+                    .wasi_poll,
+                    => @compileError("poll not supported on this backend"),
+                },
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        const fd: Self = switch (xev.backend) {
+                            .io_uring,
+                            .epoll,
+                            => T.initFd(c_inner.op.poll.fd),
+
+                            .kqueue => T.initFd(c_inner.op.read.fd),
+
+                            .iocp,
+                            .wasi_poll,
+                            => @compileError("poll not supported on this backend"),
+                        };
+
+                        return @call(.always_inline, cb, .{
+                            common.userdataValue(Userdata, ud),
+                            l_inner,
+                            c_inner,
+                            fd,
+                            PollEvent.fromResult(c_inner, r),
+                        });
+                    }
+                }).callback,
+            };
+
+            loop.add(c);
+        }
     };
 }
 
@@ -194,7 +340,14 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                                 c.flags.dup = true;
                         },
 
-                        .kqueue => {
+                        .kqueue => kqueue: {
+                            // If we're not reading any actual data, we don't
+                            // need a threadpool since only read() is blocking.
+                            switch (buf) {
+                                .array => {},
+                                .slice => |v| if (v.len == 0) break :kqueue {},
+                            }
+
                             if (options.threadpool) c.flags.threadpool = true;
                         },
                     }
@@ -274,7 +427,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             // Initialize our completion
             req.* = .{ .full_write_buffer = buf };
             // Must be kept in sync with partial write logic inside the callback
-            self.write_init(&req.completion, buf);
+            self.writeInit(&req.completion, buf);
             req.completion.userdata = q;
             req.completion.callback = (struct {
                 fn callback(
@@ -305,7 +458,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         if (written_len < queued_len) {
                             // Write remainder of the buffer, reusing the same completion
                             const rem_buf = writeBufferRemainder(cb_res.buf, written_len);
-                            cb_res.writer.write_init(&req_inner.completion, rem_buf);
+                            cb_res.writer.writeInit(&req_inner.completion, rem_buf);
                             req_inner.completion.userdata = q_inner;
                             req_inner.completion.callback = callback;
                             l_inner.add(&req_inner.completion);
@@ -380,7 +533,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 r: WriteError!usize,
             ) xev.CallbackAction,
         ) void {
-            self.write_init(c, buf);
+            self.writeInit(c, buf);
             c.userdata = userdata;
             c.callback = (struct {
                 fn callback(
@@ -429,7 +582,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
 
         /// Initialize the completion c for a write. This does NOT set
         /// userdata or a callback.
-        fn write_init(
+        fn writeInit(
             self: Self,
             c: *xev.Completion,
             buf: xev.WriteBuffer,
@@ -513,7 +666,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
     };
 }
 
-/// Creates a generic stream type that supports read, write, close. This
+/// Creates a generic stream type that supports read, write, close, poll. This
 /// can be used for any file descriptor that would exhibit normal blocking
 /// behavior on read/write. This should NOT be used for local files because
 /// local files have some special properties; you should use xev.File for that.
@@ -526,6 +679,7 @@ pub fn GenericStream(comptime xev: type) type {
 
         pub usingnamespace Stream(xev, Self, .{
             .close = true,
+            .poll = true,
             .read = .read,
             .write = .write,
         });

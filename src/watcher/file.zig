@@ -34,6 +34,7 @@ pub fn File(comptime xev: type) type {
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
+            .poll = true,
             .read = .read,
             .write = .write,
             .threadpool = true,
@@ -118,7 +119,14 @@ pub fn File(comptime xev: type) type {
                             c.flags.threadpool = true;
                         },
 
-                        .kqueue => {
+                        .kqueue => kqueue: {
+                            // If we're not reading any actual data, we don't
+                            // need a threadpool since only read() is blocking.
+                            switch (buf) {
+                                .array => {},
+                                .slice => |v| if (v.len == 0) break :kqueue {},
+                            }
+
                             c.flags.threadpool = true;
                         },
                     }
@@ -288,6 +296,84 @@ pub fn File(comptime xev: type) type {
                     }
                 },
             }
+        }
+
+        test "kqueue: zero-length read for readiness" {
+            if (xev.backend != .kqueue) return error.SkipZigTest;
+
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            // Create our pipe and write to it so its ready to be read
+            const pipe = try posix.pipe2(.{ .CLOEXEC = true });
+            defer posix.close(pipe[1]);
+            _ = try posix.write(pipe[1], "x");
+
+            // Create our file
+            const file = initFd(pipe[0]);
+
+            var c: xev.Completion = undefined;
+
+            // Read
+            var ready: bool = false;
+            file.read(&loop, &c, .{ .slice = &.{} }, bool, &ready, (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Self,
+                    _: xev.ReadBuffer,
+                    r: Self.ReadError!usize,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback);
+
+            try loop.run(.until_done);
+            try testing.expect(ready);
+        }
+
+        test "poll" {
+            if (xev.backend == .wasi_poll) return error.SkipZigTest;
+            if (xev.backend == .iocp) return error.SkipZigTest;
+
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            // Create our pipe and write to it so its ready to be read
+            const pipe = try posix.pipe2(.{ .CLOEXEC = true });
+            defer posix.close(pipe[1]);
+            _ = try posix.write(pipe[1], "x");
+
+            // Create our file
+            const file = initFd(pipe[0]);
+
+            var c: xev.Completion = undefined;
+
+            // Poll read
+            var ready: bool = false;
+            file.poll(&loop, &c, .read, bool, &ready, (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Self,
+                    r: Self.PollError!Self.PollEvent,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback);
+
+            try loop.run(.until_done);
+            try testing.expect(ready);
         }
 
         test "read/write" {
