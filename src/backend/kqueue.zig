@@ -1159,8 +1159,12 @@ pub const Completion = struct {
             },
 
             .read => |*op| res: {
-                const n_ = switch (op.buffer) {
-                    .slice => |v| posix.read(op.fd, v),
+                const n_: ReadError!usize = switch (op.buffer) {
+                    .slice => |v| if (v.len == 0) empty: {
+                        const ev = ev_ orelse
+                            break :res .{ .read = error.MissingKevent };
+                        break :empty @intCast(ev.data);
+                    } else posix.read(op.fd, v),
                     .array => |*v| posix.read(op.fd, v),
                 };
 
@@ -1173,8 +1177,12 @@ pub const Completion = struct {
             },
 
             .pread => |*op| res: {
-                const n_ = switch (op.buffer) {
-                    .slice => |v| posix.pread(op.fd, v, op.offset),
+                const n_: ReadError!usize = switch (op.buffer) {
+                    .slice => |v| if (v.len == 0) empty: {
+                        const ev = ev_ orelse
+                            break :res .{ .read = error.MissingKevent };
+                        break :empty @intCast(ev.data);
+                    } else posix.pread(op.fd, v, op.offset),
                     .array => |*v| posix.pread(op.fd, v, op.offset),
                 };
 
@@ -1187,8 +1195,12 @@ pub const Completion = struct {
             },
 
             .recv => |*op| res: {
-                const n_ = switch (op.buffer) {
-                    .slice => |v| posix.recv(op.fd, v, 0),
+                const n_: ReadError!usize = switch (op.buffer) {
+                    .slice => |v| if (v.len == 0) empty: {
+                        const ev = ev_ orelse
+                            break :res .{ .read = error.MissingKevent };
+                        break :empty @intCast(ev.data);
+                    } else posix.recv(op.fd, v, 0),
                     .array => |*v| posix.recv(op.fd, v, 0),
                 };
 
@@ -1201,8 +1213,12 @@ pub const Completion = struct {
             },
 
             .recvfrom => |*op| res: {
-                const n_ = switch (op.buffer) {
-                    .slice => |v| posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
+                const n_: ReadError!usize = switch (op.buffer) {
+                    .slice => |v| if (v.len == 0) empty: {
+                        const ev = ev_ orelse
+                            break :res .{ .read = error.MissingKevent };
+                        break :empty @intCast(ev.data);
+                    } else posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
                     .array => |*v| posix.recvfrom(op.fd, v, 0, &op.addr, &op.addr_size),
                 };
 
@@ -1552,6 +1568,7 @@ pub const ReadError = posix.KEventError ||
     error{
     EOF,
     Canceled,
+    MissingKevent,
     PermissionDenied,
     Unexpected,
 };
@@ -1609,6 +1626,11 @@ pub const TimerTrigger = enum {
 /// ReadBuffer are the various options for reading.
 pub const ReadBuffer = union(enum) {
     /// Read into this slice.
+    ///
+    /// For zero-length slices, the event will notify of read readiness
+    /// (similar to poll) rather than performing an explicit zero-length
+    /// read which will always succeed regardless of if the fd is ready
+    /// or not.
     slice: []u8,
 
     /// Read into this array, just set this to undefined and it will

@@ -45,6 +45,7 @@ fn UDPSendto(comptime xev: type) type {
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
+            .poll = true,
             .read = .none,
             .write = .none,
         });
@@ -226,6 +227,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
+            .poll = false,
             .read = .none,
             .write = .none,
         });
@@ -424,6 +426,7 @@ fn UDPSendMsg(comptime xev: type) type {
 
         pub usingnamespace stream.Stream(xev, Self, .{
             .close = true,
+            .poll = true,
             .read = .none,
             .write = .none,
         });
