@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const AllBackend = @import("main.zig").Backend;
-const loop = @import("loop.zig");
+const looppkg = @import("loop.zig");
+const AsyncTests = @import("watcher/async.zig").AsyncTests;
 
 /// Creates the Xev API based on a set of backend types that allows
 /// for dynamic choice between the various candidate backends (assuming
@@ -43,11 +44,20 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const Backend = EnumSubset(AllBackend, bes);
 
         /// The shared structures
-        pub const Options = loop.Options;
-        pub const RunMode = loop.RunMode;
-        pub const CallbackAction = loop.CallbackAction;
-        pub const CompletionState = loop.CompletionState;
+        pub const Options = looppkg.Options;
+        pub const RunMode = looppkg.RunMode;
+        pub const CallbackAction = looppkg.CallbackAction;
+        pub const CompletionState = looppkg.CompletionState;
         pub const Completion = Union(bes, "Completion");
+
+        /// Error types
+        pub const AcceptError = ErrorSet(bes, &.{"AcceptError"});
+        pub const CancelError = ErrorSet(bes, &.{"CancelError"});
+        pub const CloseError = ErrorSet(bes, &.{"CloseError"});
+        pub const ConnectError = ErrorSet(bes, &.{"ConnectError"});
+        pub const ShutdownError = ErrorSet(bes, &.{"ShutdownError"});
+        pub const WriteError = ErrorSet(bes, &.{"WriteError"});
+        pub const ReadError = ErrorSet(bes, &.{"ReadError"});
 
         /// The backend that is in use.
         var backend: Backend = subset(bes[bes.len - 1]);
@@ -111,6 +121,100 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             }
         };
 
+        const AsyncUnion = Union(bes, "Async");
+        pub const Async = struct {
+            backend: AsyncUnion,
+
+            pub const WaitError = ErrorSet(
+                bes,
+                &.{ "Async", "WaitError" },
+            );
+
+            pub fn init() !Async {
+                return .{ .backend = switch (backend) {
+                    inline else => |tag| backend: {
+                        const api = (comptime superset(tag)).Api();
+                        break :backend @unionInit(
+                            AsyncUnion,
+                            @tagName(tag),
+                            try api.Async.init(),
+                        );
+                    },
+                } };
+            }
+
+            pub fn deinit(self: *Async) void {
+                switch (backend) {
+                    inline else => |tag| @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).deinit(),
+                }
+            }
+
+            pub fn notify(self: *Async) !void {
+                switch (backend) {
+                    inline else => |tag| try @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).notify(),
+                }
+            }
+
+            pub fn wait(
+                self: Async,
+                loop: *Loop,
+                c: *Completion,
+                comptime Userdata: type,
+                userdata: ?*Userdata,
+                comptime cb: *const fn (
+                    ud: ?*Userdata,
+                    l: *Loop,
+                    c: *Completion,
+                    r: WaitError!void,
+                ) CallbackAction,
+            ) void {
+                switch (backend) {
+                    inline else => |tag| {
+                        const api = (comptime superset(tag)).Api();
+                        const api_cb = (struct {
+                            fn callback(
+                                ud_inner: ?*Userdata,
+                                l_inner: *api.Loop,
+                                c_inner: *api.Completion,
+                                r_inner: api.Async.WaitError!void,
+                            ) CallbackAction {
+                                return cb(
+                                    ud_inner,
+                                    @fieldParentPtr("backend", @as(
+                                        *LoopUnion,
+                                        @fieldParentPtr(@tagName(tag), l_inner),
+                                    )),
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                    r_inner,
+                                );
+                            }
+                        }).callback;
+
+                        @field(
+                            self.backend,
+                            @tagName(tag),
+                        ).wait(
+                            &@field(loop.backend, @tagName(tag)),
+                            &@field(c, @tagName(tag)),
+                            Userdata,
+                            userdata,
+                            api_cb,
+                        );
+                    },
+                }
+            }
+
+            test {
+                _ = AsyncTests(Dynamic, Async);
+            }
+        };
+
         /// Helpers to convert between the subset/superset of backends.
         fn subset(comptime be: AllBackend) Backend {
             return @enumFromInt(@intFromEnum(be));
@@ -118,6 +222,10 @@ pub fn Xev(comptime bes: []const AllBackend) type {
 
         fn superset(comptime be: Backend) AllBackend {
             return @enumFromInt(@intFromEnum(be));
+        }
+
+        test {
+            _ = Async;
         }
 
         test "detect" {
@@ -193,4 +301,24 @@ fn Union(
             .decls = &.{},
         },
     });
+}
+
+/// Create a new error set from a list of error sets within
+/// the given backends at the given field name. For example,
+/// to merge all xev.Async.WaitErrors:
+///
+///   ErrorSet(bes, &.{"Async", "WaitError"});
+///
+fn ErrorSet(
+    comptime bes: []const AllBackend,
+    comptime field: []const []const u8,
+) type {
+    var Set: type = error{};
+    for (bes) |be| {
+        var NextSet: type = be.Api();
+        for (field) |f| NextSet = @field(NextSet, f);
+        Set = Set || NextSet;
+    }
+
+    return Set;
 }

@@ -518,7 +518,7 @@ fn AsyncIOCP(comptime xev: type) type {
     };
 }
 
-fn AsyncTests(comptime xev: type, comptime Impl: type) type {
+pub fn AsyncTests(comptime xev: type, comptime Impl: type) type {
     return struct {
         test "async" {
             const testing = std.testing;
