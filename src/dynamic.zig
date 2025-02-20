@@ -56,6 +56,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const CallbackAction = looppkg.CallbackAction;
         pub const CompletionState = looppkg.CompletionState;
         pub const Completion = DynamicCompletion(Dynamic);
+        pub const PollEvent = DynamicPollEvent(Dynamic);
         pub const ReadBuffer = DynamicReadBuffer(Dynamic);
         pub const WriteBuffer = DynamicWriteBuffer(Dynamic);
         pub const WriteQueue = DynamicWriteQueue(Dynamic);
@@ -66,12 +67,14 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const CancelError = Dynamic.ErrorSet(&.{"CancelError"});
         pub const CloseError = Dynamic.ErrorSet(&.{"CloseError"});
         pub const ConnectError = Dynamic.ErrorSet(&.{"ConnectError"});
+        pub const PollError = Dynamic.ErrorSet(&.{"PollError"});
         pub const ShutdownError = Dynamic.ErrorSet(&.{"ShutdownError"});
         pub const WriteError = Dynamic.ErrorSet(&.{"WriteError"});
         pub const ReadError = Dynamic.ErrorSet(&.{"ReadError"});
 
         /// Core types
         pub const Async = @import("watcher/async.zig").Async(Dynamic);
+        pub const File = @import("watcher/file.zig").File(Dynamic);
         pub const Process = @import("watcher/process.zig").Process(Dynamic);
         pub const Stream = @import("watcher/stream.zig").GenericStream(Dynamic);
         pub const Timer = @import("watcher/timer.zig").Timer(Dynamic);
@@ -162,6 +165,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
 
         test {
             _ = Async;
+            _ = File;
             _ = Process;
             _ = Stream;
             _ = Timer;
@@ -338,6 +342,38 @@ fn DynamicWriteQueue(comptime xev: type) type {
                 @tagName(tag),
                 .{},
             );
+        }
+    };
+}
+
+fn DynamicPollEvent(comptime xev: type) type {
+    return enum {
+        const Self = @This();
+
+        read,
+
+        pub fn fromBackend(
+            comptime tag: xev.Backend,
+            event: xev.superset(tag).Api().PollEvent,
+        ) Self {
+            return switch (event) {
+                inline else => |event_tag| @field(
+                    Self,
+                    @tagName(event_tag),
+                ),
+            };
+        }
+
+        pub fn toBackend(
+            self: Self,
+            comptime tag: xev.Backend,
+        ) xev.superset(tag).Api().PollEvent {
+            return switch (self) {
+                inline else => |event_tag| @field(
+                    (comptime xev.superset(tag)).Api().PollEvent,
+                    @tagName(event_tag),
+                ),
+            };
         }
     };
 }

@@ -15,6 +15,10 @@ pub const Options = struct {
     /// True to schedule the read/write on the threadpool.
     threadpool: bool = false,
 
+    /// Set to non-null for dynamic APIs so we can know what our
+    /// parent type name is.
+    type: ?[]const u8 = null,
+
     pub const ReadMethod = enum { none, read, recv };
     pub const WriteMethod = enum { none, write, send };
 };
@@ -50,39 +54,8 @@ pub fn Shared(comptime xev: type) type {
                 return @fieldParentPtr("completion", c);
             }
         };
-    };
-}
 
-/// Creates a stream type that is meant to be embedded within other
-/// types using "usingnamespace". A stream is something that supports read,
-/// write, close, etc. The exact operations supported are defined by the
-/// "options" struct.
-///
-/// T requirements:
-///   - field named "fd" of type fd_t or socket_t
-///   - decl named "initFd" to initialize a new T from a fd
-///
-pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) type {
-    return struct {
-        pub usingnamespace if (options.close) Closeable(xev, T, options) else struct {};
-        pub usingnamespace if (options.poll) Pollable(xev, T, options) else struct {};
-        pub usingnamespace if (options.read != .none) Readable(xev, T, options) else struct {};
-        pub usingnamespace if (options.write != .none) Writeable(xev, T, options) else struct {};
-    };
-}
-
-fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    if (xev.dynamic) return struct {};
-
-    // Do not add the methods for poll if the backend doesn't support it.
-    switch (xev.backend) {
-        .io_uring, .epoll, .kqueue => {},
-        .iocp, .wasi_poll => return struct {},
-    }
-
-    return struct {
-        const Self = T;
-
+        /// Errors that can be returned from polling.
         pub const PollError = switch (xev.backend) {
             .io_uring,
             .epoll,
@@ -96,6 +69,7 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
             => @compileError("poll not supported on this backend"),
         };
 
+        /// Events that can be polled for using the high level streams.
         pub const PollEvent = enum(u32) {
             read = switch (xev.backend) {
                 .io_uring => std.posix.POLL.IN,
@@ -127,6 +101,103 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                 };
             }
         };
+    };
+}
+
+/// Creates a stream type that is meant to be embedded within other
+/// types using "usingnamespace". A stream is something that supports read,
+/// write, close, etc. The exact operations supported are defined by the
+/// "options" struct.
+///
+/// T requirements:
+///   - field named "fd" of type fd_t or socket_t
+///   - decl named "initFd" to initialize a new T from a fd
+///
+pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) type {
+    return struct {
+        pub usingnamespace if (options.close) Closeable(xev, T, options) else struct {};
+        pub usingnamespace if (options.poll) Pollable(xev, T, options) else struct {};
+        pub usingnamespace if (options.read != .none) Readable(xev, T, options) else struct {};
+        pub usingnamespace if (options.write != .none) Writeable(xev, T, options) else struct {};
+    };
+}
+
+fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) type {
+    if (xev.dynamic) return struct {
+        const Self = T;
+
+        pub fn poll(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            event: xev.PollEvent,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                r: xev.PollError!xev.PollEvent,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const BackendSelf = @field(api, options.type.?);
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: BackendSelf,
+                            r_inner: api.PollError!api.PollEvent,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                if (r_inner) |v|
+                                    xev.PollEvent.fromBackend(tag, v)
+                                else |err|
+                                    err,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).poll(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        event.toBackend(tag),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+    };
+
+    // Do not add the methods for poll if the backend doesn't support it.
+    switch (xev.backend) {
+        .io_uring, .epoll, .kqueue => {},
+        .iocp, .wasi_poll => return struct {},
+    }
+
+    return struct {
+        const Self = T;
 
         /// Poll the file descriptor for the given event. The high-level
         /// abstraction only allows a single event to be polled at a time.
@@ -136,7 +207,7 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
             self: Self,
             loop: *xev.Loop,
             c: *xev.Completion,
-            event: PollEvent,
+            event: xev.PollEvent,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
@@ -144,7 +215,7 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: Self,
-                r: PollError!PollEvent,
+                r: xev.PollError!xev.PollEvent,
             ) xev.CallbackAction,
         ) void {
             c.* = .{
@@ -206,7 +277,7 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                             l_inner,
                             c_inner,
                             fd,
-                            PollEvent.fromResult(c_inner, r),
+                            xev.PollEvent.fromResult(c_inner, r),
                         });
                     }
                 }).callback,
@@ -289,8 +360,6 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
     if (xev.dynamic) return struct {
         const Self = T;
 
-        pub const ReadError = xev.ErrorSet(&.{"ReadError"});
-
         pub fn read(
             self: Self,
             loop: *xev.Loop,
@@ -304,7 +373,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                 c: *xev.Completion,
                 s: Self,
                 b: xev.ReadBuffer,
-                r: ReadError!usize,
+                r: xev.ReadError!usize,
             ) xev.CallbackAction,
         ) void {
             switch (xev.backend) {
@@ -312,14 +381,15 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                     c.ensureTag(tag);
 
                     const api = (comptime xev.superset(tag)).Api();
+                    const BackendSelf = @field(api, options.type.?);
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
-                            s_inner: api.Stream,
+                            s_inner: BackendSelf,
                             b_inner: api.ReadBuffer,
-                            r_inner: api.Stream.ReadError!usize,
+                            r_inner: xev.ReadError!usize,
                         ) xev.CallbackAction {
                             return cb(
                                 ud_inner,
@@ -357,8 +427,6 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
     return struct {
         const Self = T;
 
-        pub const ReadError = xev.ReadError;
-
         /// Read from the socket. This performs a single read. The callback must
         /// requeue the read if additional reads want to be performed. Additional
         /// reads simultaneously can be queued by calling this multiple times. Note
@@ -376,7 +444,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                 c: *xev.Completion,
                 s: Self,
                 b: xev.ReadBuffer,
-                r: ReadError!usize,
+                r: xev.ReadError!usize,
             ) xev.CallbackAction,
         ) void {
             switch (buf) {
@@ -490,12 +558,13 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     c.ensureTag(tag);
 
                     const api = (comptime xev.superset(tag)).Api();
+                    const BackendSelf = @field(api, options.type.?);
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
-                            s_inner: api.Stream,
+                            s_inner: BackendSelf,
                             b_inner: api.WriteBuffer,
                             r_inner: api.WriteError!usize,
                         ) xev.CallbackAction {
@@ -553,12 +622,13 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     q.ensureTag(tag);
 
                     const api = (comptime xev.superset(tag)).Api();
+                    const BackendSelf = @field(api, options.type.?);
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
-                            s_inner: api.Stream,
+                            s_inner: BackendSelf,
                             b_inner: api.WriteBuffer,
                             r_inner: api.WriteError!usize,
                         ) xev.CallbackAction {
@@ -889,6 +959,7 @@ pub fn GenericStream(comptime xev: type) type {
             .poll = true,
             .read = .read,
             .write = .write,
+            .type = "Stream",
         });
 
         pub fn initFd(fd: std.posix.pid_t) Self {
@@ -981,7 +1052,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -1044,7 +1115,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -1108,7 +1179,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;

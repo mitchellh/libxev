@@ -344,7 +344,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Completion,
                     _: Self,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -571,7 +571,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Completion,
                     _: Self,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     var receiver = receiver_opt.?;
                     const n_bytes = r catch unreachable;

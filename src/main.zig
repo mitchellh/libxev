@@ -136,6 +136,8 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
 
         /// Shared stream types
         const SharedStream = stream.Shared(Self);
+        pub const PollError = SharedStream.PollError;
+        pub const PollEvent = SharedStream.PollEvent;
         pub const WriteQueue = SharedStream.WriteQueue;
         pub const WriteRequest = SharedStream.WriteRequest;
 

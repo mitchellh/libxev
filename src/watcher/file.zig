@@ -25,6 +25,12 @@ const stream = @import("stream.zig");
 /// if you have specific needs or want to push for the most optimal performance,
 /// use the platform-specific Loop directly.
 pub fn File(comptime xev: type) type {
+    if (xev.dynamic) return FileDynamic(xev);
+    return FileStream(xev);
+}
+
+/// An implementation of File that uses the stream abstractions.
+fn FileStream(comptime xev: type) type {
     return struct {
         const Self = @This();
         const FdType = if (xev.backend == .iocp) std.os.windows.HANDLE else posix.socket_t;
@@ -75,7 +81,7 @@ pub fn File(comptime xev: type) type {
                 c: *xev.Completion,
                 s: Self,
                 b: xev.ReadBuffer,
-                r: Self.ReadError!usize,
+                r: xev.ReadError!usize,
             ) xev.CallbackAction,
         ) void {
             switch (buf) {
@@ -156,7 +162,7 @@ pub fn File(comptime xev: type) type {
         ) void {
             // Initialize our completion
             req.* = .{};
-            self.pwrite_init(&req.completion, buf, offset);
+            self.pwriteInit(&req.completion, buf, offset);
             req.completion.userdata = q;
             req.completion.callback = (struct {
                 fn callback(
@@ -225,7 +231,7 @@ pub fn File(comptime xev: type) type {
                 r: xev.WriteError!usize,
             ) xev.CallbackAction,
         ) void {
-            self.pwrite_init(c, buf, offset);
+            self.pwriteInit(c, buf, offset);
             c.userdata = userdata;
             c.callback = (struct {
                 fn callback(
@@ -261,7 +267,7 @@ pub fn File(comptime xev: type) type {
             };
         }
 
-        fn pwrite_init(
+        fn pwriteInit(
             self: Self,
             c: *xev.Completion,
             buf: xev.WriteBuffer,
@@ -304,13 +310,194 @@ pub fn File(comptime xev: type) type {
     };
 }
 
-pub fn FileTests(
+fn FileDynamic(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = xev.Union(&.{"File"});
+
+        pub usingnamespace stream.Stream(xev, Self, .{
+            .close = true,
+            .poll = true,
+            .read = .read,
+            .write = .write,
+            .threadpool = true,
+            .type = "File",
+        });
+
+        pub fn init(file: std.fs.File) !Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.File.init(file),
+                    );
+                },
+            } };
+        }
+
+        pub fn initFd(fd: std.posix.pid_t) Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        api.File.initFd(fd),
+                    );
+                },
+            } };
+        }
+
+        pub fn pwrite(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            buf: xev.WriteBuffer,
+            offset: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                b: xev.WriteBuffer,
+                r: xev.WriteError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.File,
+                            b_inner: api.WriteBuffer,
+                            r_inner: api.WriteError!usize,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                xev.WriteBuffer.fromBackend(tag, b_inner),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).pwrite(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        buf.toBackend(tag),
+                        offset,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn pread(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            buf: xev.ReadBuffer,
+            offset: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                b: xev.ReadBuffer,
+                r: xev.ReadError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.File,
+                            b_inner: api.ReadBuffer,
+                            r_inner: api.ReadError!usize,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                xev.ReadBuffer.fromBackend(tag, b_inner),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).pread(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        buf.toBackend(tag),
+                        offset,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = FileTests(xev, Self);
+        }
+    };
+}
+
+fn FileTests(
     comptime xev: type,
     comptime Impl: type,
 ) type {
     return struct {
         test "kqueue: zero-length read for readiness" {
-            if (xev.backend != .kqueue) return error.SkipZigTest;
+            if (!std.mem.eql(
+                u8,
+                @tagName(xev.backend),
+                "kqueue",
+            )) return error.SkipZigTest;
 
             const testing = std.testing;
 
@@ -336,7 +523,7 @@ pub fn FileTests(
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -349,8 +536,16 @@ pub fn FileTests(
         }
 
         test "poll" {
-            if (xev.backend == .wasi_poll) return error.SkipZigTest;
-            if (xev.backend == .iocp) return error.SkipZigTest;
+            if (std.mem.eql(
+                u8,
+                @tagName(xev.backend),
+                "wasi_poll",
+            )) return error.SkipZigTest;
+            if (std.mem.eql(
+                u8,
+                @tagName(xev.backend),
+                "iocp",
+            )) return error.SkipZigTest;
 
             const testing = std.testing;
 
@@ -375,7 +570,7 @@ pub fn FileTests(
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: Impl,
-                    r: Impl.PollError!Impl.PollEvent,
+                    r: xev.PollError!xev.PollEvent,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -449,7 +644,7 @@ pub fn FileTests(
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -522,7 +717,7 @@ pub fn FileTests(
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -625,7 +820,7 @@ pub fn FileTests(
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.ReadBuffer,
-                    r: Impl.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
