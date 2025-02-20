@@ -1,3 +1,4 @@
+const dynamicpkg = @This();
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
@@ -39,6 +40,10 @@ pub fn Xev(comptime bes: []const AllBackend) type {
     return struct {
         const Dynamic = @This();
 
+        /// This is a flag that can be used to detect that you're using
+        /// a dynamic API and not the static API via `hasDecl`.
+        pub const dynamic = true;
+
         pub const candidates = bes;
 
         /// Backend becomes the subset of the full xev.Backend that
@@ -51,23 +56,25 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const CallbackAction = looppkg.CallbackAction;
         pub const CompletionState = looppkg.CompletionState;
         pub const Completion = DynamicCompletion(Dynamic);
+        pub const ReadBuffer = DynamicReadBuffer(Dynamic);
 
         /// Error types
-        pub const AcceptError = ErrorSet(bes, &.{"AcceptError"});
-        pub const CancelError = ErrorSet(bes, &.{"CancelError"});
-        pub const CloseError = ErrorSet(bes, &.{"CloseError"});
-        pub const ConnectError = ErrorSet(bes, &.{"ConnectError"});
-        pub const ShutdownError = ErrorSet(bes, &.{"ShutdownError"});
-        pub const WriteError = ErrorSet(bes, &.{"WriteError"});
-        pub const ReadError = ErrorSet(bes, &.{"ReadError"});
+        pub const AcceptError = Dynamic.ErrorSet(&.{"AcceptError"});
+        pub const CancelError = Dynamic.ErrorSet(&.{"CancelError"});
+        pub const CloseError = Dynamic.ErrorSet(&.{"CloseError"});
+        pub const ConnectError = Dynamic.ErrorSet(&.{"ConnectError"});
+        pub const ShutdownError = Dynamic.ErrorSet(&.{"ShutdownError"});
+        pub const WriteError = Dynamic.ErrorSet(&.{"WriteError"});
+        pub const ReadError = Dynamic.ErrorSet(&.{"ReadError"});
 
         /// Core types
-        pub const Async = DynamicAsync(Dynamic);
-        pub const Process = DynamicProcess(Dynamic);
-        pub const Timer = DynamicTimer(Dynamic);
+        pub const Async = @import("watcher/async.zig").Async(Dynamic);
+        pub const Process = @import("watcher/process.zig").Process(Dynamic);
+        pub const Stream = DynamicStream(Dynamic);
+        pub const Timer = @import("watcher/timer.zig").Timer(Dynamic);
 
         /// The backend that is in use.
-        var backend: Backend = subset(bes[bes.len - 1]);
+        pub var backend: Backend = subset(bes[bes.len - 1]);
 
         /// Detect the preferred backend based on the system and set it
         /// for use. "Preferred" is the first available (API exists) candidate
@@ -83,16 +90,17 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             return error.NoAvailableBackends;
         }
 
-        const LoopUnion = Union(bes, "Loop", false);
         pub const Loop = struct {
-            backend: LoopUnion,
+            backend: Loop.Union,
+
+            pub const Union = Dynamic.Union("Loop");
 
             pub fn init(opts: Options) !Loop {
                 return .{ .backend = switch (backend) {
                     inline else => |tag| backend: {
                         const api = (comptime superset(tag)).Api();
                         break :backend @unionInit(
-                            LoopUnion,
+                            Loop.Union,
                             @tagName(tag),
                             try api.Loop.init(opts),
                         );
@@ -129,17 +137,26 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         };
 
         /// Helpers to convert between the subset/superset of backends.
-        fn subset(comptime be: AllBackend) Backend {
+        pub fn subset(comptime be: AllBackend) Backend {
             return @enumFromInt(@intFromEnum(be));
         }
 
-        fn superset(comptime be: Backend) AllBackend {
+        pub fn superset(comptime be: Backend) AllBackend {
             return @enumFromInt(@intFromEnum(be));
+        }
+
+        pub fn Union(comptime field: []const u8) type {
+            return dynamicpkg.Union(bes, field, false);
+        }
+
+        pub fn ErrorSet(comptime field: []const []const u8) type {
+            return dynamicpkg.ErrorSet(bes, field);
         }
 
         test {
             _ = Async;
             _ = Process;
+            _ = Stream;
             _ = Timer;
         }
 
@@ -173,14 +190,14 @@ fn DynamicCompletion(comptime dynamic: type) type {
         // the completion but is necessary to ensure that we have
         // zero-initialized the correct type for where it matters
         // (timers).
-        const CompletionUnion = Union(
+        pub const Union = dynamicpkg.Union(
             dynamic.candidates,
             "Completion",
             true,
         );
 
-        value: CompletionUnion = @unionInit(
-            CompletionUnion,
+        value: Self.Union = @unionInit(
+            Self.Union,
             @tagName(dynamic.candidates[dynamic.candidates.len - 1]),
             .{},
         ),
@@ -190,7 +207,7 @@ fn DynamicCompletion(comptime dynamic: type) type {
                 inline else => |tag| value: {
                     const api = (comptime dynamic.superset(tag)).Api();
                     break :value @unionInit(
-                        CompletionUnion,
+                        Self.Union,
                         @tagName(tag),
                         api.Completion.init(),
                     );
@@ -211,10 +228,10 @@ fn DynamicCompletion(comptime dynamic: type) type {
         /// This lets users zero-intialize the completion and then
         /// call any watcher API on it without having to worry about
         /// the correct detected backend tag being set.
-        fn ensureTag(self: *Self, comptime tag: dynamic.Backend) void {
+        pub fn ensureTag(self: *Self, comptime tag: dynamic.Backend) void {
             if (self.value == tag) return;
             self.value = @unionInit(
-                CompletionUnion,
+                Self.Union,
                 @tagName(tag),
                 .{},
             );
@@ -222,27 +239,68 @@ fn DynamicCompletion(comptime dynamic: type) type {
     };
 }
 
-fn DynamicAsync(comptime dynamic: type) type {
+fn DynamicReadBuffer(comptime dynamic: type) type {
+    _ = dynamic;
+
+    // Our read buffer supports a least common denominator of
+    // read targets available by all backends. The direct backend
+    // may support more read targets but if you need that you should
+    // use the backend directly and not through the dynamic API.
+    return union(enum) {
+        const Self = @This();
+
+        slice: []u8,
+        array: [32]u8,
+
+        /// Convert a backend-specific read buffer to this.
+        pub fn fromBackend(
+            comptime be: AllBackend,
+            buf: be.Api().ReadBuffer,
+        ) Self {
+            return switch (buf) {
+                inline else => |data, tag| @unionInit(
+                    Self,
+                    @tagName(tag),
+                    data,
+                ),
+            };
+        }
+
+        /// Convert this read buffer to the backend-specific
+        /// buffer.
+        pub fn toBackend(
+            self: Self,
+            comptime be: AllBackend,
+        ) !be.Api().ReadBuffer {
+            return switch (self) {
+                inline else => |data, tag| @unionInit(
+                    be.Api().ReadBuffer,
+                    @tagName(tag),
+                    data,
+                ),
+            };
+        }
+    };
+}
+
+fn DynamicStream(comptime dynamic: type) type {
     return struct {
         const Self = @This();
 
-        backend: AsyncUnion,
+        backend: StreamUnion,
 
-        const AsyncUnion = Union(dynamic.candidates, "Async", false);
+        const StreamUnion = Union(dynamic.candidates, "Stream", false);
 
-        pub const WaitError = ErrorSet(
-            dynamic.candidates,
-            &.{ "Async", "WaitError" },
-        );
+        pub const ReadError = ErrorSet(dynamic.candidates, &.{ "Stream", "ReadError" });
 
-        pub fn init() !Self {
+        pub fn initFd(fd: posix.pid_t) !Self {
             return .{ .backend = switch (dynamic.backend) {
                 inline else => |tag| backend: {
                     const api = (comptime dynamic.superset(tag)).Api();
                     break :backend @unionInit(
-                        AsyncUnion,
+                        StreamUnion,
                         @tagName(tag),
-                        try api.Async.init(),
+                        try api.Stream.initFd(fd),
                     );
                 },
             } };
@@ -257,26 +315,20 @@ fn DynamicAsync(comptime dynamic: type) type {
             }
         }
 
-        pub fn notify(self: *Self) !void {
-            switch (dynamic.backend) {
-                inline else => |tag| try @field(
-                    self.backend,
-                    @tagName(tag),
-                ).notify(),
-            }
-        }
-
-        pub fn wait(
+        pub fn read(
             self: Self,
             loop: *dynamic.Loop,
             c: *dynamic.Completion,
+            buf: dynamic.ReadBuffer,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
                 ud: ?*Userdata,
                 l: *dynamic.Loop,
                 c: *dynamic.Completion,
-                r: WaitError!void,
+                s: Self,
+                b: dynamic.ReadBuffer,
+                r: ReadError!usize,
             ) dynamic.CallbackAction,
         ) void {
             switch (dynamic.backend) {
@@ -289,18 +341,22 @@ fn DynamicAsync(comptime dynamic: type) type {
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
-                            r_inner: api.Async.WaitError!void,
+                            s_inner: api.Stream,
+                            b_inner: api.ReadBuffer,
+                            r_inner: api.Stream.ReadError!usize,
                         ) dynamic.CallbackAction {
                             return cb(
                                 ud_inner,
                                 @fieldParentPtr("backend", @as(
-                                    *dynamic.LoopUnion,
+                                    *dynamic.Loop.Union,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
                                 @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.CompletionUnion,
+                                    *dynamic.Completion.Union,
                                     @fieldParentPtr(@tagName(tag), c_inner),
                                 )),
+                                Self.initFd(s_inner.fd),
+                                b_inner.fromBackend(tag),
                                 r_inner,
                             );
                         }
@@ -312,333 +368,13 @@ fn DynamicAsync(comptime dynamic: type) type {
                     ).wait(
                         &@field(loop.backend, @tagName(tag)),
                         &@field(c.value, @tagName(tag)),
+                        buf.toBackend(tag),
                         Userdata,
                         userdata,
                         api_cb,
                     );
                 },
             }
-        }
-
-        test {
-            _ = @import("watcher/async.zig").AsyncTests(
-                dynamic,
-                Self,
-            );
-        }
-    };
-}
-
-fn DynamicProcess(comptime dynamic: type) type {
-    return struct {
-        const Self = @This();
-
-        backend: ProcessUnion,
-
-        const ProcessUnion = Union(dynamic.candidates, "Process", false);
-
-        pub const WaitError = ErrorSet(
-            dynamic.candidates,
-            &.{ "Process", "WaitError" },
-        );
-
-        pub fn init(fd: posix.pid_t) !Self {
-            return .{ .backend = switch (dynamic.backend) {
-                inline else => |tag| backend: {
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    break :backend @unionInit(
-                        ProcessUnion,
-                        @tagName(tag),
-                        try api.Process.init(fd),
-                    );
-                },
-            } };
-        }
-
-        pub fn deinit(self: *Self) void {
-            switch (dynamic.backend) {
-                inline else => |tag| @field(
-                    self.backend,
-                    @tagName(tag),
-                ).deinit(),
-            }
-        }
-
-        pub fn wait(
-            self: Self,
-            loop: *dynamic.Loop,
-            c: *dynamic.Completion,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
-                r: WaitError!u32,
-            ) dynamic.CallbackAction,
-        ) void {
-            switch (dynamic.backend) {
-                inline else => |tag| {
-                    c.ensureTag(tag);
-
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    const api_cb = (struct {
-                        fn callback(
-                            ud_inner: ?*Userdata,
-                            l_inner: *api.Loop,
-                            c_inner: *api.Completion,
-                            r_inner: api.Process.WaitError!u32,
-                        ) dynamic.CallbackAction {
-                            return cb(
-                                ud_inner,
-                                @fieldParentPtr("backend", @as(
-                                    *dynamic.LoopUnion,
-                                    @fieldParentPtr(@tagName(tag), l_inner),
-                                )),
-                                @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.CompletionUnion,
-                                    @fieldParentPtr(@tagName(tag), c_inner),
-                                )),
-                                r_inner,
-                            );
-                        }
-                    }).callback;
-
-                    @field(
-                        self.backend,
-                        @tagName(tag),
-                    ).wait(
-                        &@field(loop.backend, @tagName(tag)),
-                        &@field(c.value, @tagName(tag)),
-                        Userdata,
-                        userdata,
-                        api_cb,
-                    );
-                },
-            }
-        }
-
-        test {
-            _ = @import("watcher/process.zig").ProcessTests(
-                dynamic,
-                Self,
-                &.{ "sh", "-c", "exit 0" },
-                &.{ "sh", "-c", "exit 42" },
-            );
-        }
-    };
-}
-
-fn DynamicTimer(comptime dynamic: type) type {
-    return struct {
-        const Self = @This();
-
-        backend: TimerUnion,
-
-        const TimerUnion = Union(dynamic.candidates, "Timer", false);
-
-        pub const RunError = ErrorSet(dynamic.candidates, &.{ "Timer", "RunError" });
-        pub const CancelError = ErrorSet(dynamic.candidates, &.{ "Timer", "CancelError" });
-
-        pub fn init() !Self {
-            return .{ .backend = switch (dynamic.backend) {
-                inline else => |tag| backend: {
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    break :backend @unionInit(
-                        TimerUnion,
-                        @tagName(tag),
-                        try api.Timer.init(),
-                    );
-                },
-            } };
-        }
-
-        pub fn deinit(self: *Self) void {
-            switch (dynamic.backend) {
-                inline else => |tag| @field(
-                    self.backend,
-                    @tagName(tag),
-                ).deinit(),
-            }
-        }
-
-        pub fn run(
-            self: Self,
-            loop: *dynamic.Loop,
-            c: *dynamic.Completion,
-            next_ms: u64,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
-                r: RunError!void,
-            ) dynamic.CallbackAction,
-        ) void {
-            switch (dynamic.backend) {
-                inline else => |tag| {
-                    c.ensureTag(tag);
-
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    const api_cb = (struct {
-                        fn callback(
-                            ud_inner: ?*Userdata,
-                            l_inner: *api.Loop,
-                            c_inner: *api.Completion,
-                            r_inner: api.Timer.RunError!void,
-                        ) dynamic.CallbackAction {
-                            return cb(
-                                ud_inner,
-                                @fieldParentPtr("backend", @as(
-                                    *dynamic.LoopUnion,
-                                    @fieldParentPtr(@tagName(tag), l_inner),
-                                )),
-                                @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.CompletionUnion,
-                                    @fieldParentPtr(@tagName(tag), c_inner),
-                                )),
-                                r_inner,
-                            );
-                        }
-                    }).callback;
-
-                    @field(
-                        self.backend,
-                        @tagName(tag),
-                    ).run(
-                        &@field(loop.backend, @tagName(tag)),
-                        &@field(c.value, @tagName(tag)),
-                        next_ms,
-                        Userdata,
-                        userdata,
-                        api_cb,
-                    );
-                },
-            }
-        }
-
-        pub fn reset(
-            self: Self,
-            loop: *dynamic.Loop,
-            c: *dynamic.Completion,
-            c_cancel: *dynamic.Completion,
-            next_ms: u64,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
-                r: RunError!void,
-            ) dynamic.CallbackAction,
-        ) void {
-            switch (dynamic.backend) {
-                inline else => |tag| {
-                    c.ensureTag(tag);
-                    c_cancel.ensureTag(tag);
-
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    const api_cb = (struct {
-                        fn callback(
-                            ud_inner: ?*Userdata,
-                            l_inner: *api.Loop,
-                            c_inner: *api.Completion,
-                            r_inner: api.Timer.RunError!void,
-                        ) dynamic.CallbackAction {
-                            return cb(
-                                ud_inner,
-                                @fieldParentPtr("backend", @as(
-                                    *dynamic.LoopUnion,
-                                    @fieldParentPtr(@tagName(tag), l_inner),
-                                )),
-                                @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.CompletionUnion,
-                                    @fieldParentPtr(@tagName(tag), c_inner),
-                                )),
-                                r_inner,
-                            );
-                        }
-                    }).callback;
-
-                    @field(
-                        self.backend,
-                        @tagName(tag),
-                    ).reset(
-                        &@field(loop.backend, @tagName(tag)),
-                        &@field(c.value, @tagName(tag)),
-                        &@field(c_cancel.value, @tagName(tag)),
-                        next_ms,
-                        Userdata,
-                        userdata,
-                        api_cb,
-                    );
-                },
-            }
-        }
-
-        pub fn cancel(
-            self: Self,
-            loop: *dynamic.Loop,
-            c_timer: *dynamic.Completion,
-            c_cancel: *dynamic.Completion,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
-                r: CancelError!void,
-            ) dynamic.CallbackAction,
-        ) void {
-            switch (dynamic.backend) {
-                inline else => |tag| {
-                    c_timer.ensureTag(tag);
-                    c_cancel.ensureTag(tag);
-
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    const api_cb = (struct {
-                        fn callback(
-                            ud_inner: ?*Userdata,
-                            l_inner: *api.Loop,
-                            c_inner: *api.Completion,
-                            r_inner: api.Timer.CancelError!void,
-                        ) dynamic.CallbackAction {
-                            return cb(
-                                ud_inner,
-                                @fieldParentPtr("backend", @as(
-                                    *dynamic.LoopUnion,
-                                    @fieldParentPtr(@tagName(tag), l_inner),
-                                )),
-                                @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.CompletionUnion,
-                                    @fieldParentPtr(@tagName(tag), c_inner),
-                                )),
-                                r_inner,
-                            );
-                        }
-                    }).callback;
-
-                    @field(
-                        self.backend,
-                        @tagName(tag),
-                    ).cancel(
-                        &@field(loop.backend, @tagName(tag)),
-                        &@field(c_timer.value, @tagName(tag)),
-                        &@field(c_cancel.value, @tagName(tag)),
-                        Userdata,
-                        userdata,
-                        api_cb,
-                    );
-                },
-            }
-        }
-
-        test {
-            _ = @import("watcher/timer.zig").TimerTests(
-                dynamic,
-                Self,
-            );
         }
     };
 }
@@ -673,7 +409,7 @@ fn EnumSubset(comptime T: type, comptime values: []const T) type {
 ///
 /// The union is untagged to save an extra bit of memory per
 /// instance since we have the active backend from the outer struct.
-fn Union(
+pub fn Union(
     comptime bes: []const AllBackend,
     comptime field: []const u8,
     comptime tagged: bool,
@@ -707,7 +443,7 @@ fn Union(
 ///
 ///   ErrorSet(bes, &.{"Async", "WaitError"});
 ///
-fn ErrorSet(
+pub fn ErrorSet(
     comptime bes: []const AllBackend,
     comptime field: []const []const u8,
 ) type {

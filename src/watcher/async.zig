@@ -6,6 +6,8 @@ const posix = std.posix;
 const common = @import("common.zig");
 
 pub fn Async(comptime xev: type) type {
+    if (xev.dynamic) return AsyncDynamic(xev);
+
     return switch (xev.backend) {
         // Supported, uses eventfd
         .io_uring,
@@ -119,8 +121,9 @@ fn AsyncEventFd(comptime xev: type) type {
             };
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -344,8 +347,9 @@ fn AsyncMachPort(comptime xev: type) type {
             };
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -429,8 +433,9 @@ fn AsyncLoopState(comptime xev: type, comptime threaded: bool) type {
                 self.wakeup = true;
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -513,12 +518,113 @@ fn AsyncIOCP(comptime xev: type) type {
             }
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
-pub fn AsyncTests(comptime xev: type, comptime Impl: type) type {
+fn AsyncDynamic(comptime D: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = D.Union("Async");
+        pub const WaitError = D.ErrorSet(&.{ "Async", "WaitError" });
+
+        pub fn init() !Self {
+            return .{ .backend = switch (D.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime D.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.Async.init(),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (D.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        pub fn notify(self: *Self) !void {
+            switch (D.backend) {
+                inline else => |tag| try @field(
+                    self.backend,
+                    @tagName(tag),
+                ).notify(),
+            }
+        }
+
+        pub fn wait(
+            self: Self,
+            loop: *D.Loop,
+            c: *D.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *D.Loop,
+                c: *D.Completion,
+                r: WaitError!void,
+            ) D.CallbackAction,
+        ) void {
+            switch (D.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime D.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Async.WaitError!void,
+                        ) D.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *D.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *D.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).wait(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = AsyncTests(D, Self);
+        }
+    };
+}
+
+fn AsyncTests(comptime xev: type, comptime Impl: type) type {
     return struct {
         test "async" {
             const testing = std.testing;

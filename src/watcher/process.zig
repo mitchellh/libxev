@@ -7,6 +7,8 @@ const common = @import("common.zig");
 
 /// Process management, such as waiting for process exit.
 pub fn Process(comptime xev: type) type {
+    if (xev.dynamic) return ProcessDynamic(xev);
+
     return switch (xev.backend) {
         // Supported, uses pidfd
         .io_uring,
@@ -131,8 +133,14 @@ fn ProcessPidFd(comptime xev: type) type {
             loop.add(c);
         }
 
-        /// Common tests
-        pub usingnamespace ProcessTests(xev, Self, &.{ "sh", "-c", "exit 0" }, &.{ "sh", "-c", "exit 42" });
+        test {
+            _ = ProcessTests(
+                xev,
+                Self,
+                &.{ "sh", "-c", "exit 0" },
+                &.{ "sh", "-c", "exit 42" },
+            );
+        }
     };
 }
 
@@ -209,8 +217,14 @@ fn ProcessKqueue(comptime xev: type) type {
             loop.add(c);
         }
 
-        /// Common tests
-        pub usingnamespace ProcessTests(xev, Self, &.{ "sh", "-c", "exit 0" }, &.{ "sh", "-c", "exit 42" });
+        test {
+            _ = ProcessTests(
+                xev,
+                Self,
+                &.{ "sh", "-c", "exit 0" },
+                &.{ "sh", "-c", "exit 42" },
+            );
+        }
     };
 }
 
@@ -339,12 +353,114 @@ fn ProcessIocp(comptime xev: type) type {
             loop.add(c);
         }
 
-        /// Common tests
-        pub usingnamespace ProcessTests(xev, Self, &.{ "cmd.exe", "/C", "exit 0" }, &.{ "cmd.exe", "/C", "exit 42" });
+        test {
+            _ = ProcessTests(
+                xev,
+                Self,
+                &.{ "cmd.exe", "/C", "exit 0" },
+                &.{ "cmd.exe", "/C", "exit 42" },
+            );
+        }
     };
 }
 
-pub fn ProcessTests(
+fn ProcessDynamic(comptime dynamic: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = dynamic.Union("Process");
+        pub const WaitError = dynamic.ErrorSet(&.{ "Process", "WaitError" });
+
+        pub fn init(fd: posix.pid_t) !Self {
+            return .{ .backend = switch (dynamic.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.Process.init(fd),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (dynamic.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        pub fn wait(
+            self: Self,
+            loop: *dynamic.Loop,
+            c: *dynamic.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: WaitError!u32,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Process.WaitError!u32,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).wait(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = ProcessTests(
+                dynamic,
+                Self,
+                &.{ "sh", "-c", "exit 0" },
+                &.{ "sh", "-c", "exit 42" },
+            );
+        }
+    };
+}
+
+fn ProcessTests(
     comptime xev: type,
     comptime Impl: type,
     comptime argv_0: []const []const u8,

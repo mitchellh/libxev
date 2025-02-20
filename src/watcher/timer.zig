@@ -7,6 +7,12 @@ const os = std.os;
 /// repeat by returning "rearm" in the callback or by rescheduling the
 /// start within the callback.
 pub fn Timer(comptime xev: type) type {
+    if (xev.dynamic) return TimerDynamic(xev);
+    return TimerLoop(xev);
+}
+
+/// An implementation that uses the loop timer methods.
+fn TimerLoop(comptime xev: type) type {
     return struct {
         const Self = @This();
 
@@ -220,7 +226,220 @@ pub fn Timer(comptime xev: type) type {
     };
 }
 
-pub fn TimerTests(
+fn TimerDynamic(comptime dynamic: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = dynamic.Union("Timer");
+        pub const RunError = dynamic.ErrorSet(&.{ "Timer", "RunError" });
+        pub const CancelError = dynamic.ErrorSet(&.{ "Timer", "CancelError" });
+
+        pub fn init() !Self {
+            return .{ .backend = switch (dynamic.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.Timer.init(),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (dynamic.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        pub fn run(
+            self: Self,
+            loop: *dynamic.Loop,
+            c: *dynamic.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: RunError!void,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.RunError!void,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).run(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        next_ms,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn reset(
+            self: Self,
+            loop: *dynamic.Loop,
+            c: *dynamic.Completion,
+            c_cancel: *dynamic.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: RunError!void,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+                    c_cancel.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.RunError!void,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).reset(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        &@field(c_cancel.value, @tagName(tag)),
+                        next_ms,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn cancel(
+            self: Self,
+            loop: *dynamic.Loop,
+            c_timer: *dynamic.Completion,
+            c_cancel: *dynamic.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: CancelError!void,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c_timer.ensureTag(tag);
+                    c_cancel.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.CancelError!void,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).cancel(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c_timer.value, @tagName(tag)),
+                        &@field(c_cancel.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = TimerTests(
+                dynamic,
+                Self,
+            );
+        }
+    };
+}
+
+fn TimerTests(
     comptime xev: type,
     comptime Impl: type,
 ) type {

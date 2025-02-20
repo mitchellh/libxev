@@ -102,6 +102,9 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         const Self = @This();
         const loop = @import("loop.zig");
 
+        /// This is used to detect a static vs dynamic API at comptime.
+        pub const dynamic = false;
+
         /// The backend that this is. This is supplied at comptime so
         /// it is up to the caller to say the right thing. This lets custom
         /// implementations also "quack" like an implementation.
