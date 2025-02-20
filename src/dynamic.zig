@@ -164,11 +164,12 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         }
 
         test {
-            _ = Async;
-            _ = File;
-            _ = Process;
-            _ = Stream;
-            _ = Timer;
+            @import("std").testing.refAllDecls(@This());
+        }
+
+        test "completion is zero-able" {
+            const c: Completion = .{};
+            _ = c;
         }
 
         test "detect" {

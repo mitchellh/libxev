@@ -123,72 +123,86 @@ pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) t
 }
 
 fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    if (xev.dynamic) return struct {
-        const Self = T;
-
-        pub fn poll(
-            self: Self,
-            loop: *xev.Loop,
-            c: *xev.Completion,
-            event: xev.PollEvent,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                s: Self,
-                r: xev.PollError!xev.PollEvent,
-            ) xev.CallbackAction,
-        ) void {
-            switch (xev.backend) {
-                inline else => |tag| {
-                    c.ensureTag(tag);
-
-                    const api = (comptime xev.superset(tag)).Api();
-                    const BackendSelf = @field(api, options.type.?);
-                    const api_cb = (struct {
-                        fn callback(
-                            ud_inner: ?*Userdata,
-                            l_inner: *api.Loop,
-                            c_inner: *api.Completion,
-                            s_inner: BackendSelf,
-                            r_inner: api.PollError!api.PollEvent,
-                        ) xev.CallbackAction {
-                            return cb(
-                                ud_inner,
-                                @fieldParentPtr("backend", @as(
-                                    *xev.Loop.Union,
-                                    @fieldParentPtr(@tagName(tag), l_inner),
-                                )),
-                                @fieldParentPtr("value", @as(
-                                    *xev.Completion.Union,
-                                    @fieldParentPtr(@tagName(tag), c_inner),
-                                )),
-                                Self.initFd(s_inner.fd),
-                                if (r_inner) |v|
-                                    xev.PollEvent.fromBackend(tag, v)
-                                else |err|
-                                    err,
-                            );
-                        }
-                    }).callback;
-
-                    @field(
-                        self.backend,
-                        @tagName(tag),
-                    ).poll(
-                        &@field(loop.backend, @tagName(tag)),
-                        &@field(c.value, @tagName(tag)),
-                        event.toBackend(tag),
-                        Userdata,
-                        userdata,
-                        api_cb,
-                    );
-                },
+    if (xev.dynamic) {
+        // If all candidate backends do not support poll, our dynamic
+        // type cannot support poll.
+        comptime {
+            for (xev.candidates) |be| {
+                const CandidateT = @field(be.Api(), options.type.?);
+                const info = @typeInfo(CandidateT).Struct;
+                for (info.decls) |decl| {
+                    if (std.mem.eql(u8, decl.name, "poll")) break;
+                } else return struct {};
             }
         }
-    };
+
+        return struct {
+            const Self = T;
+
+            pub fn poll(
+                self: Self,
+                loop: *xev.Loop,
+                c: *xev.Completion,
+                event: xev.PollEvent,
+                comptime Userdata: type,
+                userdata: ?*Userdata,
+                comptime cb: *const fn (
+                    ud: ?*Userdata,
+                    l: *xev.Loop,
+                    c: *xev.Completion,
+                    s: Self,
+                    r: xev.PollError!xev.PollEvent,
+                ) xev.CallbackAction,
+            ) void {
+                switch (xev.backend) {
+                    inline else => |tag| {
+                        c.ensureTag(tag);
+
+                        const api = (comptime xev.superset(tag)).Api();
+                        const BackendSelf = @field(api, options.type.?);
+                        const api_cb = (struct {
+                            fn callback(
+                                ud_inner: ?*Userdata,
+                                l_inner: *api.Loop,
+                                c_inner: *api.Completion,
+                                s_inner: BackendSelf,
+                                r_inner: api.PollError!api.PollEvent,
+                            ) xev.CallbackAction {
+                                return cb(
+                                    ud_inner,
+                                    @fieldParentPtr("backend", @as(
+                                        *xev.Loop.Union,
+                                        @fieldParentPtr(@tagName(tag), l_inner),
+                                    )),
+                                    @fieldParentPtr("value", @as(
+                                        *xev.Completion.Union,
+                                        @fieldParentPtr(@tagName(tag), c_inner),
+                                    )),
+                                    Self.initFd(s_inner.fd),
+                                    if (r_inner) |v|
+                                        xev.PollEvent.fromBackend(tag, v)
+                                    else |err|
+                                        err,
+                                );
+                            }
+                        }).callback;
+
+                        @field(
+                            self.backend,
+                            @tagName(tag),
+                        ).poll(
+                            &@field(loop.backend, @tagName(tag)),
+                            &@field(c.value, @tagName(tag)),
+                            event.toBackend(tag),
+                            Userdata,
+                            userdata,
+                            api_cb,
+                        );
+                    },
+                }
+            }
+        };
+    }
 
     // Do not add the methods for poll if the backend doesn't support it.
     switch (xev.backend) {
