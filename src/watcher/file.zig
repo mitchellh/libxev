@@ -139,8 +139,8 @@ pub fn File(comptime xev: type) type {
         pub fn queuePWrite(
             self: Self,
             loop: *xev.Loop,
-            q: *Self.WriteQueue,
-            req: *Self.WriteRequest,
+            q: *xev.WriteQueue,
+            req: *xev.WriteRequest,
             buf: xev.WriteBuffer,
             offset: u64,
             comptime Userdata: type,
@@ -151,7 +151,7 @@ pub fn File(comptime xev: type) type {
                 c: *xev.Completion,
                 s: Self,
                 b: xev.WriteBuffer,
-                r: Self.WriteError!usize,
+                r: xev.WriteError!usize,
             ) xev.CallbackAction,
         ) void {
             // Initialize our completion
@@ -165,7 +165,7 @@ pub fn File(comptime xev: type) type {
                     c_inner: *xev.Completion,
                     r: xev.Result,
                 ) xev.CallbackAction {
-                    const q_inner = @as(?*Self.WriteQueue, @ptrCast(@alignCast(ud))).?;
+                    const q_inner = @as(?*xev.WriteQueue, @ptrCast(@alignCast(ud))).?;
 
                     // The queue MUST have a request because a completion
                     // can only be added if the queue is not empty, and
@@ -222,7 +222,7 @@ pub fn File(comptime xev: type) type {
                 c: *xev.Completion,
                 s: Self,
                 b: xev.WriteBuffer,
-                r: Self.WriteError!usize,
+                r: xev.WriteError!usize,
             ) xev.CallbackAction,
         ) void {
             self.pwrite_init(c, buf, offset);
@@ -252,7 +252,7 @@ pub fn File(comptime xev: type) type {
         inline fn pwrite_result(c: *xev.Completion, r: xev.Result) struct {
             writer: Self,
             buf: xev.WriteBuffer,
-            result: Self.WriteError!usize,
+            result: xev.WriteError!usize,
         } {
             return .{
                 .writer = Self.initFd(c.op.pwrite.fd),
@@ -422,7 +422,7 @@ pub fn FileTests(
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.WriteBuffer,
-                    r: Impl.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -496,7 +496,7 @@ pub fn FileTests(
                     _: *xev.Completion,
                     _: Impl,
                     _: xev.WriteBuffer,
-                    r: Impl.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -557,8 +557,8 @@ pub fn FileTests(
             defer std.fs.cwd().deleteFile(path) catch {};
 
             const file = try Impl.init(f);
-            var write_queue: Impl.WriteQueue = .{};
-            var write_req: [2]Impl.WriteRequest = undefined;
+            var write_queue: xev.WriteQueue = .{};
+            var write_req: [2]xev.WriteRequest = undefined;
 
             // Perform a write and then a read
             file.queueWrite(
@@ -575,7 +575,7 @@ pub fn FileTests(
                         _: *xev.Completion,
                         _: Impl,
                         _: xev.WriteBuffer,
-                        r: Impl.WriteError!usize,
+                        r: xev.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch unreachable;
                         return .disarm;
@@ -596,7 +596,7 @@ pub fn FileTests(
                         _: *xev.Completion,
                         _: Impl,
                         _: xev.WriteBuffer,
-                        r: Impl.WriteError!usize,
+                        r: xev.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch unreachable;
                         return .disarm;

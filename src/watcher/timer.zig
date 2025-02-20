@@ -232,7 +232,7 @@ fn TimerDynamic(comptime dynamic: type) type {
 
         backend: Union,
 
-        pub const Union = dynamic.Union("Timer");
+        pub const Union = dynamic.Union(&.{"Timer"});
         pub const RunError = dynamic.ErrorSet(&.{ "Timer", "RunError" });
         pub const CancelError = dynamic.ErrorSet(&.{ "Timer", "CancelError" });
 

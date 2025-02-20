@@ -370,7 +370,7 @@ fn ProcessDynamic(comptime dynamic: type) type {
 
         backend: Union,
 
-        pub const Union = dynamic.Union("Process");
+        pub const Union = dynamic.Union(&.{"Process"});
         pub const WaitError = dynamic.ErrorSet(&.{ "Process", "WaitError" });
 
         pub fn init(fd: posix.pid_t) !Self {

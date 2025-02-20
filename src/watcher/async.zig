@@ -530,7 +530,7 @@ fn AsyncDynamic(comptime D: type) type {
 
         backend: Union,
 
-        pub const Union = D.Union("Async");
+        pub const Union = D.Union(&.{"Async"});
         pub const WaitError = D.ErrorSet(&.{ "Async", "WaitError" });
 
         pub fn init() !Self {

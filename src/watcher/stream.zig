@@ -19,6 +19,40 @@ pub const Options = struct {
     pub const WriteMethod = enum { none, write, send };
 };
 
+/// Returns the shared decls for all streams that should be set for
+/// the xev type.
+pub fn Shared(comptime xev: type) type {
+    return struct {
+        /// WriteQueue is the queue of write requests for ordered writes.
+        /// This can be copied around.
+        pub const WriteQueue = queue.Intrusive(WriteRequest);
+
+        /// WriteRequest is a single request for a write. It wraps a
+        /// completion so that it can be inserted into the WriteQueue.
+        pub const WriteRequest = struct {
+            completion: xev.Completion = .{},
+            userdata: ?*anyopaque = null,
+
+            /// This is the original buffer passed to queueWrite. We have
+            /// to keep track of this because we may be forced to split
+            /// the write or rearm the write due to partial writes, but when
+            /// we call the final callback we want to pass the original
+            /// complete buffer.
+            full_write_buffer: xev.WriteBuffer,
+
+            next: ?*@This() = null,
+
+            /// This can be used to convert a completion pointer back to
+            /// a WriteRequest. This is only safe of course if the completion
+            /// originally is from a write request. This is useful for getting
+            /// the WriteRequest back in a callback from queuedWrite.
+            pub fn from(c: *xev.Completion) *WriteRequest {
+                return @fieldParentPtr("completion", c);
+            }
+        };
+    };
+}
+
 /// Creates a stream type that is meant to be embedded within other
 /// types using "usingnamespace". A stream is something that supports read,
 /// write, close, etc. The exact operations supported are defined by the
@@ -432,40 +466,138 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
 }
 
 pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    if (xev.dynamic) return struct {};
+    if (xev.dynamic) return struct {
+        const Self = T;
+
+        pub fn write(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            buf: xev.WriteBuffer,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                b: xev.WriteBuffer,
+                r: xev.WriteError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.Stream,
+                            b_inner: api.WriteBuffer,
+                            r_inner: api.WriteError!usize,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                xev.WriteBuffer.fromBackend(tag, b_inner),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).write(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        buf.toBackend(tag),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn queueWrite(
+            self: Self,
+            loop: *xev.Loop,
+            q: *xev.WriteQueue,
+            req: *xev.WriteRequest,
+            buf: xev.WriteBuffer,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                b: xev.WriteBuffer,
+                r: xev.WriteError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    q.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.Stream,
+                            b_inner: api.WriteBuffer,
+                            r_inner: api.WriteError!usize,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                xev.WriteBuffer.fromBackend(tag, b_inner),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).queueWrite(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(q.value, @tagName(tag)),
+                        &@field(req, @tagName(tag)),
+                        buf.toBackend(tag),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+    };
 
     return struct {
         const Self = T;
-
-        pub const WriteError = xev.WriteError;
-
-        /// WriteQueue is the queue of write requests for ordered writes.
-        /// This can be copied around.
-        pub const WriteQueue = queue.Intrusive(WriteRequest);
-
-        /// WriteRequest is a single request for a write. It wraps a
-        /// completion so that it can be inserted into the WriteQueue.
-        pub const WriteRequest = struct {
-            completion: xev.Completion = .{},
-            userdata: ?*anyopaque = null,
-
-            /// This is the original buffer passed to queueWrite. We have
-            /// to keep track of this because we may be forced to split
-            /// the write or rearm the write due to partial writes, but when
-            /// we call the final callback we want to pass the original
-            /// complete buffer.
-            full_write_buffer: xev.WriteBuffer,
-
-            next: ?*@This() = null,
-
-            /// This can be used to convert a completion pointer back to
-            /// a WriteRequest. This is only safe of course if the completion
-            /// originally is from a write request. This is useful for getting
-            /// the WriteRequest back in a callback from queuedWrite.
-            pub fn from(c: *xev.Completion) *WriteRequest {
-                return @fieldParentPtr("completion", c);
-            }
-        };
 
         /// Write to the stream. This queues the writes to ensure they
         /// remain in order. Queueing has a small overhead: you must
@@ -484,8 +616,8 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         pub fn queueWrite(
             self: Self,
             loop: *xev.Loop,
-            q: *WriteQueue,
-            req: *WriteRequest,
+            q: *xev.WriteQueue,
+            req: *xev.WriteRequest,
             buf: xev.WriteBuffer,
             comptime Userdata: type,
             userdata: ?*Userdata,
@@ -495,7 +627,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 c: *xev.Completion,
                 s: Self,
                 b: xev.WriteBuffer,
-                r: WriteError!usize,
+                r: xev.WriteError!usize,
             ) xev.CallbackAction,
         ) void {
             // Initialize our completion
@@ -510,7 +642,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     c_inner: *xev.Completion,
                     r: xev.Result,
                 ) xev.CallbackAction {
-                    const q_inner = @as(?*WriteQueue, @ptrCast(@alignCast(ud))).?;
+                    const q_inner = @as(?*xev.WriteQueue, @ptrCast(@alignCast(ud))).?;
 
                     // The queue MUST have a request because a completion
                     // can only be added if the queue is not empty, and
@@ -518,10 +650,10 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                     //
                     // We only peek the request here (not pop) because we may
                     // need to rearm this write if the write was partial.
-                    const req_inner: *WriteRequest = q_inner.head.?;
+                    const req_inner: *xev.WriteRequest = q_inner.head.?;
 
                     const cb_res = write_result(c_inner, r);
-                    var result: WriteError!usize = cb_res.result;
+                    var result: xev.WriteError!usize = cb_res.result;
 
                     // Checks whether the entire buffer was written, this is
                     // necessary to guarantee correct ordering of writes.
@@ -604,7 +736,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                 c: *xev.Completion,
                 s: Self,
                 b: xev.WriteBuffer,
-                r: WriteError!usize,
+                r: xev.WriteError!usize,
             ) xev.CallbackAction,
         ) void {
             self.writeInit(c, buf);
@@ -635,7 +767,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         inline fn write_result(c: *xev.Completion, r: xev.Result) struct {
             writer: Self,
             buf: xev.WriteBuffer,
-            result: WriteError!usize,
+            result: xev.WriteError!usize,
         } {
             return switch (options.write) {
                 .none => unreachable,
@@ -750,7 +882,7 @@ pub fn GenericStream(comptime xev: type) type {
 
         backend: Union,
 
-        pub const Union = xev.Union("Stream");
+        pub const Union = xev.Union(&.{"Stream"});
 
         pub usingnamespace Stream(xev, Self, .{
             .close = true,
@@ -870,7 +1002,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                     c: *xev.Completion,
                     _: Impl,
                     _: xev.WriteBuffer,
-                    r: Impl.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -934,7 +1066,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                     c: *xev.Completion,
                     _: Impl,
                     _: xev.WriteBuffer,
-                    r: Impl.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -987,8 +1119,8 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
             try loop.run(.no_wait);
             try testing.expect(read_len == null);
 
-            var write_queue: Impl.WriteQueue = .{};
-            var write_req: [2]Impl.WriteRequest = undefined;
+            var write_queue: xev.WriteQueue = .{};
+            var write_req: [2]xev.WriteRequest = undefined;
 
             // Send (note the newline at the end of the buf is important
             // since we're in cooked mode)
@@ -1006,7 +1138,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                         c: *xev.Completion,
                         _: Impl,
                         _: xev.WriteBuffer,
-                        r: Impl.WriteError!usize,
+                        r: xev.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = c;
                         _ = r catch unreachable;
@@ -1030,7 +1162,7 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
                         c: *xev.Completion,
                         _: Impl,
                         _: xev.WriteBuffer,
-                        r: Impl.WriteError!usize,
+                        r: xev.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch unreachable;
                         ud.?.* = c;
@@ -1045,7 +1177,11 @@ fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
             try testing.expectEqualSlices(u8, "hello, world!\n", read_buf[0..read_len.?]);
 
             // Verify our completion is equal to our request
-            try testing.expect(Impl.WriteRequest.from(c_result.?) == &write_req[1]);
+            if (!xev.dynamic) {
+                try testing.expect(
+                    xev.WriteRequest.from(c_result.?) == &write_req[1],
+                );
+            }
         }
     };
 }

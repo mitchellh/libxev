@@ -326,7 +326,7 @@ pub fn TCP(comptime xev: type) type {
                     c: *xev.Completion,
                     _: Self,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -502,7 +502,7 @@ pub fn TCP(comptime xev: type) type {
                     _: *xev.Completion,
                     _: Self,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     sent_unqueued_inner.?.* = r catch unreachable;
                     return .disarm;
@@ -516,8 +516,8 @@ pub fn TCP(comptime xev: type) type {
             try testing.expect(sent_unqueued < (send_buf.len / 10));
 
             // Set up queued write
-            var w_queue = Self.WriteQueue{};
-            var wr_send: xev.TCP.WriteRequest = undefined;
+            var w_queue = xev.WriteQueue{};
+            var wr_send: xev.WriteRequest = undefined;
             var sent_queued: usize = 0;
             const queued_slice = send_buf[sent_unqueued..];
             client.queueWrite(&loop, &w_queue, &wr_send, .{ .slice = queued_slice }, usize, &sent_queued, (struct {
@@ -527,7 +527,7 @@ pub fn TCP(comptime xev: type) type {
                     c: *xev.Completion,
                     tcp: Self,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     sent_queued_inner.?.* = r catch unreachable;
 

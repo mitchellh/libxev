@@ -134,6 +134,11 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const WriteError = T.WriteError;
         pub const ReadError = T.ReadError;
 
+        /// Shared stream types
+        const SharedStream = stream.Shared(Self);
+        pub const WriteQueue = SharedStream.WriteQueue;
+        pub const WriteRequest = SharedStream.WriteRequest;
+
         /// The high-level helper interfaces that make it easier to perform
         /// common tasks. These may not work with all possible Loop implementations.
         pub const Async = @import("watcher/async.zig").Async(Self);

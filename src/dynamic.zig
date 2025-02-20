@@ -57,6 +57,9 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const CompletionState = looppkg.CompletionState;
         pub const Completion = DynamicCompletion(Dynamic);
         pub const ReadBuffer = DynamicReadBuffer(Dynamic);
+        pub const WriteBuffer = DynamicWriteBuffer(Dynamic);
+        pub const WriteQueue = DynamicWriteQueue(Dynamic);
+        pub const WriteRequest = Dynamic.Union(&.{"WriteRequest"});
 
         /// Error types
         pub const AcceptError = Dynamic.ErrorSet(&.{"AcceptError"});
@@ -93,7 +96,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const Loop = struct {
             backend: Loop.Union,
 
-            pub const Union = Dynamic.Union("Loop");
+            pub const Union = Dynamic.Union(&.{"Loop"});
 
             pub fn init(opts: Options) !Loop {
                 return .{ .backend = switch (backend) {
@@ -145,8 +148,12 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             return @enumFromInt(@intFromEnum(be));
         }
 
-        pub fn Union(comptime field: []const u8) type {
+        pub fn Union(comptime field: []const []const u8) type {
             return dynamicpkg.Union(bes, field, false);
+        }
+
+        pub fn TaggedUnion(comptime field: []const []const u8) type {
+            return dynamicpkg.Union(bes, field, true);
         }
 
         pub fn ErrorSet(comptime field: []const []const u8) type {
@@ -190,11 +197,7 @@ fn DynamicCompletion(comptime dynamic: type) type {
         // the completion but is necessary to ensure that we have
         // zero-initialized the correct type for where it matters
         // (timers).
-        pub const Union = dynamicpkg.Union(
-            dynamic.candidates,
-            "Completion",
-            true,
-        );
+        pub const Union = dynamic.TaggedUnion(&.{"Completion"});
 
         value: Self.Union = @unionInit(
             Self.Union,
@@ -281,6 +284,64 @@ fn DynamicReadBuffer(comptime dynamic: type) type {
     };
 }
 
+fn DynamicWriteBuffer(comptime dynamic: type) type {
+    // Our write buffer supports a least common denominator of
+    // write targets available by all backends. The direct backend
+    // may support more write targets but if you need that you should
+    // use the backend directly and not through the dynamic API.
+    return union(enum) {
+        const Self = @This();
+
+        slice: []const u8,
+        array: struct { array: [32]u8, len: usize },
+
+        /// Convert a backend-specific write buffer to this.
+        pub fn fromBackend(
+            comptime be: dynamic.Backend,
+            buf: dynamic.superset(be).Api().WriteBuffer,
+        ) Self {
+            return switch (buf) {
+                .slice => |v| .{ .slice = v },
+                .array => |v| .{ .array = .{ .array = v.array, .len = v.len } },
+            };
+        }
+
+        /// Convert this write buffer to the backend-specific
+        /// buffer.
+        pub fn toBackend(
+            self: Self,
+            comptime be: dynamic.Backend,
+        ) dynamic.superset(be).Api().WriteBuffer {
+            return switch (self) {
+                .slice => |v| .{ .slice = v },
+                .array => |v| .{ .array = .{ .array = v.array, .len = v.len } },
+            };
+        }
+    };
+}
+
+fn DynamicWriteQueue(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+        pub const Union = xev.TaggedUnion(&.{"WriteQueue"});
+
+        value: Self.Union = @unionInit(
+            Self.Union,
+            @tagName(xev.candidates[xev.candidates.len - 1]),
+            .{},
+        ),
+
+        pub fn ensureTag(self: *Self, comptime tag: xev.Backend) void {
+            if (self.value == tag) return;
+            self.value = @unionInit(
+                Self.Union,
+                @tagName(tag),
+                .{},
+            );
+        }
+    };
+}
+
 /// Create an exhaustive enum that is a subset of another enum.
 /// Preserves the same backing type and integer values for the
 /// subset making it easy to convert between the two.
@@ -311,14 +372,15 @@ fn EnumSubset(comptime T: type, comptime values: []const T) type {
 ///
 /// The union is untagged to save an extra bit of memory per
 /// instance since we have the active backend from the outer struct.
-pub fn Union(
+fn Union(
     comptime bes: []const AllBackend,
-    comptime field: []const u8,
+    comptime field: []const []const u8,
     comptime tagged: bool,
 ) type {
     var fields: [bes.len]std.builtin.Type.UnionField = undefined;
     for (bes, 0..) |be, i| {
-        const T = @field(be.Api(), field);
+        var T: type = be.Api();
+        for (field) |f| T = @field(T, f);
         fields[i] = .{
             .name = @tagName(be),
             .type = T,
@@ -345,7 +407,7 @@ pub fn Union(
 ///
 ///   ErrorSet(bes, &.{"Async", "WaitError"});
 ///
-pub fn ErrorSet(
+fn ErrorSet(
     comptime bes: []const AllBackend,
     comptime field: []const []const u8,
 ) type {
