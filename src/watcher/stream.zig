@@ -668,7 +668,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         @tagName(tag),
                     ).queueWrite(
                         &@field(loop.backend, @tagName(tag)),
-                        &@field(&q.value, @tagName(tag)),
+                        &@field(q.value, @tagName(tag)),
                         &@field(req, @tagName(tag)),
                         buf.toBackend(tag),
                         Userdata,
