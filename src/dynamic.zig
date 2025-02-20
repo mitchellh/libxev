@@ -50,7 +50,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         pub const RunMode = looppkg.RunMode;
         pub const CallbackAction = looppkg.CallbackAction;
         pub const CompletionState = looppkg.CompletionState;
-        pub const Completion = Union(bes, "Completion");
+        pub const Completion = DynamicCompletion(Dynamic);
 
         /// Error types
         pub const AcceptError = ErrorSet(bes, &.{"AcceptError"});
@@ -64,6 +64,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         /// Core types
         pub const Async = DynamicAsync(Dynamic);
         pub const Process = DynamicProcess(Dynamic);
+        pub const Timer = DynamicTimer(Dynamic);
 
         /// The backend that is in use.
         var backend: Backend = subset(bes[bes.len - 1]);
@@ -82,7 +83,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             return error.NoAvailableBackends;
         }
 
-        const LoopUnion = Union(bes, "Loop");
+        const LoopUnion = Union(bes, "Loop", false);
         pub const Loop = struct {
             backend: LoopUnion,
 
@@ -139,6 +140,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         test {
             _ = Async;
             _ = Process;
+            _ = Timer;
         }
 
         test "detect" {
@@ -162,13 +164,71 @@ pub fn Xev(comptime bes: []const AllBackend) type {
     };
 }
 
+fn DynamicCompletion(comptime dynamic: type) type {
+    return struct {
+        const Self = @This();
+
+        // Completions, unlike almost any other dynamic type in this
+        // file, are tagged unions. This adds a minimal overhead to
+        // the completion but is necessary to ensure that we have
+        // zero-initialized the correct type for where it matters
+        // (timers).
+        const CompletionUnion = Union(
+            dynamic.candidates,
+            "Completion",
+            true,
+        );
+
+        value: CompletionUnion = @unionInit(
+            CompletionUnion,
+            @tagName(dynamic.candidates[dynamic.candidates.len - 1]),
+            .{},
+        ),
+
+        pub fn init() Self {
+            return .{ .value = switch (dynamic.backend) {
+                inline else => |tag| value: {
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    break :value @unionInit(
+                        CompletionUnion,
+                        @tagName(tag),
+                        api.Completion.init(),
+                    );
+                },
+            } };
+        }
+
+        pub fn state(self: *Self) dynamic.CompletionState {
+            return switch (self.value) {
+                inline else => |*v| v.state(),
+            };
+        }
+
+        /// This ensures that the tag is currently set for this
+        /// completion. If it is not, it will be set to the given
+        /// tag with a zero-initialized value.
+        ///
+        /// This lets users zero-intialize the completion and then
+        /// call any watcher API on it without having to worry about
+        /// the correct detected backend tag being set.
+        fn ensureTag(self: *Self, comptime tag: dynamic.Backend) void {
+            if (self.value == tag) return;
+            self.value = @unionInit(
+                CompletionUnion,
+                @tagName(tag),
+                .{},
+            );
+        }
+    };
+}
+
 fn DynamicAsync(comptime dynamic: type) type {
     return struct {
         const Self = @This();
 
         backend: AsyncUnion,
 
-        const AsyncUnion = Union(dynamic.candidates, "Async");
+        const AsyncUnion = Union(dynamic.candidates, "Async", false);
 
         pub const WaitError = ErrorSet(
             dynamic.candidates,
@@ -221,6 +281,8 @@ fn DynamicAsync(comptime dynamic: type) type {
         ) void {
             switch (dynamic.backend) {
                 inline else => |tag| {
+                    c.ensureTag(tag);
+
                     const api = (comptime dynamic.superset(tag)).Api();
                     const api_cb = (struct {
                         fn callback(
@@ -235,7 +297,10 @@ fn DynamicAsync(comptime dynamic: type) type {
                                     *dynamic.LoopUnion,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
-                                @fieldParentPtr(@tagName(tag), c_inner),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.CompletionUnion,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
                                 r_inner,
                             );
                         }
@@ -246,7 +311,7 @@ fn DynamicAsync(comptime dynamic: type) type {
                         @tagName(tag),
                     ).wait(
                         &@field(loop.backend, @tagName(tag)),
-                        &@field(c, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
                         Userdata,
                         userdata,
                         api_cb,
@@ -270,7 +335,7 @@ fn DynamicProcess(comptime dynamic: type) type {
 
         backend: ProcessUnion,
 
-        const ProcessUnion = Union(dynamic.candidates, "Process");
+        const ProcessUnion = Union(dynamic.candidates, "Process", false);
 
         pub const WaitError = ErrorSet(
             dynamic.candidates,
@@ -314,6 +379,8 @@ fn DynamicProcess(comptime dynamic: type) type {
         ) void {
             switch (dynamic.backend) {
                 inline else => |tag| {
+                    c.ensureTag(tag);
+
                     const api = (comptime dynamic.superset(tag)).Api();
                     const api_cb = (struct {
                         fn callback(
@@ -328,7 +395,10 @@ fn DynamicProcess(comptime dynamic: type) type {
                                     *dynamic.LoopUnion,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
-                                @fieldParentPtr(@tagName(tag), c_inner),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.CompletionUnion,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
                                 r_inner,
                             );
                         }
@@ -339,7 +409,7 @@ fn DynamicProcess(comptime dynamic: type) type {
                         @tagName(tag),
                     ).wait(
                         &@field(loop.backend, @tagName(tag)),
-                        &@field(c, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
                         Userdata,
                         userdata,
                         api_cb,
@@ -354,6 +424,220 @@ fn DynamicProcess(comptime dynamic: type) type {
                 Self,
                 &.{ "sh", "-c", "exit 0" },
                 &.{ "sh", "-c", "exit 42" },
+            );
+        }
+    };
+}
+
+fn DynamicTimer(comptime dynamic: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: TimerUnion,
+
+        const TimerUnion = Union(dynamic.candidates, "Timer", false);
+
+        pub const RunError = ErrorSet(dynamic.candidates, &.{ "Timer", "RunError" });
+        pub const CancelError = ErrorSet(dynamic.candidates, &.{ "Timer", "CancelError" });
+
+        pub fn init() !Self {
+            return .{ .backend = switch (dynamic.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    break :backend @unionInit(
+                        TimerUnion,
+                        @tagName(tag),
+                        try api.Timer.init(),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (dynamic.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        pub fn run(
+            self: Self,
+            loop: *dynamic.Loop,
+            c: *dynamic.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: RunError!void,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.RunError!void,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.LoopUnion,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.CompletionUnion,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).run(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        next_ms,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn reset(
+            self: Self,
+            loop: *dynamic.Loop,
+            c: *dynamic.Completion,
+            c_cancel: *dynamic.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: RunError!void,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+                    c_cancel.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.RunError!void,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.LoopUnion,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.CompletionUnion,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).reset(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        &@field(c_cancel.value, @tagName(tag)),
+                        next_ms,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn cancel(
+            self: Self,
+            loop: *dynamic.Loop,
+            c_timer: *dynamic.Completion,
+            c_cancel: *dynamic.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *dynamic.Loop,
+                c: *dynamic.Completion,
+                r: CancelError!void,
+            ) dynamic.CallbackAction,
+        ) void {
+            switch (dynamic.backend) {
+                inline else => |tag| {
+                    c_timer.ensureTag(tag);
+                    c_cancel.ensureTag(tag);
+
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.CancelError!void,
+                        ) dynamic.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *dynamic.LoopUnion,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *dynamic.Completion.CompletionUnion,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).cancel(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c_timer.value, @tagName(tag)),
+                        &@field(c_cancel.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = @import("watcher/timer.zig").TimerTests(
+                dynamic,
+                Self,
             );
         }
     };
@@ -392,6 +676,7 @@ fn EnumSubset(comptime T: type, comptime values: []const T) type {
 fn Union(
     comptime bes: []const AllBackend,
     comptime field: []const u8,
+    comptime tagged: bool,
 ) type {
     var fields: [bes.len]std.builtin.Type.UnionField = undefined;
     for (bes, 0..) |be, i| {
@@ -406,7 +691,10 @@ fn Union(
     return @Type(.{
         .Union = .{
             .layout = .auto,
-            .tag_type = null,
+            .tag_type = if (tagged) EnumSubset(
+                AllBackend,
+                bes,
+            ) else null,
             .fields = &fields,
             .decls = &.{},
         },

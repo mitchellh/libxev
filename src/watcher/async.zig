@@ -531,7 +531,7 @@ pub fn AsyncTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait
             var wake: bool = false;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             notifier.wait(&loop, &c_wait, bool, &wake, (struct {
                 fn callback(
                     ud: ?*bool,
@@ -567,7 +567,7 @@ pub fn AsyncTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait
             var wake: bool = false;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             notifier.wait(&loop, &c_wait, bool, &wake, (struct {
                 fn callback(
                     ud: ?*bool,
@@ -604,7 +604,7 @@ pub fn AsyncTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait
             var count: u32 = 0;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             notifier.wait(&loop, &c_wait, u32, &count, (struct {
                 fn callback(
                     ud: ?*u32,

@@ -214,13 +214,24 @@ pub fn Timer(comptime xev: type) type {
 
         pub const CancelError = xev.CancelError;
 
+        test {
+            _ = TimerTests(xev, Self);
+        }
+    };
+}
+
+pub fn TimerTests(
+    comptime xev: type,
+    comptime Impl: type,
+) type {
+    return struct {
         test "timer" {
             const testing = std.testing;
 
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             // Add the timer
@@ -231,7 +242,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -250,7 +261,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             var c_timer: xev.Completion = .{};
@@ -260,7 +271,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -291,7 +302,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             var c_timer: xev.Completion = .{};
@@ -301,7 +312,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -328,7 +339,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             var c_timer: xev.Completion = .{};
@@ -338,7 +349,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -368,7 +379,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             // Add the timer
@@ -379,7 +390,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     ud.?.* = if (r) false else |err| err == error.Canceled;
                     return .disarm;
@@ -394,7 +405,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: CancelError!void,
+                    r: Impl.CancelError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;

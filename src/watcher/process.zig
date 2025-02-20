@@ -366,7 +366,7 @@ pub fn ProcessTests(
 
             // Wait
             var code: ?u32 = null;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             p.wait(&loop, &c_wait, ?u32, &code, (struct {
                 fn callback(
                     ud: ?*?u32,
@@ -399,7 +399,7 @@ pub fn ProcessTests(
 
             // Wait
             var code: ?u32 = null;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             p.wait(&loop, &c_wait, ?u32, &code, (struct {
                 fn callback(
                     ud: ?*?u32,
@@ -434,7 +434,7 @@ pub fn ProcessTests(
 
             // Wait
             var code: ?u32 = null;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             p.wait(&loop, &c_wait, ?u32, &code, (struct {
                 fn callback(
                     ud: ?*?u32,
