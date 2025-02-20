@@ -70,7 +70,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         /// Core types
         pub const Async = @import("watcher/async.zig").Async(Dynamic);
         pub const Process = @import("watcher/process.zig").Process(Dynamic);
-        pub const Stream = DynamicStream(Dynamic);
+        pub const Stream = @import("watcher/stream.zig").GenericStream(Dynamic);
         pub const Timer = @import("watcher/timer.zig").Timer(Dynamic);
 
         /// The backend that is in use.
@@ -240,8 +240,6 @@ fn DynamicCompletion(comptime dynamic: type) type {
 }
 
 fn DynamicReadBuffer(comptime dynamic: type) type {
-    _ = dynamic;
-
     // Our read buffer supports a least common denominator of
     // read targets available by all backends. The direct backend
     // may support more read targets but if you need that you should
@@ -254,8 +252,8 @@ fn DynamicReadBuffer(comptime dynamic: type) type {
 
         /// Convert a backend-specific read buffer to this.
         pub fn fromBackend(
-            comptime be: AllBackend,
-            buf: be.Api().ReadBuffer,
+            comptime be: dynamic.Backend,
+            buf: dynamic.superset(be).Api().ReadBuffer,
         ) Self {
             return switch (buf) {
                 inline else => |data, tag| @unionInit(
@@ -270,111 +268,15 @@ fn DynamicReadBuffer(comptime dynamic: type) type {
         /// buffer.
         pub fn toBackend(
             self: Self,
-            comptime be: AllBackend,
-        ) !be.Api().ReadBuffer {
+            comptime be: dynamic.Backend,
+        ) dynamic.superset(be).Api().ReadBuffer {
             return switch (self) {
                 inline else => |data, tag| @unionInit(
-                    be.Api().ReadBuffer,
+                    dynamic.superset(be).Api().ReadBuffer,
                     @tagName(tag),
                     data,
                 ),
             };
-        }
-    };
-}
-
-fn DynamicStream(comptime dynamic: type) type {
-    return struct {
-        const Self = @This();
-
-        backend: StreamUnion,
-
-        const StreamUnion = Union(dynamic.candidates, "Stream", false);
-
-        pub const ReadError = ErrorSet(dynamic.candidates, &.{ "Stream", "ReadError" });
-
-        pub fn initFd(fd: posix.pid_t) !Self {
-            return .{ .backend = switch (dynamic.backend) {
-                inline else => |tag| backend: {
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    break :backend @unionInit(
-                        StreamUnion,
-                        @tagName(tag),
-                        try api.Stream.initFd(fd),
-                    );
-                },
-            } };
-        }
-
-        pub fn deinit(self: *Self) void {
-            switch (dynamic.backend) {
-                inline else => |tag| @field(
-                    self.backend,
-                    @tagName(tag),
-                ).deinit(),
-            }
-        }
-
-        pub fn read(
-            self: Self,
-            loop: *dynamic.Loop,
-            c: *dynamic.Completion,
-            buf: dynamic.ReadBuffer,
-            comptime Userdata: type,
-            userdata: ?*Userdata,
-            comptime cb: *const fn (
-                ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
-                s: Self,
-                b: dynamic.ReadBuffer,
-                r: ReadError!usize,
-            ) dynamic.CallbackAction,
-        ) void {
-            switch (dynamic.backend) {
-                inline else => |tag| {
-                    c.ensureTag(tag);
-
-                    const api = (comptime dynamic.superset(tag)).Api();
-                    const api_cb = (struct {
-                        fn callback(
-                            ud_inner: ?*Userdata,
-                            l_inner: *api.Loop,
-                            c_inner: *api.Completion,
-                            s_inner: api.Stream,
-                            b_inner: api.ReadBuffer,
-                            r_inner: api.Stream.ReadError!usize,
-                        ) dynamic.CallbackAction {
-                            return cb(
-                                ud_inner,
-                                @fieldParentPtr("backend", @as(
-                                    *dynamic.Loop.Union,
-                                    @fieldParentPtr(@tagName(tag), l_inner),
-                                )),
-                                @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.Union,
-                                    @fieldParentPtr(@tagName(tag), c_inner),
-                                )),
-                                Self.initFd(s_inner.fd),
-                                b_inner.fromBackend(tag),
-                                r_inner,
-                            );
-                        }
-                    }).callback;
-
-                    @field(
-                        self.backend,
-                        @tagName(tag),
-                    ).wait(
-                        &@field(loop.backend, @tagName(tag)),
-                        &@field(c.value, @tagName(tag)),
-                        buf.toBackend(tag),
-                        Userdata,
-                        userdata,
-                        api_cb,
-                    );
-                },
-            }
         }
     };
 }

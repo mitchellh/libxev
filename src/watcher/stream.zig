@@ -37,7 +37,9 @@ pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) t
     };
 }
 
-pub fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) type {
+fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) type {
+    if (xev.dynamic) return struct {};
+
     // Do not add the methods for poll if the backend doesn't support it.
     switch (xev.backend) {
         .io_uring, .epoll, .kqueue => {},
@@ -184,6 +186,8 @@ pub fn Pollable(comptime xev: type, comptime T: type, comptime options: Options)
 pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options) type {
     _ = options;
 
+    if (xev.dynamic) return struct {};
+
     return struct {
         const Self = T;
 
@@ -248,6 +252,74 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
 }
 
 pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options) type {
+    if (xev.dynamic) return struct {
+        const Self = T;
+
+        pub const ReadError = xev.ErrorSet(&.{"ReadError"});
+
+        pub fn read(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            buf: xev.ReadBuffer,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                b: xev.ReadBuffer,
+                r: ReadError!usize,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.Stream,
+                            b_inner: api.ReadBuffer,
+                            r_inner: api.Stream.ReadError!usize,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                xev.ReadBuffer.fromBackend(tag, b_inner),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).read(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        buf.toBackend(tag),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+    };
+
     return struct {
         const Self = T;
 
@@ -360,6 +432,8 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
 }
 
 pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options) type {
+    if (xev.dynamic) return struct {};
+
     return struct {
         const Self = T;
 
@@ -671,6 +745,47 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
 /// behavior on read/write. This should NOT be used for local files because
 /// local files have some special properties; you should use xev.File for that.
 pub fn GenericStream(comptime xev: type) type {
+    if (xev.dynamic) return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = xev.Union("Stream");
+
+        pub usingnamespace Stream(xev, Self, .{
+            .close = true,
+            .poll = true,
+            .read = .read,
+            .write = .write,
+        });
+
+        pub fn initFd(fd: std.posix.pid_t) Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        api.Stream.initFd(fd),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (xev.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        test {
+            _ = GenericStreamTests(xev, Self);
+        }
+    };
+
     return struct {
         const Self = @This();
 
@@ -698,6 +813,14 @@ pub fn GenericStream(comptime xev: type) type {
             _ = self;
         }
 
+        test {
+            _ = GenericStreamTests(xev, Self);
+        }
+    };
+}
+
+fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
+    return struct {
         test "pty: child to parent" {
             const testing = std.testing;
             switch (builtin.os.tag) {
@@ -712,8 +835,8 @@ pub fn GenericStream(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            const parent = initFd(pty.parent);
-            const child = initFd(pty.child);
+            const parent = Impl.initFd(pty.parent);
+            const child = Impl.initFd(pty.child);
 
             // Read
             var read_buf: [128]u8 = undefined;
@@ -724,9 +847,9 @@ pub fn GenericStream(comptime xev: type) type {
                     ud: ?*?usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -745,9 +868,9 @@ pub fn GenericStream(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     c: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: Impl.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -775,8 +898,8 @@ pub fn GenericStream(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            const parent = initFd(pty.parent);
-            const child = initFd(pty.child);
+            const parent = Impl.initFd(pty.parent);
+            const child = Impl.initFd(pty.child);
 
             // Read
             var read_buf: [128]u8 = undefined;
@@ -787,9 +910,9 @@ pub fn GenericStream(comptime xev: type) type {
                     ud: ?*?usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -809,9 +932,9 @@ pub fn GenericStream(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     c: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: Impl.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -839,8 +962,8 @@ pub fn GenericStream(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            const parent = initFd(pty.parent);
-            const child = initFd(pty.child);
+            const parent = Impl.initFd(pty.parent);
+            const child = Impl.initFd(pty.child);
 
             // Read
             var read_buf: [128]u8 = undefined;
@@ -851,9 +974,9 @@ pub fn GenericStream(comptime xev: type) type {
                     ud: ?*?usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -864,8 +987,8 @@ pub fn GenericStream(comptime xev: type) type {
             try loop.run(.no_wait);
             try testing.expect(read_len == null);
 
-            var write_queue: Self.WriteQueue = .{};
-            var write_req: [2]Self.WriteRequest = undefined;
+            var write_queue: Impl.WriteQueue = .{};
+            var write_req: [2]Impl.WriteRequest = undefined;
 
             // Send (note the newline at the end of the buf is important
             // since we're in cooked mode)
@@ -881,9 +1004,9 @@ pub fn GenericStream(comptime xev: type) type {
                         _: ?*void,
                         _: *xev.Loop,
                         c: *xev.Completion,
-                        _: Self,
+                        _: Impl,
                         _: xev.WriteBuffer,
-                        r: Self.WriteError!usize,
+                        r: Impl.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = c;
                         _ = r catch unreachable;
@@ -905,9 +1028,9 @@ pub fn GenericStream(comptime xev: type) type {
                         ud: ?*?*xev.Completion,
                         _: *xev.Loop,
                         c: *xev.Completion,
-                        _: Self,
+                        _: Impl,
                         _: xev.WriteBuffer,
-                        r: Self.WriteError!usize,
+                        r: Impl.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch unreachable;
                         ud.?.* = c;
@@ -922,7 +1045,7 @@ pub fn GenericStream(comptime xev: type) type {
             try testing.expectEqualSlices(u8, "hello, world!\n", read_buf[0..read_len.?]);
 
             // Verify our completion is equal to our request
-            try testing.expect(Self.WriteRequest.from(c_result.?) == &write_req[1]);
+            try testing.expect(Impl.WriteRequest.from(c_result.?) == &write_req[1]);
         }
     };
 }
