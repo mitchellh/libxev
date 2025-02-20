@@ -66,7 +66,7 @@ pub fn Shared(comptime xev: type) type {
 
             .iocp,
             .wasi_poll,
-            => @compileError("poll not supported on this backend"),
+            => error{},
         };
 
         /// Events that can be polled for using the high level streams.
@@ -75,7 +75,7 @@ pub fn Shared(comptime xev: type) type {
                 .io_uring => std.posix.POLL.IN,
                 .epoll => std.os.linux.EPOLL.IN,
                 .kqueue => 0, // doesn't matter
-                .iocp, .wasi_poll => @compileError("poll not supported on this backend"),
+                .iocp, .wasi_poll => 0, // invalid
             },
 
             fn fromResult(
