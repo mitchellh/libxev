@@ -344,7 +344,7 @@ fn ProcessIocp(comptime xev: type) type {
     };
 }
 
-fn ProcessTests(
+pub fn ProcessTests(
     comptime xev: type,
     comptime Impl: type,
     comptime argv_0: []const []const u8,
