@@ -137,8 +137,6 @@ fn ProcessPidFd(comptime xev: type) type {
             _ = ProcessTests(
                 xev,
                 Self,
-                &.{ "sh", "-c", "exit 0" },
-                &.{ "sh", "-c", "exit 42" },
             );
         }
     };
@@ -221,8 +219,6 @@ fn ProcessKqueue(comptime xev: type) type {
             _ = ProcessTests(
                 xev,
                 Self,
-                &.{ "sh", "-c", "exit 0" },
-                &.{ "sh", "-c", "exit 42" },
             );
         }
     };
@@ -357,8 +353,6 @@ fn ProcessIocp(comptime xev: type) type {
             _ = ProcessTests(
                 xev,
                 Self,
-                &.{ "cmd.exe", "/C", "exit 0" },
-                &.{ "cmd.exe", "/C", "exit 42" },
             );
         }
     };
@@ -453,8 +447,6 @@ fn ProcessDynamic(comptime dynamic: type) type {
             _ = ProcessTests(
                 dynamic,
                 Self,
-                &.{ "sh", "-c", "exit 0" },
-                &.{ "sh", "-c", "exit 42" },
             );
         }
     };
@@ -463,10 +455,18 @@ fn ProcessDynamic(comptime dynamic: type) type {
 fn ProcessTests(
     comptime xev: type,
     comptime Impl: type,
-    comptime argv_0: []const []const u8,
-    comptime argv_42: []const []const u8,
 ) type {
     return struct {
+        const argv_0: []const []const u8 = switch (builtin.os.tag) {
+            .windows => &.{ "cmd.exe", "/C", "exit 0" },
+            else => &.{ "sh", "-c", "exit 0" },
+        };
+
+        const argv_42: []const []const u8 = switch (builtin.os.tag) {
+            .windows => &.{ "cmd.exe", "/C", "exit 42" },
+            else => &.{ "sh", "-c", "exit 42" },
+        };
+
         test "process wait" {
             const testing = std.testing;
             const alloc = testing.allocator;
