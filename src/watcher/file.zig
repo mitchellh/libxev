@@ -298,6 +298,17 @@ pub fn File(comptime xev: type) type {
             }
         }
 
+        test {
+            _ = FileTests(xev, Self);
+        }
+    };
+}
+
+pub fn FileTests(
+    comptime xev: type,
+    comptime Impl: type,
+) type {
+    return struct {
         test "kqueue: zero-length read for readiness" {
             if (xev.backend != .kqueue) return error.SkipZigTest;
 
@@ -312,7 +323,7 @@ pub fn File(comptime xev: type) type {
             _ = try posix.write(pipe[1], "x");
 
             // Create our file
-            const file = initFd(pipe[0]);
+            const file = Impl.initFd(pipe[0]);
 
             var c: xev.Completion = undefined;
 
@@ -323,9 +334,9 @@ pub fn File(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -352,7 +363,7 @@ pub fn File(comptime xev: type) type {
             _ = try posix.write(pipe[1], "x");
 
             // Create our file
-            const file = initFd(pipe[0]);
+            const file = Impl.initFd(pipe[0]);
 
             var c: xev.Completion = undefined;
 
@@ -363,8 +374,8 @@ pub fn File(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.PollError!Self.PollEvent,
+                    _: Impl,
+                    r: Impl.PollError!Impl.PollEvent,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -399,7 +410,7 @@ pub fn File(comptime xev: type) type {
             defer f.close();
             defer std.fs.cwd().deleteFile(path) catch {};
 
-            const file = try init(f);
+            const file = try Impl.init(f);
 
             // Perform a write and then a read
             var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
@@ -409,9 +420,9 @@ pub fn File(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: Impl.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -426,7 +437,7 @@ pub fn File(comptime xev: type) type {
 
             const f2 = try std.fs.cwd().openFile(path, .{});
             defer f2.close();
-            const file2 = try init(f2);
+            const file2 = try Impl.init(f2);
 
             // Read
             var read_buf: [128]u8 = undefined;
@@ -436,9 +447,9 @@ pub fn File(comptime xev: type) type {
                     ud: ?*usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -473,7 +484,7 @@ pub fn File(comptime xev: type) type {
             defer f.close();
             defer std.fs.cwd().deleteFile(path) catch {};
 
-            const file = try init(f);
+            const file = try Impl.init(f);
 
             // Perform a write and then a read
             var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
@@ -483,9 +494,9 @@ pub fn File(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: Impl.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -500,7 +511,7 @@ pub fn File(comptime xev: type) type {
 
             const f2 = try std.fs.cwd().openFile(path, .{});
             defer f2.close();
-            const file2 = try init(f2);
+            const file2 = try Impl.init(f2);
 
             var read_buf: [128]u8 = undefined;
             var read_len: usize = 0;
@@ -509,9 +520,9 @@ pub fn File(comptime xev: type) type {
                     ud: ?*usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -545,9 +556,9 @@ pub fn File(comptime xev: type) type {
             defer f.close();
             defer std.fs.cwd().deleteFile(path) catch {};
 
-            const file = try init(f);
-            var write_queue: Self.WriteQueue = .{};
-            var write_req: [2]Self.WriteRequest = undefined;
+            const file = try Impl.init(f);
+            var write_queue: Impl.WriteQueue = .{};
+            var write_req: [2]Impl.WriteRequest = undefined;
 
             // Perform a write and then a read
             file.queueWrite(
@@ -562,9 +573,9 @@ pub fn File(comptime xev: type) type {
                         _: ?*void,
                         _: *xev.Loop,
                         _: *xev.Completion,
-                        _: Self,
+                        _: Impl,
                         _: xev.WriteBuffer,
-                        r: Self.WriteError!usize,
+                        r: Impl.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch unreachable;
                         return .disarm;
@@ -583,9 +594,9 @@ pub fn File(comptime xev: type) type {
                         _: ?*void,
                         _: *xev.Loop,
                         _: *xev.Completion,
-                        _: Self,
+                        _: Impl,
                         _: xev.WriteBuffer,
-                        r: Self.WriteError!usize,
+                        r: Impl.WriteError!usize,
                     ) xev.CallbackAction {
                         _ = r catch unreachable;
                         return .disarm;
@@ -601,7 +612,7 @@ pub fn File(comptime xev: type) type {
 
             const f2 = try std.fs.cwd().openFile(path, .{});
             defer f2.close();
-            const file2 = try init(f2);
+            const file2 = try Impl.init(f2);
 
             // Read
             var read_buf: [128]u8 = undefined;
@@ -612,9 +623,9 @@ pub fn File(comptime xev: type) type {
                     ud: ?*usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: Impl.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
