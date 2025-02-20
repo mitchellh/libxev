@@ -124,7 +124,7 @@ const Client = struct {
         c: *xev.Completion,
         s: xev.TCP,
         b: xev.WriteBuffer,
-        r: xev.TCP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         _ = r catch unreachable;
         _ = l;
@@ -142,7 +142,7 @@ const Client = struct {
         c: *xev.Completion,
         socket: xev.TCP,
         buf: xev.ReadBuffer,
-        r: xev.TCP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         const self = self_.?;
         const n = r catch unreachable;
@@ -275,7 +275,7 @@ const Server = struct {
         c: *xev.Completion,
         socket: xev.TCP,
         buf: xev.ReadBuffer,
-        r: xev.TCP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         const self = self_.?;
         const n = r catch |err| switch (err) {
@@ -309,7 +309,7 @@ const Server = struct {
         c: *xev.Completion,
         s: xev.TCP,
         buf: xev.WriteBuffer,
-        r: xev.TCP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         _ = l;
         _ = s;
