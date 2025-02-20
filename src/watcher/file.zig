@@ -493,11 +493,7 @@ fn FileTests(
 ) type {
     return struct {
         test "kqueue: zero-length read for readiness" {
-            if (!std.mem.eql(
-                u8,
-                @tagName(xev.backend),
-                "kqueue",
-            )) return error.SkipZigTest;
+            if (builtin.os.tag != .macos) return error.SkipZigTest;
 
             const testing = std.testing;
 
@@ -536,16 +532,8 @@ fn FileTests(
         }
 
         test "poll" {
-            if (std.mem.eql(
-                u8,
-                @tagName(xev.backend),
-                "wasi_poll",
-            )) return error.SkipZigTest;
-            if (std.mem.eql(
-                u8,
-                @tagName(xev.backend),
-                "iocp",
-            )) return error.SkipZigTest;
+            if (builtin.os.tag == .wasi) return error.SkipZigTest;
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
 
             const testing = std.testing;
 
