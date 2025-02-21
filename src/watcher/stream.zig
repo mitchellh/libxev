@@ -633,8 +633,6 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
         ) void {
             switch (xev.backend) {
                 inline else => |tag| {
-                    q.ensureTag(tag);
-
                     const api = (comptime xev.superset(tag)).Api();
                     const BackendSelf = @field(api, options.type.?);
                     const api_cb = (struct {
@@ -662,6 +660,18 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                             );
                         }
                     }).callback;
+
+                    // Ensure our WriteQueue has the correct tag, since it is
+                    // regularly zero-initialized and our zero-init picks
+                    // an arbitrary backend.
+                    q.ensureTag(tag);
+
+                    // Initialize our request since it is usually undefined.
+                    req.* = @unionInit(
+                        xev.WriteRequest,
+                        @tagName(tag),
+                        undefined,
+                    );
 
                     @field(
                         self.backend,

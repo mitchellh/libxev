@@ -722,10 +722,6 @@ fn FileTests(
             // windows: std.fs.File is not opened with OVERLAPPED flag.
             if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-            // this test fails on x86_64 with a strange error but passes
-            // on aarch64. for now, just let it go until we investigate.
-            if (xev.dynamic and builtin.cpu.arch == .x86_64) return error.SkipZigTest;
-
             const testing = std.testing;
 
             var tpool = main.ThreadPool.init(.{});

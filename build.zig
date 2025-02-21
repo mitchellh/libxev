@@ -56,6 +56,8 @@ pub fn build(b: *std.Build) !void {
         else => false,
     };
 
+    const test_filter = b.option([]const u8, "test-filter", "Filter for test");
+
     // We always build our test exe as part of `zig build` so that
     // we can easily run it manually without digging through the cache.
     const test_exe = b.addTest(.{
@@ -63,6 +65,7 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .filter = test_filter,
     });
     if (test_libc) test_exe.linkLibC(); // Tests depend on libc, libxev does not
     if (test_install) b.installArtifact(test_exe);
@@ -106,8 +109,10 @@ pub fn build(b: *std.Build) !void {
         static_binding_test.linkLibrary(static_lib);
         if (test_install) b.installArtifact(static_binding_test);
 
-        const static_binding_test_run = b.addRunArtifact(static_binding_test);
-        test_step.dependOn(&static_binding_test_run.step);
+        if (target.query.isNative()) {
+            const static_binding_test_run = b.addRunArtifact(static_binding_test);
+            test_step.dependOn(&static_binding_test_run.step);
+        }
 
         break :lib static_lib;
     } else null;
