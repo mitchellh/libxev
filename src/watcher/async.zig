@@ -475,7 +475,7 @@ fn AsyncIOCP(comptime xev: type) type {
                 r: WaitError!void,
             ) xev.CallbackAction,
         ) void {
-            c.* = xev.Completion{
+            c.* = .{
                 .op = .{ .async_wait = .{} },
                 .userdata = userdata,
                 .callback = (struct {
@@ -524,19 +524,19 @@ fn AsyncIOCP(comptime xev: type) type {
     };
 }
 
-fn AsyncDynamic(comptime D: type) type {
+fn AsyncDynamic(comptime xev: type) type {
     return struct {
         const Self = @This();
 
         backend: Union,
 
-        pub const Union = D.Union(&.{"Async"});
-        pub const WaitError = D.ErrorSet(&.{ "Async", "WaitError" });
+        pub const Union = xev.Union(&.{"Async"});
+        pub const WaitError = xev.ErrorSet(&.{ "Async", "WaitError" });
 
         pub fn init() !Self {
-            return .{ .backend = switch (D.backend) {
+            return .{ .backend = switch (xev.backend) {
                 inline else => |tag| backend: {
-                    const api = (comptime D.superset(tag)).Api();
+                    const api = (comptime xev.superset(tag)).Api();
                     break :backend @unionInit(
                         Union,
                         @tagName(tag),
@@ -547,7 +547,7 @@ fn AsyncDynamic(comptime D: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            switch (D.backend) {
+            switch (xev.backend) {
                 inline else => |tag| @field(
                     self.backend,
                     @tagName(tag),
@@ -556,7 +556,7 @@ fn AsyncDynamic(comptime D: type) type {
         }
 
         pub fn notify(self: *Self) !void {
-            switch (D.backend) {
+            switch (xev.backend) {
                 inline else => |tag| try @field(
                     self.backend,
                     @tagName(tag),
@@ -566,37 +566,37 @@ fn AsyncDynamic(comptime D: type) type {
 
         pub fn wait(
             self: Self,
-            loop: *D.Loop,
-            c: *D.Completion,
+            loop: *xev.Loop,
+            c: *xev.Completion,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
                 ud: ?*Userdata,
-                l: *D.Loop,
-                c: *D.Completion,
+                l: *xev.Loop,
+                c: *xev.Completion,
                 r: WaitError!void,
-            ) D.CallbackAction,
+            ) xev.CallbackAction,
         ) void {
-            switch (D.backend) {
+            switch (xev.backend) {
                 inline else => |tag| {
                     c.ensureTag(tag);
 
-                    const api = (comptime D.superset(tag)).Api();
+                    const api = (comptime xev.superset(tag)).Api();
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
                             r_inner: api.Async.WaitError!void,
-                        ) D.CallbackAction {
+                        ) xev.CallbackAction {
                             return cb(
                                 ud_inner,
                                 @fieldParentPtr("backend", @as(
-                                    *D.Loop.Union,
+                                    *xev.Loop.Union,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
                                 @fieldParentPtr("value", @as(
-                                    *D.Completion.Union,
+                                    *xev.Completion.Union,
                                     @fieldParentPtr(@tagName(tag), c_inner),
                                 )),
                                 r_inner,
@@ -619,7 +619,7 @@ fn AsyncDynamic(comptime D: type) type {
         }
 
         test {
-            _ = AsyncTests(D, Self);
+            _ = AsyncTests(xev, Self);
         }
     };
 }

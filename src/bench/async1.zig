@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
+//const xev = @import("xev").Dynamic;
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -16,6 +17,7 @@ pub fn main() !void {
 }
 
 pub fn run(comptime thread_count: comptime_int) !void {
+    if (comptime xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
 
