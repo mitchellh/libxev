@@ -150,7 +150,7 @@ export fn xev_timer_run(
         ?*anyopaque,
     ) callconv(.C) xev.CallbackAction,
 ) void {
-    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
+    const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c)));
     extern_c.c_callback = @as(*const anyopaque, @ptrCast(cb));
 
@@ -190,7 +190,7 @@ export fn xev_timer_reset(
         ?*anyopaque,
     ) callconv(.C) xev.CallbackAction,
 ) void {
-    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
+    const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c)));
     extern_c.c_callback = @as(*const anyopaque, @ptrCast(cb));
 
@@ -229,7 +229,7 @@ export fn xev_timer_cancel(
         ?*anyopaque,
     ) callconv(.C) xev.CallbackAction,
 ) void {
-    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
+    const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c_cancel)));
     extern_c.c_callback = @as(*const anyopaque, @ptrCast(cb));
 
@@ -284,7 +284,7 @@ export fn xev_async_wait(
         ?*anyopaque,
     ) callconv(.C) xev.CallbackAction,
 ) void {
-    const Callback = @typeInfo(@TypeOf(cb)).Pointer.child;
+    const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c)));
     extern_c.c_callback = @as(*const anyopaque, @ptrCast(cb));
 
