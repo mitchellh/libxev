@@ -7,6 +7,21 @@ const xev = Backend.default().Api();
 pub usingnamespace xev;
 //pub usingnamespace Epoll;
 
+/// The dynamic interface that allows for runtime selection of the
+/// backend to use. This is useful if you want to support multiple
+/// backends and have a fallback mechanism.
+///
+/// There is a very small overhead to using this API compared to the
+/// static API, but it is generally negligible.
+///
+/// The API for this isn't _exactly_ the same as the static API
+/// since it requires initialization of the main struct to detect
+/// a backend and then this needs to be passed to every high-level
+/// type such as Async, File, etc. so that they can use the correct
+/// backend that is coherent with the loop.
+pub const Dynamic = DynamicXev(Backend.candidates());
+pub const DynamicXev = @import("dynamic.zig").Xev;
+
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed
 /// the proper system APIs must exist. Due to Zig's lazy analysis, if you
@@ -35,15 +50,29 @@ pub const Backend = enum {
 
     /// Returns a recommend default backend from inspecting the system.
     pub fn default() Backend {
-        return @as(?Backend, switch (builtin.os.tag) {
+        return switch (builtin.os.tag) {
             .linux => .io_uring,
             .ios, .macos => .kqueue,
             .wasi => .wasi_poll,
             .windows => .iocp,
-            else => null,
-        }) orelse {
-            @compileLog(builtin.os);
-            @compileError("no default backend for this target");
+            else => {
+                @compileLog(builtin.os);
+                @compileError("no default backend for this target");
+            },
+        };
+    }
+
+    /// Candidate backends for this platform in priority order.
+    pub fn candidates() []const Backend {
+        return switch (builtin.os.tag) {
+            .linux => &.{ .io_uring, .epoll },
+            .ios, .macos => &.{.kqueue},
+            .wasi => &.{.wasi_poll},
+            .windows => &.{.iocp},
+            else => {
+                @compileLog(builtin.os);
+                @compileError("no candidate backends for this target");
+            },
         };
     }
 
@@ -73,10 +102,17 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         const Self = @This();
         const loop = @import("loop.zig");
 
+        /// This is used to detect a static vs dynamic API at comptime.
+        pub const dynamic = false;
+
         /// The backend that this is. This is supplied at comptime so
         /// it is up to the caller to say the right thing. This lets custom
         /// implementations also "quack" like an implementation.
         pub const backend = be;
+
+        /// A function to test if this API is available on the
+        /// current system.
+        pub const available = T.available;
 
         /// The core loop APIs.
         pub const Loop = T.Loop;
@@ -97,6 +133,13 @@ pub fn Xev(comptime be: Backend, comptime T: type) type {
         pub const ShutdownError = T.ShutdownError;
         pub const WriteError = T.WriteError;
         pub const ReadError = T.ReadError;
+
+        /// Shared stream types
+        const SharedStream = stream.Shared(Self);
+        pub const PollError = SharedStream.PollError;
+        pub const PollEvent = SharedStream.PollEvent;
+        pub const WriteQueue = SharedStream.WriteQueue;
+        pub const WriteRequest = SharedStream.WriteRequest;
 
         /// The high-level helper interfaces that make it easier to perform
         /// common tasks. These may not work with all possible Loop implementations.
@@ -148,6 +191,7 @@ test {
     _ = @import("queue.zig");
     _ = @import("queue_mpsc.zig");
     _ = ThreadPool;
+    _ = Dynamic;
 
     // Test the C API
     if (builtin.os.tag != .wasi) _ = @import("c_api.zig");

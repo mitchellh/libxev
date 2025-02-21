@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
+//const xev = @import("xev").Dynamic;
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -13,6 +14,7 @@ pub fn main() !void {
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
 
+    if (xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{
         .entries = std.math.pow(u13, 2, 12),
         .thread_pool = &thread_pool,
@@ -103,7 +105,7 @@ const Client = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.ConnectError!void,
+        r: xev.ConnectError!void,
     ) xev.CallbackAction {
         _ = r catch unreachable;
 
@@ -124,7 +126,7 @@ const Client = struct {
         c: *xev.Completion,
         s: xev.TCP,
         b: xev.WriteBuffer,
-        r: xev.TCP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         _ = r catch unreachable;
         _ = l;
@@ -142,7 +144,7 @@ const Client = struct {
         c: *xev.Completion,
         socket: xev.TCP,
         buf: xev.ReadBuffer,
-        r: xev.TCP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         const self = self_.?;
         const n = r catch unreachable;
@@ -177,7 +179,7 @@ const Client = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.ShutdownError!void,
+        r: xev.ShutdownError!void,
     ) xev.CallbackAction {
         _ = r catch {};
 
@@ -191,7 +193,7 @@ const Client = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.CloseError!void,
+        r: xev.CloseError!void,
     ) xev.CallbackAction {
         _ = l;
         _ = socket;
@@ -255,7 +257,7 @@ const Server = struct {
         self_: ?*Server,
         l: *xev.Loop,
         c: *xev.Completion,
-        r: xev.TCP.AcceptError!xev.TCP,
+        r: xev.AcceptError!xev.TCP,
     ) xev.CallbackAction {
         const self = self_.?;
 
@@ -275,7 +277,7 @@ const Server = struct {
         c: *xev.Completion,
         socket: xev.TCP,
         buf: xev.ReadBuffer,
-        r: xev.TCP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         const self = self_.?;
         const n = r catch |err| switch (err) {
@@ -309,7 +311,7 @@ const Server = struct {
         c: *xev.Completion,
         s: xev.TCP,
         buf: xev.WriteBuffer,
-        r: xev.TCP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         _ = l;
         _ = s;
@@ -331,7 +333,7 @@ const Server = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         s: xev.TCP,
-        r: xev.TCP.ShutdownError!void,
+        r: xev.ShutdownError!void,
     ) xev.CallbackAction {
         _ = r catch {};
 
@@ -345,7 +347,7 @@ const Server = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.CloseError!void,
+        r: xev.CloseError!void,
     ) xev.CallbackAction {
         _ = l;
         _ = r catch unreachable;

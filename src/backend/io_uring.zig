@@ -1,9 +1,28 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
 const queue = @import("../queue.zig");
 const xev = @import("../main.zig").IO_Uring;
+
+/// True if this backend is available on this platform.
+pub fn available() bool {
+    if (comptime builtin.os.tag != .linux) return true;
+
+    // Perform a harmless syscall to determine if we have io_uring support.
+    // We should really only be checking for a subset of possible errors
+    // to determine if io_uring is available but there isn't really a strong
+    // course of action for any other error so we just mark it as unavailable.
+    //
+    // Also, this is a bit expensive -- we could get away with a single
+    // io_uring_register syscall to check for availability but that involves
+    // manually handling errors vs. the tried and true Zig stdlib here.
+    var ring = linux.IoUring.init(256, 0) catch return false;
+    ring.deinit();
+
+    return true;
+}
 
 pub const Loop = struct {
     ring: linux.IoUring,
@@ -68,6 +87,12 @@ pub const Loop = struct {
     /// `run` or `tick` calls are returned.
     pub fn stop(self: *Loop) void {
         self.flags.stopped = true;
+    }
+
+    /// Returns true if the loop is stopped. This may mean there
+    /// are still pending completions to be processed.
+    pub fn stopped(self: *Loop) bool {
+        return self.flags.stopped;
     }
 
     /// Returns the "loop" time in milliseconds. The loop time is updated
@@ -1086,6 +1111,10 @@ test "Completion size" {
 
     // Just so we are aware when we change the size
     try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+}
+
+test "io_uring: available" {
+    try std.testing.expect(available());
 }
 
 test "io_uring: overflow entries count" {

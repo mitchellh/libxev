@@ -6,6 +6,8 @@ const posix = std.posix;
 const common = @import("common.zig");
 
 pub fn Async(comptime xev: type) type {
+    if (xev.dynamic) return AsyncDynamic(xev);
+
     return switch (xev.backend) {
         // Supported, uses eventfd
         .io_uring,
@@ -119,8 +121,9 @@ fn AsyncEventFd(comptime xev: type) type {
             };
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -344,8 +347,9 @@ fn AsyncMachPort(comptime xev: type) type {
             };
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -429,8 +433,9 @@ fn AsyncLoopState(comptime xev: type, comptime threaded: bool) type {
                 self.wakeup = true;
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -470,7 +475,7 @@ fn AsyncIOCP(comptime xev: type) type {
                 r: WaitError!void,
             ) xev.CallbackAction,
         ) void {
-            c.* = xev.Completion{
+            c.* = .{
                 .op = .{ .async_wait = .{} },
                 .userdata = userdata,
                 .callback = (struct {
@@ -513,8 +518,109 @@ fn AsyncIOCP(comptime xev: type) type {
             }
         }
 
-        /// Common tests
-        pub usingnamespace AsyncTests(xev, Self);
+        test {
+            _ = AsyncTests(xev, Self);
+        }
+    };
+}
+
+fn AsyncDynamic(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = xev.Union(&.{"Async"});
+        pub const WaitError = xev.ErrorSet(&.{ "Async", "WaitError" });
+
+        pub fn init() !Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.Async.init(),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (xev.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        pub fn notify(self: *Self) !void {
+            switch (xev.backend) {
+                inline else => |tag| try @field(
+                    self.backend,
+                    @tagName(tag),
+                ).notify(),
+            }
+        }
+
+        pub fn wait(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Async.WaitError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).wait(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = AsyncTests(xev, Self);
+        }
     };
 }
 
@@ -531,7 +637,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait
             var wake: bool = false;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             notifier.wait(&loop, &c_wait, bool, &wake, (struct {
                 fn callback(
                     ud: ?*bool,
@@ -567,7 +673,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait
             var wake: bool = false;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             notifier.wait(&loop, &c_wait, bool, &wake, (struct {
                 fn callback(
                     ud: ?*bool,
@@ -604,7 +710,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
 
             // Wait
             var count: u32 = 0;
-            var c_wait: xev.Completion = undefined;
+            var c_wait: xev.Completion = .{};
             notifier.wait(&loop, &c_wait, u32, &count, (struct {
                 fn callback(
                     ud: ?*u32,

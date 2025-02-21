@@ -13,6 +13,19 @@ const ThreadPool = main.ThreadPool;
 
 const log = std.log.scoped(.libxev_kqueue);
 
+/// True if this backend is available on this platform.
+pub fn available() bool {
+    return switch (builtin.os.tag) {
+        .ios, .macos => true,
+
+        // Technically other BSDs support kqueue but our implementation
+        // below hard requires mach ports currently. That's not a fundamental
+        // requirement but until someone makes this implementation work
+        // on other BSDs we'll just say it isn't available.
+        else => false,
+    };
+}
+
 pub const Loop = struct {
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
     const TaskCompletionQueue = queue_mpsc.Intrusive(Completion);
@@ -111,6 +124,12 @@ pub const Loop = struct {
     /// read/write once any outstanding `run` or `tick` calls are returned.
     pub fn stop(self: *Loop) void {
         self.flags.stopped = true;
+    }
+
+    /// Returns true if the loop is stopped. This may mean there
+    /// are still pending completions to be processed.
+    pub fn stopped(self: *Loop) bool {
+        return self.flags.stopped;
     }
 
     /// Add a completion to the loop. The completion is not started until

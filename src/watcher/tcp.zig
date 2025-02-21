@@ -15,6 +15,11 @@ const ThreadPool = @import("../ThreadPool.zig");
 /// if you have specific needs or want to push for the most optimal performance,
 /// use the platform-specific Loop directly.
 pub fn TCP(comptime xev: type) type {
+    if (xev.dynamic) return TCPDynamic(xev);
+    return TCPStream(xev);
+}
+
+fn TCPStream(comptime xev: type) type {
     return struct {
         const Self = @This();
         const FdType = if (xev.backend == .iocp) std.os.windows.HANDLE else posix.socket_t;
@@ -90,7 +95,7 @@ pub fn TCP(comptime xev: type) type {
                 ud: ?*Userdata,
                 l: *xev.Loop,
                 c: *xev.Completion,
-                r: AcceptError!Self,
+                r: xev.AcceptError!Self,
             ) xev.CallbackAction,
         ) void {
             c.* = .{
@@ -145,7 +150,7 @@ pub fn TCP(comptime xev: type) type {
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: Self,
-                r: ConnectError!void,
+                r: xev.ConnectError!void,
             ) xev.CallbackAction,
         ) void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
@@ -194,7 +199,7 @@ pub fn TCP(comptime xev: type) type {
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: Self,
-                r: ShutdownError!void,
+                r: xev.ShutdownError!void,
             ) xev.CallbackAction,
         ) void {
             c.* = .{
@@ -226,13 +231,270 @@ pub fn TCP(comptime xev: type) type {
             loop.add(c);
         }
 
-        pub const AcceptError = xev.AcceptError;
-        pub const ConnectError = xev.ConnectError;
-        pub const ShutdownError = xev.ShutdownError;
+        test {
+            _ = TCPTests(xev, Self);
+        }
+    };
+}
 
+fn TCPDynamic(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+        const FdType = if (builtin.os.tag == .windows)
+            std.os.windows.HANDLE
+        else
+            posix.socket_t;
+
+        backend: Union,
+
+        pub const Union = xev.Union(&.{"TCP"});
+
+        pub usingnamespace stream.Stream(xev, Self, .{
+            .close = true,
+            .poll = true,
+            .read = .read,
+            .write = .write,
+            .threadpool = true,
+            .type = "TCP",
+        });
+
+        pub fn init(addr: std.net.Address) !Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.TCP.init(addr),
+                    );
+                },
+            } };
+        }
+
+        pub fn initFd(fdvalue: std.posix.pid_t) Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        api.TCP.initFd(fdvalue),
+                    );
+                },
+            } };
+        }
+
+        pub fn bind(self: Self, addr: std.net.Address) !void {
+            switch (xev.backend) {
+                inline else => |tag| try @field(
+                    self.backend,
+                    @tagName(tag),
+                ).bind(addr),
+            }
+        }
+
+        pub fn listen(self: Self, backlog: u31) !void {
+            switch (xev.backend) {
+                inline else => |tag| try @field(
+                    self.backend,
+                    @tagName(tag),
+                ).listen(backlog),
+            }
+        }
+
+        pub fn fd(self: Self) FdType {
+            switch (xev.backend) {
+                inline else => |tag| return @field(
+                    self.backend,
+                    @tagName(tag),
+                ).fd,
+            }
+        }
+
+        pub fn accept(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: xev.AcceptError!Self,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.AcceptError!api.TCP,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                if (r_inner) |tcp|
+                                    initFd(tcp.fd)
+                                else |err|
+                                    err,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).accept(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn connect(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            addr: std.net.Address,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                r: xev.ConnectError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.TCP,
+                            r_inner: api.ConnectError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).connect(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        addr,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn shutdown(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                r: xev.ShutdownError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: api.TCP,
+                            r_inner: api.ShutdownError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).shutdown(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = TCPTests(xev, Self);
+        }
+    };
+}
+
+fn TCPTests(comptime xev: type, comptime Impl: type) type {
+    return struct {
         test "TCP: accept/connect/send/recv/close" {
             // We have no way to get a socket in WASI from a WASI context.
-            if (xev.backend == .wasi_poll) return error.SkipZigTest;
+            if (builtin.os.tag == .wasi) return error.SkipZigTest;
 
             const testing = std.testing;
 
@@ -244,7 +506,7 @@ pub fn TCP(comptime xev: type) type {
 
             // Choose random available port (Zig #14907)
             var address = try std.net.Address.parseIp4("127.0.0.1", 0);
-            const server = try Self.init(address);
+            const server = try Impl.init(address);
 
             // Bind and listen
             try server.bind(address);
@@ -252,26 +514,31 @@ pub fn TCP(comptime xev: type) type {
 
             // Retrieve bound port and initialize client
             var sock_len = address.getOsSockLen();
-            const fd = if (xev.backend == .iocp) @as(std.os.windows.ws2_32.SOCKET, @ptrCast(server.fd)) else server.fd;
+            const fd = if (xev.dynamic)
+                server.fd()
+            else if (xev.backend == .iocp)
+                @as(std.os.windows.ws2_32.SOCKET, @ptrCast(server.fd))
+            else
+                server.fd;
             try posix.getsockname(fd, &address.any, &sock_len);
-            const client = try Self.init(address);
+            const client = try Impl.init(address);
 
             //const address = try std.net.Address.parseIp4("127.0.0.1", 3132);
-            //var server = try Self.init(address);
-            //var client = try Self.init(address);
+            //var server = try Impl.init(address);
+            //var client = try Impl.init(address);
 
             // Completions we need
             var c_accept: xev.Completion = undefined;
             var c_connect: xev.Completion = undefined;
 
             // Accept
-            var server_conn: ?Self = null;
-            server.accept(&loop, &c_accept, ?Self, &server_conn, (struct {
+            var server_conn: ?Impl = null;
+            server.accept(&loop, &c_accept, ?Impl, &server_conn, (struct {
                 fn callback(
-                    ud: ?*?Self,
+                    ud: ?*?Impl,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: AcceptError!Self,
+                    r: xev.AcceptError!Impl,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -285,8 +552,8 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: ConnectError!void,
+                    _: Impl,
+                    r: xev.ConnectError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -306,8 +573,8 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.CloseError!void,
+                    _: Impl,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -324,9 +591,9 @@ pub fn TCP(comptime xev: type) type {
                     _: ?*void,
                     _: *xev.Loop,
                     c: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     _ = c;
                     _ = r catch unreachable;
@@ -342,9 +609,9 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -356,13 +623,13 @@ pub fn TCP(comptime xev: type) type {
             try testing.expectEqualSlices(u8, &send_buf, recv_buf[0..recv_len]);
 
             // Close
-            server_conn.?.close(&loop, &c_accept, ?Self, &server_conn, (struct {
+            server_conn.?.close(&loop, &c_accept, ?Impl, &server_conn, (struct {
                 fn callback(
-                    ud: ?*?Self,
+                    ud: ?*?Impl,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.CloseError!void,
+                    _: Impl,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = null;
@@ -374,8 +641,8 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.CloseError!void,
+                    _: Impl,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = false;
@@ -405,7 +672,7 @@ pub fn TCP(comptime xev: type) type {
         // 6. Assert send_buf == recv_buf
         test "TCP: Queued writes" {
             // We have no way to get a socket in WASI from a WASI context.
-            if (xev.backend == .wasi_poll) return error.SkipZigTest;
+            if (builtin.os.tag == .wasi) return error.SkipZigTest;
             // Windows doesn't seem to respect the SNDBUF socket option.
             if (builtin.os.tag == .windows) return error.SkipZigTest;
 
@@ -419,7 +686,7 @@ pub fn TCP(comptime xev: type) type {
 
             // Choose random available port (Zig #14907)
             var address = try std.net.Address.parseIp4("127.0.0.1", 0);
-            const server = try Self.init(address);
+            const server = try Impl.init(address);
 
             // Bind and listen
             try server.bind(address);
@@ -427,21 +694,24 @@ pub fn TCP(comptime xev: type) type {
 
             // Retrieve bound port and initialize client
             var sock_len = address.getOsSockLen();
-            try posix.getsockname(server.fd, &address.any, &sock_len);
-            const client = try Self.init(address);
+            try posix.getsockname(if (xev.dynamic)
+                server.fd()
+            else
+                server.fd, &address.any, &sock_len);
+            const client = try Impl.init(address);
 
             // Completions we need
             var c_accept: xev.Completion = undefined;
             var c_connect: xev.Completion = undefined;
 
             // Accept
-            var server_conn: ?Self = null;
-            server.accept(&loop, &c_accept, ?Self, &server_conn, (struct {
+            var server_conn: ?Impl = null;
+            server.accept(&loop, &c_accept, ?Impl, &server_conn, (struct {
                 fn callback(
-                    ud: ?*?Self,
+                    ud: ?*?Impl,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: AcceptError!Self,
+                    r: xev.AcceptError!Impl,
                 ) xev.CallbackAction {
                     ud.?.* = r catch unreachable;
                     return .disarm;
@@ -455,8 +725,8 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: ConnectError!void,
+                    _: Impl,
+                    r: xev.ConnectError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -476,8 +746,8 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.CloseError!void,
+                    _: Impl,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -488,7 +758,15 @@ pub fn TCP(comptime xev: type) type {
             try testing.expect(server_closed);
 
             // Unqueued send - Limit send buffer to 8kB, this should force partial writes.
-            try posix.setsockopt(client.fd, posix.SOL.SOCKET, posix.SO.SNDBUF, &std.mem.toBytes(@as(c_int, 8192)));
+            try posix.setsockopt(
+                if (xev.dynamic)
+                    client.fd()
+                else
+                    client.fd,
+                posix.SOL.SOCKET,
+                posix.SO.SNDBUF,
+                &std.mem.toBytes(@as(c_int, 8192)),
+            );
 
             const send_buf = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 } ** 100_000;
             var sent_unqueued: usize = 0;
@@ -500,9 +778,9 @@ pub fn TCP(comptime xev: type) type {
                     sent_unqueued_inner: ?*usize,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     sent_unqueued_inner.?.* = r catch unreachable;
                     return .disarm;
@@ -516,8 +794,8 @@ pub fn TCP(comptime xev: type) type {
             try testing.expect(sent_unqueued < (send_buf.len / 10));
 
             // Set up queued write
-            var w_queue = Self.WriteQueue{};
-            var wr_send: xev.TCP.WriteRequest = undefined;
+            var w_queue = xev.WriteQueue{};
+            var wr_send: xev.WriteRequest = undefined;
             var sent_queued: usize = 0;
             const queued_slice = send_buf[sent_unqueued..];
             client.queueWrite(&loop, &w_queue, &wr_send, .{ .slice = queued_slice }, usize, &sent_queued, (struct {
@@ -525,9 +803,9 @@ pub fn TCP(comptime xev: type) type {
                     sent_queued_inner: ?*usize,
                     l: *xev.Loop,
                     c: *xev.Completion,
-                    tcp: Self,
+                    tcp: Impl,
                     _: xev.WriteBuffer,
-                    r: Self.WriteError!usize,
+                    r: xev.WriteError!usize,
                 ) xev.CallbackAction {
                     sent_queued_inner.?.* = r catch unreachable;
 
@@ -536,8 +814,8 @@ pub fn TCP(comptime xev: type) type {
                             _: ?*void,
                             _: *xev.Loop,
                             _: *xev.Completion,
-                            _: Self,
-                            _: Self.ShutdownError!void,
+                            _: Impl,
+                            _: xev.ShutdownError!void,
                         ) xev.CallbackAction {
                             return .disarm;
                         }
@@ -551,7 +829,7 @@ pub fn TCP(comptime xev: type) type {
             // send buffer
             const Receiver = struct {
                 loop: *xev.Loop,
-                conn: Self,
+                conn: Impl,
                 completion: xev.Completion = .{},
                 buf: [send_buf.len]u8 = undefined,
                 bytes_read: usize = 0,
@@ -569,9 +847,9 @@ pub fn TCP(comptime xev: type) type {
                     receiver_opt: ?*@This(),
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
+                    _: Impl,
                     _: xev.ReadBuffer,
-                    r: Self.ReadError!usize,
+                    r: xev.ReadError!usize,
                 ) xev.CallbackAction {
                     var receiver = receiver_opt.?;
                     const n_bytes = r catch unreachable;
@@ -596,13 +874,13 @@ pub fn TCP(comptime xev: type) type {
             try testing.expect(send_buf.len == sent_unqueued + sent_queued);
 
             // Close
-            server_conn.?.close(&loop, &c_accept, ?Self, &server_conn, (struct {
+            server_conn.?.close(&loop, &c_accept, ?Impl, &server_conn, (struct {
                 fn callback(
-                    ud: ?*?Self,
+                    ud: ?*?Impl,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.CloseError!void,
+                    _: Impl,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = null;
@@ -614,8 +892,8 @@ pub fn TCP(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    _: Self,
-                    r: Self.CloseError!void,
+                    _: Impl,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = false;

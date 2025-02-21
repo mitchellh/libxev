@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
@@ -8,6 +9,11 @@ const heap = @import("../heap.zig");
 const main = @import("../main.zig");
 const xev = main.Epoll;
 const ThreadPool = main.ThreadPool;
+
+/// True if epoll is available on this platform.
+pub fn available() bool {
+    return builtin.os.tag == .linux;
+}
 
 /// Epoll backend.
 ///
@@ -106,6 +112,12 @@ pub const Loop = struct {
     /// read/write once any outstanding `run` or `tick` calls are returned.
     pub fn stop(self: *Loop) void {
         self.flags.stopped = true;
+    }
+
+    /// Returns true if the loop is stopped. This may mean there
+    /// are still pending completions to be processed.
+    pub fn stopped(self: *Loop) bool {
+        return self.flags.stopped;
     }
 
     /// Add a completion to the loop.

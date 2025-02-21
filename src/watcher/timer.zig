@@ -7,6 +7,12 @@ const os = std.os;
 /// repeat by returning "rearm" in the callback or by rescheduling the
 /// start within the callback.
 pub fn Timer(comptime xev: type) type {
+    if (xev.dynamic) return TimerDynamic(xev);
+    return TimerLoop(xev);
+}
+
+/// An implementation that uses the loop timer methods.
+fn TimerLoop(comptime xev: type) type {
     return struct {
         const Self = @This();
 
@@ -214,13 +220,237 @@ pub fn Timer(comptime xev: type) type {
 
         pub const CancelError = xev.CancelError;
 
+        test {
+            _ = TimerTests(xev, Self);
+        }
+    };
+}
+
+fn TimerDynamic(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        backend: Union,
+
+        pub const Union = xev.Union(&.{"Timer"});
+        pub const RunError = xev.ErrorSet(&.{ "Timer", "RunError" });
+        pub const CancelError = xev.ErrorSet(&.{ "Timer", "CancelError" });
+
+        pub fn init() !Self {
+            return .{ .backend = switch (xev.backend) {
+                inline else => |tag| backend: {
+                    const api = (comptime xev.superset(tag)).Api();
+                    break :backend @unionInit(
+                        Union,
+                        @tagName(tag),
+                        try api.Timer.init(),
+                    );
+                },
+            } };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (xev.backend) {
+                inline else => |tag| @field(
+                    self.backend,
+                    @tagName(tag),
+                ).deinit(),
+            }
+        }
+
+        pub fn run(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: RunError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.RunError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).run(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        next_ms,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn reset(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            c_cancel: *xev.Completion,
+            next_ms: u64,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: RunError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+                    c_cancel.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.RunError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).reset(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        &@field(c_cancel.value, @tagName(tag)),
+                        next_ms,
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        pub fn cancel(
+            self: Self,
+            loop: *xev.Loop,
+            c_timer: *xev.Completion,
+            c_cancel: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: CancelError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c_timer.ensureTag(tag);
+                    c_cancel.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            r_inner: api.Timer.CancelError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).cancel(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c_timer.value, @tagName(tag)),
+                        &@field(c_cancel.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+
+        test {
+            _ = TimerTests(
+                xev,
+                Self,
+            );
+        }
+    };
+}
+
+fn TimerTests(
+    comptime xev: type,
+    comptime Impl: type,
+) type {
+    return struct {
         test "timer" {
             const testing = std.testing;
 
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             // Add the timer
@@ -231,7 +461,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -250,7 +480,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             var c_timer: xev.Completion = .{};
@@ -260,7 +490,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -291,7 +521,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             var c_timer: xev.Completion = .{};
@@ -301,7 +531,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -328,7 +558,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             var c_timer: xev.Completion = .{};
@@ -338,7 +568,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
@@ -368,7 +598,7 @@ pub fn Timer(comptime xev: type) type {
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var timer = try init();
+            var timer = try Impl.init();
             defer timer.deinit();
 
             // Add the timer
@@ -379,7 +609,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: RunError!void,
+                    r: Impl.RunError!void,
                 ) xev.CallbackAction {
                     ud.?.* = if (r) false else |err| err == error.Canceled;
                     return .disarm;
@@ -394,7 +624,7 @@ pub fn Timer(comptime xev: type) type {
                     ud: ?*bool,
                     _: *xev.Loop,
                     _: *xev.Completion,
-                    r: CancelError!void,
+                    r: Impl.CancelError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;

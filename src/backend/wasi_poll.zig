@@ -7,6 +7,11 @@ const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
 
+/// True if this backend is available on this platform.
+pub fn available() bool {
+    return builtin.os.tag == .wasi;
+}
+
 pub const Loop = struct {
     pub const threaded = std.Target.wasm.featureSetHas(builtin.cpu.features, .atomics);
     const TimerHeap = heap.Intrusive(Timer, void, Timer.less);
@@ -74,6 +79,12 @@ pub const Loop = struct {
     /// read/write once any outstanding `run` or `tick` calls are returned.
     pub fn stop(self: *Loop) void {
         self.flags.stopped = true;
+    }
+
+    /// Returns true if the loop is stopped. This may mean there
+    /// are still pending completions to be processed.
+    pub fn stopped(self: *Loop) bool {
+        return self.flags.stopped;
     }
 
     /// Add a completion to the loop. This doesn't DO anything except queue

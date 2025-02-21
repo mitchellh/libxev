@@ -4,6 +4,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
+//const xev = @import("xev").Dynamic;
 
 pub const std_options: std.Options = .{
     .log_level = .info,
@@ -18,6 +19,7 @@ pub fn run(comptime count: comptime_int) !void {
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
 
+    if (xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{
         .entries = std.math.pow(u13, 2, 12),
         .thread_pool = &thread_pool,
@@ -109,7 +111,7 @@ const Pinger = struct {
         _: std.net.Address,
         socket: xev.UDP,
         buf: xev.ReadBuffer,
-        r: xev.UDP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         _ = c;
         _ = socket;
@@ -149,7 +151,7 @@ const Pinger = struct {
         _: *xev.UDP.State,
         _: xev.UDP,
         _: xev.WriteBuffer,
-        r: xev.UDP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         const self = self_.?;
 
@@ -169,7 +171,7 @@ const Pinger = struct {
         _: *xev.Loop,
         _: *xev.Completion,
         _: xev.UDP,
-        r: xev.UDP.CloseError!void,
+        r: xev.CloseError!void,
     ) xev.CallbackAction {
         _ = r catch unreachable;
         return .disarm;

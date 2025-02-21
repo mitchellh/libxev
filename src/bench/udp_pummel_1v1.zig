@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 const Instant = std.time.Instant;
 const xev = @import("xev");
+//const xev = @import("xev").Dynamic;
 
 const EXPECTED = "RANG TANG DING DONG I AM THE JAPANESE SANDMAN";
 
@@ -27,6 +28,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
 
+    if (xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{
         .entries = std.math.pow(u13, 2, 12),
         .thread_pool = &thread_pool,
@@ -96,7 +98,7 @@ const Sender = struct {
         _: *xev.UDP.State,
         _: xev.UDP,
         _: xev.WriteBuffer,
-        r: xev.UDP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         _ = r catch unreachable;
 
@@ -126,7 +128,7 @@ const Receiver = struct {
         _: std.net.Address,
         _: xev.UDP,
         b: xev.ReadBuffer,
-        r: xev.UDP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         const n = r catch |err| {
             switch (err) {
