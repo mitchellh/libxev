@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const dynamic = @import("dynamic.zig");
 
 /// The low-level IO interfaces using the recommended compile-time
 /// interface for the target system.
@@ -20,7 +19,8 @@ pub usingnamespace xev;
 /// a backend and then this needs to be passed to every high-level
 /// type such as Async, File, etc. so that they can use the correct
 /// backend that is coherent with the loop.
-pub const Dynamic = dynamic.Xev(Backend.candidates());
+pub const dynamic = DynamicXev(Backend.candidates());
+pub const DynamicXev = @import("dynamic.zig").Xev;
 
 /// System-specific interfaces. Note that they are always pub for
 /// all systems but if you reference them and force them to be analyzed
@@ -191,7 +191,7 @@ test {
     _ = @import("queue.zig");
     _ = @import("queue_mpsc.zig");
     _ = ThreadPool;
-    _ = Dynamic;
+    _ = dynamic;
 
     // Test the C API
     if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
