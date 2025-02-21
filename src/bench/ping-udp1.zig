@@ -109,7 +109,7 @@ const Pinger = struct {
         _: std.net.Address,
         socket: xev.UDP,
         buf: xev.ReadBuffer,
-        r: xev.UDP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         _ = c;
         _ = socket;
@@ -149,7 +149,7 @@ const Pinger = struct {
         _: *xev.UDP.State,
         _: xev.UDP,
         _: xev.WriteBuffer,
-        r: xev.UDP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         const self = self_.?;
 

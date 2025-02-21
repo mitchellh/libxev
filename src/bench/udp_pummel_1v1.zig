@@ -96,7 +96,7 @@ const Sender = struct {
         _: *xev.UDP.State,
         _: xev.UDP,
         _: xev.WriteBuffer,
-        r: xev.UDP.WriteError!usize,
+        r: xev.WriteError!usize,
     ) xev.CallbackAction {
         _ = r catch unreachable;
 
@@ -126,7 +126,7 @@ const Receiver = struct {
         _: std.net.Address,
         _: xev.UDP,
         b: xev.ReadBuffer,
-        r: xev.UDP.ReadError!usize,
+        r: xev.ReadError!usize,
     ) xev.CallbackAction {
         const n = r catch |err| {
             switch (err) {
