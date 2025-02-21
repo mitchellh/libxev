@@ -110,7 +110,8 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             inline for (bes) |candidate| {
                 if (candidate == be) {
                     const api = candidate.Api();
-                    if (api.available()) backend = subset(candidate);
+                    if (!api.available()) return false;
+                    backend = subset(candidate);
                     return true;
                 }
             }
