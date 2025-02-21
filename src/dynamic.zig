@@ -106,14 +106,16 @@ pub fn Xev(comptime bes: []const AllBackend) type {
 
         /// Manually set the backend to use, but if the backend is not
         /// available, this will not change the backend in use.
-        pub fn prefer(be: AllBackend) void {
+        pub fn prefer(be: AllBackend) bool {
             inline for (bes) |candidate| {
                 if (candidate == be) {
                     const api = candidate.Api();
                     if (api.available()) backend = subset(candidate);
-                    return;
+                    return true;
                 }
             }
+
+            return false;
         }
 
         pub const Loop = struct {
@@ -214,7 +216,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
 
         test "prefer" {
             const testing = std.testing;
-            prefer(bes[0]);
+            try testing.expect(prefer(bes[0]));
             inline for (bes) |be| {
                 if (@intFromEnum(be) == @intFromEnum(backend)) {
                     try testing.expect(be.Api().available());
