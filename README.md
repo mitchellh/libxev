@@ -7,13 +7,12 @@ written in [Zig](https://ziglang.org/) but exports a C-compatible API (which
 further makes it compatible with any language out there that can communicate
 with C APIs).
 
-**Project Status: 🐲 Unstable, alpha-ish quality.** The feature list is quite
-good across multiple platforms, but there are plenty of missing features.
-The project hasn't been well tested in real-world environments and there
-are lots of low-hanging fruit for performance optimization. I'm not promising
-any API compatibility at this point, either. If you want a production ready,
-high quality, generalized event loop implementation check out
-[libuv](https://libuv.org/), libev, etc.
+**Project Status: Stable for most use cases.** libxev is in daily use by
+large projects such as [Ghostty](https://ghostty.org), 
+[zml](https://github.com/zml/zml), and more. For most use cases, libxev
+has been shown to be stable at scale. libxev has a broad featureset and
+there are likely less well-used corners of the library, but for most
+use cases libxev is already heavily used in production environments.
 
 **Why a new event loop library?** A few reasons. One, I think Zig lacks
 a generalized event loop comparable to libuv in features ("generalized"
