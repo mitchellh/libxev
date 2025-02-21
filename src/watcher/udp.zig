@@ -752,7 +752,7 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: Impl,
-                    r: Impl.CloseError!void,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;
@@ -764,7 +764,7 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
                     _: *xev.Loop,
                     _: *xev.Completion,
                     _: Impl,
-                    r: Impl.CloseError!void,
+                    r: xev.CloseError!void,
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     return .disarm;

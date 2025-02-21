@@ -169,7 +169,7 @@ const Pinger = struct {
         _: *xev.Loop,
         _: *xev.Completion,
         _: xev.UDP,
-        r: xev.UDP.CloseError!void,
+        r: xev.CloseError!void,
     ) xev.CallbackAction {
         _ = r catch unreachable;
         return .disarm;

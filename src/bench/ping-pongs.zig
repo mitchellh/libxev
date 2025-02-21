@@ -103,7 +103,7 @@ const Client = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.ConnectError!void,
+        r: xev.ConnectError!void,
     ) xev.CallbackAction {
         _ = r catch unreachable;
 
@@ -177,7 +177,7 @@ const Client = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.ShutdownError!void,
+        r: xev.ShutdownError!void,
     ) xev.CallbackAction {
         _ = r catch {};
 
@@ -191,7 +191,7 @@ const Client = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.CloseError!void,
+        r: xev.CloseError!void,
     ) xev.CallbackAction {
         _ = l;
         _ = socket;
@@ -255,7 +255,7 @@ const Server = struct {
         self_: ?*Server,
         l: *xev.Loop,
         c: *xev.Completion,
-        r: xev.TCP.AcceptError!xev.TCP,
+        r: xev.AcceptError!xev.TCP,
     ) xev.CallbackAction {
         const self = self_.?;
 
@@ -331,7 +331,7 @@ const Server = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         s: xev.TCP,
-        r: xev.TCP.ShutdownError!void,
+        r: xev.ShutdownError!void,
     ) xev.CallbackAction {
         _ = r catch {};
 
@@ -345,7 +345,7 @@ const Server = struct {
         l: *xev.Loop,
         c: *xev.Completion,
         socket: xev.TCP,
-        r: xev.TCP.CloseError!void,
+        r: xev.CloseError!void,
     ) xev.CallbackAction {
         _ = l;
         _ = r catch unreachable;

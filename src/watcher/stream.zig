@@ -303,14 +303,70 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
 }
 
 pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options) type {
-    _ = options;
+    if (xev.dynamic) return struct {
+        const Self = T;
 
-    if (xev.dynamic) return struct {};
+        pub fn close(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                s: Self,
+                r: xev.CloseError!void,
+            ) xev.CallbackAction,
+        ) void {
+            switch (xev.backend) {
+                inline else => |tag| {
+                    c.ensureTag(tag);
+
+                    const api = (comptime xev.superset(tag)).Api();
+                    const BackendSelf = @field(api, options.type.?);
+                    const api_cb = (struct {
+                        fn callback(
+                            ud_inner: ?*Userdata,
+                            l_inner: *api.Loop,
+                            c_inner: *api.Completion,
+                            s_inner: BackendSelf,
+                            r_inner: api.CloseError!void,
+                        ) xev.CallbackAction {
+                            return cb(
+                                ud_inner,
+                                @fieldParentPtr("backend", @as(
+                                    *xev.Loop.Union,
+                                    @fieldParentPtr(@tagName(tag), l_inner),
+                                )),
+                                @fieldParentPtr("value", @as(
+                                    *xev.Completion.Union,
+                                    @fieldParentPtr(@tagName(tag), c_inner),
+                                )),
+                                Self.initFd(s_inner.fd),
+                                r_inner,
+                            );
+                        }
+                    }).callback;
+
+                    @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).close(
+                        &@field(loop.backend, @tagName(tag)),
+                        &@field(c.value, @tagName(tag)),
+                        Userdata,
+                        userdata,
+                        api_cb,
+                    );
+                },
+            }
+        }
+    };
 
     return struct {
         const Self = T;
-
-        pub const CloseError = xev.CloseError;
 
         /// Close the socket.
         pub fn close(
@@ -324,7 +380,7 @@ pub fn Closeable(comptime xev: type, comptime T: type, comptime options: Options
                 l: *xev.Loop,
                 c: *xev.Completion,
                 s: Self,
-                r: CloseError!void,
+                r: xev.CloseError!void,
             ) xev.CallbackAction,
         ) void {
             c.* = .{
