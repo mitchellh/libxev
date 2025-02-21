@@ -19,7 +19,7 @@ pub usingnamespace xev;
 /// a backend and then this needs to be passed to every high-level
 /// type such as Async, File, etc. so that they can use the correct
 /// backend that is coherent with the loop.
-pub const dynamic = DynamicXev(Backend.candidates());
+pub const Dynamic = DynamicXev(Backend.candidates());
 pub const DynamicXev = @import("dynamic.zig").Xev;
 
 /// System-specific interfaces. Note that they are always pub for
@@ -191,7 +191,7 @@ test {
     _ = @import("queue.zig");
     _ = @import("queue_mpsc.zig");
     _ = ThreadPool;
-    _ = dynamic;
+    _ = Dynamic;
 
     // Test the C API
     if (builtin.os.tag != .wasi) _ = @import("c_api.zig");
