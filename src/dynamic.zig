@@ -134,6 +134,15 @@ pub fn Xev(comptime bes: []const AllBackend) type {
                 }
             }
 
+            pub fn stopped(self: *Loop) bool {
+                return switch (backend) {
+                    inline else => |tag| @field(
+                        self.backend,
+                        @tagName(tag),
+                    ).stopped(),
+                };
+            }
+
             pub fn run(self: *Loop, mode: RunMode) !void {
                 switch (backend) {
                     inline else => |tag| try @field(
@@ -191,6 +200,7 @@ pub fn Xev(comptime bes: []const AllBackend) type {
             defer l.deinit();
             try l.run(.until_done);
             l.stop();
+            try std.testing.expect(l.stopped());
         }
     };
 }

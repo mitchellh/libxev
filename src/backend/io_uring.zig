@@ -89,6 +89,12 @@ pub const Loop = struct {
         self.flags.stopped = true;
     }
 
+    /// Returns true if the loop is stopped. This may mean there
+    /// are still pending completions to be processed.
+    pub fn stopped(self: *Loop) bool {
+        return self.flags.stopped;
+    }
+
     /// Returns the "loop" time in milliseconds. The loop time is updated
     /// once per loop tick, before IO polling occurs. It remains constant
     /// throughout callback execution.

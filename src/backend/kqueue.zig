@@ -126,6 +126,12 @@ pub const Loop = struct {
         self.flags.stopped = true;
     }
 
+    /// Returns true if the loop is stopped. This may mean there
+    /// are still pending completions to be processed.
+    pub fn stopped(self: *Loop) bool {
+        return self.flags.stopped;
+    }
+
     /// Add a completion to the loop. The completion is not started until
     /// the loop is run (`run`, `tick`) or an explicit submission request
     /// is made (`submit`).
