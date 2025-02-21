@@ -2,7 +2,8 @@ const dynamicpkg = @This();
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
-const AllBackend = @import("main.zig").Backend;
+const main = @import("main.zig");
+const AllBackend = main.Backend;
 const looppkg = @import("loop.zig");
 
 /// Creates the Xev API based on a set of backend types that allows
@@ -49,6 +50,11 @@ pub fn Xev(comptime bes: []const AllBackend) type {
         /// Backend becomes the subset of the full xev.Backend that
         /// is available to this dynamic API.
         pub const Backend = EnumSubset(AllBackend, bes);
+
+        /// Forward some global types so that users can replace
+        /// @import("xev") with the dynamic package and everything
+        /// works.
+        pub const ThreadPool = main.ThreadPool;
 
         /// The shared structures
         pub const Options = looppkg.Options;
