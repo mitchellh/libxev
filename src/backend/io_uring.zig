@@ -8,7 +8,7 @@ const xev = @import("../main.zig").IO_Uring;
 
 /// True if this backend is available on this platform.
 pub fn available() bool {
-    if (comptime builtin.os.tag != .linux) return true;
+    if (comptime builtin.os.tag != .linux) return false;
 
     // Perform a harmless syscall to determine if we have io_uring support.
     // We should really only be checking for a subset of possible errors
