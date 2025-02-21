@@ -1,6 +1,12 @@
 .{
     .name = "libxev",
     .minimum_zig_version = "0.12.0-dev.3191+9cf28d1e9",
-    .paths = .{""},
+    .paths = .{
+        "README.md",
+        "LICENSE",
+        "build.zig",
+        "build.zig.zon",
+        "src/",
+    },
     .version = "0.0.0",
 }
