@@ -226,20 +226,20 @@ fn TimerLoop(comptime xev: type) type {
     };
 }
 
-fn TimerDynamic(comptime dynamic: type) type {
+fn TimerDynamic(comptime xev: type) type {
     return struct {
         const Self = @This();
 
         backend: Union,
 
-        pub const Union = dynamic.Union(&.{"Timer"});
-        pub const RunError = dynamic.ErrorSet(&.{ "Timer", "RunError" });
-        pub const CancelError = dynamic.ErrorSet(&.{ "Timer", "CancelError" });
+        pub const Union = xev.Union(&.{"Timer"});
+        pub const RunError = xev.ErrorSet(&.{ "Timer", "RunError" });
+        pub const CancelError = xev.ErrorSet(&.{ "Timer", "CancelError" });
 
         pub fn init() !Self {
-            return .{ .backend = switch (dynamic.backend) {
+            return .{ .backend = switch (xev.backend) {
                 inline else => |tag| backend: {
-                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api = (comptime xev.superset(tag)).Api();
                     break :backend @unionInit(
                         Union,
                         @tagName(tag),
@@ -250,7 +250,7 @@ fn TimerDynamic(comptime dynamic: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            switch (dynamic.backend) {
+            switch (xev.backend) {
                 inline else => |tag| @field(
                     self.backend,
                     @tagName(tag),
@@ -260,38 +260,38 @@ fn TimerDynamic(comptime dynamic: type) type {
 
         pub fn run(
             self: Self,
-            loop: *dynamic.Loop,
-            c: *dynamic.Completion,
+            loop: *xev.Loop,
+            c: *xev.Completion,
             next_ms: u64,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
                 ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
+                l: *xev.Loop,
+                c: *xev.Completion,
                 r: RunError!void,
-            ) dynamic.CallbackAction,
+            ) xev.CallbackAction,
         ) void {
-            switch (dynamic.backend) {
+            switch (xev.backend) {
                 inline else => |tag| {
                     c.ensureTag(tag);
 
-                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api = (comptime xev.superset(tag)).Api();
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
                             r_inner: api.Timer.RunError!void,
-                        ) dynamic.CallbackAction {
+                        ) xev.CallbackAction {
                             return cb(
                                 ud_inner,
                                 @fieldParentPtr("backend", @as(
-                                    *dynamic.Loop.Union,
+                                    *xev.Loop.Union,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
                                 @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.Union,
+                                    *xev.Completion.Union,
                                     @fieldParentPtr(@tagName(tag), c_inner),
                                 )),
                                 r_inner,
@@ -316,40 +316,40 @@ fn TimerDynamic(comptime dynamic: type) type {
 
         pub fn reset(
             self: Self,
-            loop: *dynamic.Loop,
-            c: *dynamic.Completion,
-            c_cancel: *dynamic.Completion,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            c_cancel: *xev.Completion,
             next_ms: u64,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
                 ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
+                l: *xev.Loop,
+                c: *xev.Completion,
                 r: RunError!void,
-            ) dynamic.CallbackAction,
+            ) xev.CallbackAction,
         ) void {
-            switch (dynamic.backend) {
+            switch (xev.backend) {
                 inline else => |tag| {
                     c.ensureTag(tag);
                     c_cancel.ensureTag(tag);
 
-                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api = (comptime xev.superset(tag)).Api();
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
                             r_inner: api.Timer.RunError!void,
-                        ) dynamic.CallbackAction {
+                        ) xev.CallbackAction {
                             return cb(
                                 ud_inner,
                                 @fieldParentPtr("backend", @as(
-                                    *dynamic.Loop.Union,
+                                    *xev.Loop.Union,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
                                 @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.Union,
+                                    *xev.Completion.Union,
                                     @fieldParentPtr(@tagName(tag), c_inner),
                                 )),
                                 r_inner,
@@ -375,39 +375,39 @@ fn TimerDynamic(comptime dynamic: type) type {
 
         pub fn cancel(
             self: Self,
-            loop: *dynamic.Loop,
-            c_timer: *dynamic.Completion,
-            c_cancel: *dynamic.Completion,
+            loop: *xev.Loop,
+            c_timer: *xev.Completion,
+            c_cancel: *xev.Completion,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
                 ud: ?*Userdata,
-                l: *dynamic.Loop,
-                c: *dynamic.Completion,
+                l: *xev.Loop,
+                c: *xev.Completion,
                 r: CancelError!void,
-            ) dynamic.CallbackAction,
+            ) xev.CallbackAction,
         ) void {
-            switch (dynamic.backend) {
+            switch (xev.backend) {
                 inline else => |tag| {
                     c_timer.ensureTag(tag);
                     c_cancel.ensureTag(tag);
 
-                    const api = (comptime dynamic.superset(tag)).Api();
+                    const api = (comptime xev.superset(tag)).Api();
                     const api_cb = (struct {
                         fn callback(
                             ud_inner: ?*Userdata,
                             l_inner: *api.Loop,
                             c_inner: *api.Completion,
                             r_inner: api.Timer.CancelError!void,
-                        ) dynamic.CallbackAction {
+                        ) xev.CallbackAction {
                             return cb(
                                 ud_inner,
                                 @fieldParentPtr("backend", @as(
-                                    *dynamic.Loop.Union,
+                                    *xev.Loop.Union,
                                     @fieldParentPtr(@tagName(tag), l_inner),
                                 )),
                                 @fieldParentPtr("value", @as(
-                                    *dynamic.Completion.Union,
+                                    *xev.Completion.Union,
                                     @fieldParentPtr(@tagName(tag), c_inner),
                                 )),
                                 r_inner,
@@ -432,7 +432,7 @@ fn TimerDynamic(comptime dynamic: type) type {
 
         test {
             _ = TimerTests(
-                dynamic,
+                xev,
                 Self,
             );
         }
