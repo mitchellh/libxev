@@ -90,7 +90,7 @@ test Intrusive {
     q.init();
 
     // Elems
-    var elems: [10]Elem = .{.{}} ** 10;
+    var elems: [10]Elem = .{Elem{}} ** 10;
 
     // One
     try testing.expect(q.pop() == null);
