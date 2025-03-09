@@ -848,18 +848,10 @@ pub const Loop = struct {
         // needs to be removed.
         completion.op.async_wait.wakeup.store(true, .seq_cst);
 
-        const result = windows.kernel32.PostQueuedCompletionStatus(
-            self.iocp_handle,
-            0,
-            0,
-            null,
-        );
-
-        // NOTE(Corendos): if something goes wrong, ignore it for the moment.
-        if (result == windows.FALSE) {
-            const err = windows.kernel32.GetLastError();
-            windows.unexpectedError(err) catch {};
-        }
+        // NOTE: This call can fail but errors are not documented, so we log the error here.
+        windows.PostQueuedCompletionStatus(self.iocp_handle, 0, 0, null) catch |err| {
+            log.warn("unexpected async_notify error={}", .{err});
+        };
     }
 
     /// Associate a handler to the internal completion port.
