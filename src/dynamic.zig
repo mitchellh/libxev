@@ -433,8 +433,8 @@ fn EnumSubset(comptime T: type, comptime values: []const T) type {
         .value = @intFromEnum(value),
     };
 
-    return @Type(.{ .Enum = .{
-        .tag_type = @typeInfo(T).Enum.tag_type,
+    return @Type(.{ .@"enum" = .{
+        .tag_type = @typeInfo(T).@"enum".tag_type,
         .fields = &fields,
         .decls = &.{},
         .is_exhaustive = true,
@@ -491,7 +491,7 @@ fn Union(
     }
 
     return @Type(.{
-        .Union = .{
+        .@"union" = .{
             .layout = .auto,
             .tag_type = if (tagged) EnumSubset(
                 AllBackend,

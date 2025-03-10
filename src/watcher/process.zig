@@ -183,7 +183,7 @@ fn ProcessKqueue(comptime xev: type) type {
                 .op = .{
                     .proc = .{
                         .pid = self.pid,
-                        .flags = posix.system.NOTE_EXIT | posix.system.NOTE_EXITSTATUS,
+                        .flags = std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
                     },
                 },
 
@@ -251,7 +251,7 @@ fn ProcessIocp(comptime xev: type) type {
             if (dup_result == 0) return windows.unexpectedError(windows.kernel32.GetLastError());
 
             const job = try windows.exp.CreateJobObject(null, null);
-            errdefer _ = windows.kernel32.CloseHandle(job);
+            errdefer _ = windows.CloseHandle(job);
 
             try windows.exp.AssignProcessToJobObject(job, dup_process);
 
@@ -262,8 +262,8 @@ fn ProcessIocp(comptime xev: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            _ = windows.kernel32.CloseHandle(self.job);
-            _ = windows.kernel32.CloseHandle(self.process);
+            _ = windows.CloseHandle(self.job);
+            _ = windows.CloseHandle(self.process);
         }
 
         pub fn wait(

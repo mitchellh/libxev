@@ -26,9 +26,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 0
 
     # Install Nix and use that to run our tests so our environment matches exactly.
     - uses: cachix/install-nix-action@v30
@@ -51,9 +48,6 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 0
 
     # Install Nix and use that to run our tests so our environment matches exactly.
     - uses: cachix/install-nix-action@v30
@@ -72,7 +66,7 @@ jobs:
     #   run: nix develop -c zig build test -Dtarget=wasm32-wasi -fwasmtime --summary all
 
     - name: build all benchmarks and examples
-      run: nix develop -c zig build -Dexample -Dbench --summary all
+      run: nix develop -c zig build -Demit-example -Demit-bench --summary all
 
     # Run a full build to ensure that works
     - run: nix build
@@ -85,17 +79,14 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 0
 
     - name: Install zig
       uses: goto-bus-stop/setup-zig@v2
       with:
-        version: 0.13.0
+        version: 0.14.0
 
     - name: test
       run: zig build test --summary all
 
     - name: build all benchmarks and examples
-      run: zig build -Dexample -Dbench --summary all
+      run: zig build -Demit-example -Demit-bench --summary all

@@ -24,7 +24,7 @@
       # Other overlays
       (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
-        zig = inputs.zig.packages.${prev.system}."0.13.0";
+        zig = inputs.zig.packages.${prev.system}."0.14.0";
 
         # Latest versions
         wasmtime = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmtime;
