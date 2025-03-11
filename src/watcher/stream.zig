@@ -129,7 +129,7 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
         comptime {
             for (xev.candidates) |be| {
                 const CandidateT = @field(be.Api(), options.type.?);
-                const info = @typeInfo(CandidateT).Struct;
+                const info = @typeInfo(CandidateT).@"struct";
                 for (info.decls) |decl| {
                     if (std.mem.eql(u8, decl.name, "poll")) break;
                 } else return struct {};

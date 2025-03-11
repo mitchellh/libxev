@@ -73,7 +73,7 @@ test Intrusive {
     try testing.expect(q.empty());
 
     // Elems
-    var elems: [10]Elem = .{.{}} ** 10;
+    var elems: [10]Elem = .{Elem{}} ** 10;
 
     // One
     try testing.expect(q.pop() == null);

@@ -8,7 +8,7 @@ further makes it compatible with any language out there that can communicate
 with C APIs).
 
 **Project Status: Stable for most use cases.** libxev is in daily use by
-large projects such as [Ghostty](https://ghostty.org), 
+large projects such as [Ghostty](https://ghostty.org),
 [zml](https://github.com/zml/zml), and more. For most use cases, libxev
 has been shown to be stable at scale. libxev has a broad featureset and
 there are likely less well-used corners of the library, but for most
@@ -271,7 +271,7 @@ directory.
 
 # Build
 
-Build requires the installation of the Zig 0.13.0. libxev follows stable
+Build requires the installation of the Zig 0.14.0. libxev follows stable
 Zig releases and generally does not support nightly builds. When a stable
 release is imminent we may have a branch that supports it.
 **libxev has no other build dependencies.**

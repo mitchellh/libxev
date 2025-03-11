@@ -1,6 +1,7 @@
 .{
-    .name = "libxev",
-    .minimum_zig_version = "0.12.0-dev.3191+9cf28d1e9",
-    .paths = .{""},
+    .name = .libxev,
+    .minimum_zig_version = "0.14.0",
     .version = "0.0.0",
+    .fingerprint = 0x30f7363573edabf3,
+    .paths = .{""},
 }
