@@ -624,7 +624,7 @@ pub const Loop = struct {
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
                         .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .send = error.Canceled } },
-                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .send = error.ConnectionReset } },
+                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .send = error.ConnectionResetByPeer } },
                         else => .{ .result = .{ .send = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -652,7 +652,7 @@ pub const Loop = struct {
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
                         .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .recv = error.Canceled } },
-                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .recv = error.ConnectionReset } },
+                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .recv = error.ConnectionResetByPeer } },
                         else => .{ .result = .{ .recv = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -679,7 +679,7 @@ pub const Loop = struct {
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
                         .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .sendto = error.Canceled } },
-                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .sendto = error.ConnectionReset } },
+                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .sendto = error.ConnectionResetByPeer } },
                         else => .{ .result = .{ .sendto = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -709,7 +709,7 @@ pub const Loop = struct {
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
                         .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .recvfrom = error.Canceled } },
-                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .recvfrom = error.ConnectionReset } },
+                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .recvfrom = error.ConnectionResetByPeer } },
                         else => .{ .result = .{ .recvfrom = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -1049,7 +1049,7 @@ pub const Completion = struct {
                     break :r .{
                         .send = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
-                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionReset,
+                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
@@ -1068,7 +1068,7 @@ pub const Completion = struct {
                     break :r .{
                         .recv = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
-                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionReset,
+                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
@@ -1103,7 +1103,7 @@ pub const Completion = struct {
                     break :r .{
                         .sendto = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
-                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionReset,
+                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
@@ -1122,7 +1122,7 @@ pub const Completion = struct {
                     break :r .{
                         .recvfrom = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
-                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionReset,
+                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
@@ -1351,14 +1351,14 @@ pub const ShutdownError = posix.ShutdownError || error{
 
 pub const WriteError = windows.WriteFileError || error{
     Canceled,
-    ConnectionReset,
+    ConnectionResetByPeer,
     Unexpected,
 };
 
 pub const ReadError = windows.ReadFileError || error{
     EOF,
     Canceled,
-    ConnectionReset,
+    ConnectionResetByPeer,
     Unexpected,
 };
 
