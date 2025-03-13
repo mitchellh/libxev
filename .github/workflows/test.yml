@@ -4,7 +4,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [namespace-profile-mitchellh-sm]
 
         target: [
           aarch64-linux-gnu,
@@ -23,9 +23,19 @@ jobs:
         ]
     runs-on: ${{ matrix.os }}
     needs: [test-x86_64-linux, test-x86_64-windows]
+    env:
+      ZIG_LOCAL_CACHE_DIR: /zig/local-cache
+      ZIG_GLOBAL_CACHE_DIR: /zig/global-cache
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+
+    - name: Setup Cache
+      uses: namespacelabs/nscloud-cache-action@v1.2.0
+      with:
+        path: |
+          /nix
+          /zig
 
     # Install Nix and use that to run our tests so our environment matches exactly.
     - uses: cachix/install-nix-action@v31
@@ -43,13 +53,22 @@ jobs:
   test-x86_64-linux:
     strategy:
       matrix:
-        os: [ubuntu-latest]
+        os: [namespace-profile-mitchellh-sm]
     runs-on: ${{ matrix.os }}
+    env:
+      ZIG_LOCAL_CACHE_DIR: /zig/local-cache
+      ZIG_GLOBAL_CACHE_DIR: /zig/global-cache
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # Install Nix and use that to run our tests so our environment matches exactly.
+    - name: Setup Cache
+      uses: namespacelabs/nscloud-cache-action@v1.2.0
+      with:
+        path: |
+          /nix
+          /zig
+
     - uses: cachix/install-nix-action@v31
       with:
         nix_path: nixpkgs=channel:nixos-unstable
