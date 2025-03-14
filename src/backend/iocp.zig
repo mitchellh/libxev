@@ -848,18 +848,10 @@ pub const Loop = struct {
         // needs to be removed.
         completion.op.async_wait.wakeup.store(true, .seq_cst);
 
-        const result = windows.kernel32.PostQueuedCompletionStatus(
-            self.iocp_handle,
-            0,
-            0,
-            null,
-        );
-
-        // NOTE(Corendos): if something goes wrong, ignore it for the moment.
-        if (result == windows.FALSE) {
-            const err = windows.kernel32.GetLastError();
-            windows.unexpectedError(err) catch {};
-        }
+        // NOTE: This call can fail but errors are not documented, so we log the error here.
+        windows.PostQueuedCompletionStatus(self.iocp_handle, 0, 0, null) catch |err| {
+            log.warn("unexpected async_notify error={}", .{err});
+        };
     }
 
     /// Associate a handler to the internal completion port.
@@ -966,7 +958,7 @@ pub const Completion = struct {
                 unreachable;
             },
 
-            .accept => |*v| r: {
+            .accept => |*v| {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
                 const result = windows.ws2_32.WSAGetOverlappedResult(asSocket(v.socket), &self.overlapped, &bytes_transferred, windows.FALSE, &flags);
@@ -980,65 +972,71 @@ pub const Completion = struct {
                         },
                     };
                     windows.CloseHandle(v.internal_accept_socket.?);
-                    break :r r;
+                    return r;
                 }
 
-                break :r .{ .accept = self.op.accept.internal_accept_socket.? };
+                return .{ .accept = self.op.accept.internal_accept_socket.? };
             },
 
-            .read => |*v| r: {
+            .read => |*v| {
                 var bytes_transferred: windows.DWORD = 0;
                 const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
                     const err = windows.kernel32.GetLastError();
-                    break :r .{ .read = switch (err) {
+                    return .{ .read = switch (err) {
                         windows.Win32Error.OPERATION_ABORTED => error.Canceled,
                         else => error.Unexpected,
                     } };
                 }
-                break :r .{ .read = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .read = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .pread => |*v| r: {
+            .pread => |*v| {
                 var bytes_transferred: windows.DWORD = 0;
                 const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
                     const err = windows.kernel32.GetLastError();
-                    break :r .{ .read = switch (err) {
-                        windows.Win32Error.OPERATION_ABORTED => error.Canceled,
-                        else => error.Unexpected,
-                    } };
+                    return .{
+                        .read = switch (err) {
+                            windows.Win32Error.OPERATION_ABORTED => error.Canceled,
+                            else => error.Unexpected,
+                        },
+                    };
                 }
-                break :r .{ .pread = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .pread = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .write => |*v| r: {
+            .write => |*v| {
                 var bytes_transferred: windows.DWORD = 0;
                 const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
                     const err = windows.kernel32.GetLastError();
-                    break :r .{ .write = switch (err) {
-                        windows.Win32Error.OPERATION_ABORTED => error.Canceled,
-                        else => error.Unexpected,
-                    } };
+                    return .{
+                        .write = switch (err) {
+                            windows.Win32Error.OPERATION_ABORTED => error.Canceled,
+                            else => error.Unexpected,
+                        },
+                    };
                 }
-                break :r .{ .write = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .write = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .pwrite => |*v| r: {
+            .pwrite => |*v| {
                 var bytes_transferred: windows.DWORD = 0;
                 const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
                     const err = windows.kernel32.GetLastError();
-                    break :r .{ .write = switch (err) {
-                        windows.Win32Error.OPERATION_ABORTED => error.Canceled,
-                        else => error.Unexpected,
-                    } };
+                    return .{
+                        .write = switch (err) {
+                            windows.Win32Error.OPERATION_ABORTED => error.Canceled,
+                            else => error.Unexpected,
+                        },
+                    };
                 }
-                break :r .{ .pwrite = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .pwrite = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .send => |*v| r: {
+            .send => |*v| {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
 
@@ -1046,7 +1044,7 @@ pub const Completion = struct {
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    break :r .{
+                    return .{
                         .send = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
                             .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
@@ -1054,10 +1052,10 @@ pub const Completion = struct {
                         },
                     };
                 }
-                break :r .{ .send = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .send = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .recv => |*v| r: {
+            .recv => |*v| {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
 
@@ -1065,7 +1063,7 @@ pub const Completion = struct {
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    break :r .{
+                    return .{
                         .recv = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
                             .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
@@ -1086,13 +1084,13 @@ pub const Completion = struct {
                 };
 
                 if (socket_type == posix.SOCK.STREAM and bytes_transferred == 0) {
-                    break :r .{ .recv = error.EOF };
+                    return .{ .recv = error.EOF };
                 }
 
-                break :r .{ .recv = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .recv = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .sendto => |*v| r: {
+            .sendto => |*v| {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
 
@@ -1100,7 +1098,7 @@ pub const Completion = struct {
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    break :r .{
+                    return .{
                         .sendto = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
                             .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
@@ -1108,10 +1106,10 @@ pub const Completion = struct {
                         },
                     };
                 }
-                break :r .{ .sendto = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .sendto = @as(usize, @intCast(bytes_transferred)) };
             },
 
-            .recvfrom => |*v| r: {
+            .recvfrom => |*v| {
                 var bytes_transferred: u32 = 0;
                 var flags: u32 = 0;
 
@@ -1119,7 +1117,7 @@ pub const Completion = struct {
 
                 if (result != windows.TRUE) {
                     const err = windows.ws2_32.WSAGetLastError();
-                    break :r .{
+                    return .{
                         .recvfrom = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
                             .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
@@ -1127,7 +1125,7 @@ pub const Completion = struct {
                         },
                     };
                 }
-                break :r .{ .recvfrom = @as(usize, @intCast(bytes_transferred)) };
+                return .{ .recvfrom = @as(usize, @intCast(bytes_transferred)) };
             },
 
             .async_wait => .{ .async_wait = {} },
