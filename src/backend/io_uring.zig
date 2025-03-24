@@ -186,7 +186,7 @@ pub const Loop = struct {
                 const c = @as(?*Completion, @ptrFromInt(@as(usize, @intCast(cqe.user_data)))) orelse continue;
                 self.active -= 1;
                 c.flags.state = .dead;
-                switch (c.invoke(self, cqe.res)) {
+                switch (c.invoke(self, cqe.flags, cqe.res)) {
                     .disarm => {},
                     .rearm => self.add(c),
                 }
@@ -547,6 +547,24 @@ pub const Loop = struct {
             },
 
             .cancel => |v| sqe.prep_cancel(@intCast(@intFromPtr(v.c)), 0),
+
+            .msg_ring => |v| {
+                sqe.prep_rw(
+                    .MSG_RING,
+                    v.loop.ring.fd,
+                    0,
+                    v.code,
+                    @intFromPtr(completion),
+                );
+
+                // We set the splice_fd_in field to IORING_CQE_F_NOTIF. This field is actually a
+                // union, and in msg_ring SQEs is referred to as the "file_index". msg_ring will
+                // pass these flags only to the receiving loop's CQE. We pick this up in invoke to
+                // decide whether to pass `len` or null to the callback, allowing users to
+                // distinguish which callback this is - the sender or the receiver
+                sqe.splice_fd_in = linux.IORING_CQE_F_NOTIF;
+                sqe.rw_flags = linux.IORING_MSG_RING_FLAGS_PASS;
+            },
         }
 
         // Our sqe user data always points back to the completion.
@@ -595,6 +613,49 @@ pub const Loop = struct {
             }).callback,
         };
         self.add(c_cancel);
+    }
+
+    /// Schedule a completion to be put on the completion queue of the target loop. The target loop
+    /// may be operating in another thread, or may even be the same as self
+    pub fn msgRing(
+        self: *Loop,
+        c: *Completion,
+        target: *Loop,
+        comptime Userdata: type,
+        userdata: ?*Userdata,
+        code: u32,
+        comptime cb: *const fn (
+            ud: ?*Userdata,
+            l: *xev.Loop,
+            c: *xev.Completion,
+            r: MsgRingError!?u32,
+        ) xev.CallbackAction,
+    ) void {
+        c.* = .{
+            .op = .{
+                .msg_ring = .{
+                    .loop = target,
+                    .code = code,
+                },
+            },
+            .userdata = userdata,
+            .callback = (struct {
+                fn callback(
+                    ud: ?*anyopaque,
+                    l_inner: *xev.Loop,
+                    c_inner: *xev.Completion,
+                    r: xev.Result,
+                ) xev.CallbackAction {
+                    return @call(.always_inline, cb, .{
+                        @as(?*Userdata, if (Userdata == void) null else @ptrCast(@alignCast(ud))),
+                        l_inner,
+                        c_inner,
+                        if (r.msg_ring) |v| v else |err| err,
+                    });
+                }
+            }).callback,
+        };
+        self.add(c);
     }
 };
 
@@ -651,7 +712,7 @@ pub const Completion = struct {
 
     /// Invokes the callback for this completion after properly constructing
     /// the Result based on the res code.
-    fn invoke(self: *Completion, loop: *Loop, res: i32) xev.CallbackAction {
+    fn invoke(self: *Completion, loop: *Loop, flags: u32, res: i32) xev.CallbackAction {
         const result: Result = switch (self.op) {
             .noop => unreachable,
 
@@ -795,6 +856,17 @@ pub const Completion = struct {
                     else => |errno| posix.unexpectedErrno(errno),
                 },
             },
+
+            .msg_ring => .{
+                .msg_ring = if (res >= 0) blk: {
+                    if (flags & linux.IORING_CQE_F_NOTIF != 0)
+                        break :blk @intCast(res)
+                    else
+                        break :blk null;
+                } else switch (@as(posix.E, @enumFromInt(-res))) {
+                    else => |errno| posix.unexpectedErrno(errno),
+                },
+            },
         };
 
         return self.callback(self.userdata, loop, self, result);
@@ -879,6 +951,10 @@ pub const OperationType = enum {
 
     /// Cancel an existing operation.
     cancel,
+
+    /// Send a message to another io_uring. This schedules a CQE onto the target ring, which could
+    /// be this ring or any other owned by the process (in another thread, etc)
+    msg_ring,
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -901,6 +977,7 @@ pub const Result = union(OperationType) {
     timer: TimerError!TimerTrigger,
     timer_remove: TimerRemoveError!void,
     cancel: CancelError!void,
+    msg_ring: MsgRingError!?u32,
 };
 
 /// All the supported operations of this event loop. These are always
@@ -1002,6 +1079,14 @@ pub const Operation = union(OperationType) {
     cancel: struct {
         c: *Completion,
     },
+
+    msg_ring: struct {
+        /// The loop which will receive the message
+        loop: *Loop,
+
+        /// Optional data that can be passed to the callback
+        code: u32,
+    },
 };
 
 /// ReadBuffer are the various options for reading.
@@ -1096,6 +1181,10 @@ pub const TimerError = error{
 pub const TimerRemoveError = error{
     NotFound,
     ExpirationInProgress,
+    Unexpected,
+};
+
+pub const MsgRingError = error{
     Unexpected,
 };
 
@@ -1777,4 +1866,73 @@ test "io_uring: socket read cancellation" {
     try loop.run(.until_done);
     try testing.expectEqual(OperationType.read, @as(OperationType, read_result));
     try testing.expectError(error.Canceled, read_result.read);
+}
+
+test "io_uring: msg_ring" {
+    var loop1 = try Loop.init(.{});
+    defer loop1.deinit();
+
+    var loop2 = try Loop.init(.{});
+    defer loop2.deinit();
+
+    var c: Completion = .{};
+
+    const Foo = struct {
+        loop1_result: ?u32 = 0,
+        loop2_result: ?u32 = 0,
+
+        loop1: *xev.Loop,
+        loop2: *xev.Loop,
+
+        fn callback(
+            ud: ?*@This(),
+            l: *xev.Loop,
+            _: *xev.Completion,
+            r: MsgRingError!?u32,
+        ) xev.CallbackAction {
+            const foo = ud.?;
+            const result = r catch unreachable;
+
+            if (l == foo.loop1) foo.loop1_result = result;
+            if (l == foo.loop2) foo.loop2_result = result;
+
+            return .disarm;
+        }
+    };
+
+    var foo: Foo = .{ .loop1 = &loop1, .loop2 = &loop2 };
+
+    loop1.msgRing(
+        &c,
+        &loop2,
+        Foo,
+        &foo,
+        1,
+        Foo.callback,
+    );
+
+    try loop1.submit();
+
+    var cqes: [128]linux.io_uring_cqe = undefined;
+    {
+        const count = try loop2.ring.copy_cqes(&cqes, 1);
+
+        for (cqes[0..count]) |cqe| {
+            const _c = @as(?*Completion, @ptrFromInt(@as(usize, @intCast(cqe.user_data)))) orelse unreachable;
+            c.flags.state = .dead;
+            _ = _c.invoke(&loop2, cqe.flags, cqe.res);
+        }
+    }
+    {
+        const count = try loop1.ring.copy_cqes(&cqes, 1);
+
+        for (cqes[0..count]) |cqe| {
+            const _c = @as(?*Completion, @ptrFromInt(@as(usize, @intCast(cqe.user_data)))) orelse unreachable;
+            c.flags.state = .dead;
+            _ = _c.invoke(&loop1, cqe.flags, cqe.res);
+        }
+    }
+
+    try std.testing.expectEqual(null, foo.loop1_result);
+    try std.testing.expectEqual(1, foo.loop2_result);
 }
