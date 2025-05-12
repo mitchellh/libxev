@@ -146,7 +146,7 @@ fn timerCallback(
 </td>
 <td>
 
-```zig
+```c
 #include <stddef.h>
 #include <stdio.h>
 #include <xev.h>
@@ -178,6 +178,7 @@ int main(void) {
     return 0;
 }
 ```
+
 </td>
 </tr>
 </table>
