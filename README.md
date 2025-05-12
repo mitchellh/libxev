@@ -257,7 +257,7 @@ To build an example, use the following:
 ```
 $ zig build -Dexample-name=_basic.zig
 ...
-$ zig-out/bin/example-basic
+$ zig-out/example/_basic
 ...
 ```
 
