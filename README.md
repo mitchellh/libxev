@@ -188,26 +188,19 @@ int main(void) {
 using the C API to libxev, see the "Build" section.
 
 This package works with the Zig package manager introduced in Zig 0.11.
-Create a `build.zig.zon` file like this:
+Run this command to fetch the latest SHA for the package, it will automatically
+save it in the `build.zig.zon` file.
 
-```zig
-.{
-    .name = "my-project",
-    .version = "0.0.0",
-    .dependencies = .{
-        .libxev = .{
-            .url = "https://github.com/mitchellh/libxev/archive/<git-ref-here>.tar.gz",
-            .hash = "12208070233b17de6be05e32af096a6760682b48598323234824def41789e993432c",
-        },
-    },
-}
+
+```bash
+zig fetch --save https://github.com/mitchellh/libxev/archive/<git-ref-here>.tar.gz
 ```
 
 And in your `build.zig`:
 
 ```zig
 const xev = b.dependency("libxev", .{ .target = target, .optimize = optimize });
-exe.addModule("xev", xev.module("xev"));
+exe.root_module.addImport("xev", xev.module("xev"));
 ```
 
 ## Documentation
