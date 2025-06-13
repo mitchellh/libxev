@@ -204,6 +204,10 @@ test {
             _ = @import("linux/timerfd.zig");
         },
 
+        .freebsd => {
+            _ = Kqueue;
+        },
+
         .wasi => {
             //_ = WasiPoll;
             _ = @import("backend/wasi_poll.zig");
