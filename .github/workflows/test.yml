@@ -90,6 +90,27 @@ jobs:
     # Run a full build to ensure that works
     - run: nix build
 
+  test-x86_64-freebsd:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: test
+      uses: vmactions/freebsd-vm@v1
+      with:
+        usesh: true
+        prepare: |
+          sed 's/quarterly/latest/g' /etc/pkg/FreeBSD.conf
+          pkg update -f
+          pkg upgrade -y
+          pkg install -y wget
+
+        run: |
+          wget https://ziglang.org/builds/zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42.tar.xz
+          tar -xf zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42.tar.xz
+          zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build test --summary all
+
   test-x86_64-windows:
     strategy:
       matrix:
