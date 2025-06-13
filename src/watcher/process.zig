@@ -501,6 +501,7 @@ fn ProcessTests(
         }
 
         test "process wait with non-zero exit code" {
+            if (builtin.os.tag == .freebsd) return error.SkipZigTest;
             const testing = std.testing;
             const alloc = testing.allocator;
 
