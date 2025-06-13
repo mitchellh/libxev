@@ -17,7 +17,7 @@ const log = std.log.scoped(.libxev_kqueue);
 /// True if this backend is available on this platform.
 pub fn available() bool {
     return switch (builtin.os.tag) {
-        .ios, .macos => true,
+        .freebsd, .ios, .macos => true,
 
         // Technically other BSDs support kqueue but our implementation
         // below hard requires mach ports currently. That's not a fundamental
@@ -27,9 +27,9 @@ pub fn available() bool {
     };
 }
 
-const NOTE_EXIT_FLAGS = switch (builtin.os.tag) {
-    .ios, .macos => posix.system.NOTE_EXIT | posix.system.NOTE_EXITSTATUS,
-    .freebsd => posix.system.NOTE_EXIT,
+pub const NOTE_EXIT_FLAGS = switch (builtin.os.tag) {
+    .ios, .macos, => std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
+    .freebsd => std.c.NOTE.EXIT,
     else => @compileError("kqueue not supported yet for target OS"),
 };
 
@@ -118,7 +118,7 @@ pub const Loop = struct {
     /// were unprocessed are lost -- their callbacks will never be called.
     pub fn deinit(self: *Loop) void {
         posix.close(self.kqueue_fd);
-        self.mach_port.deinit();
+        //self.mach_port.deinit();
     }
 
     /// Stop the loop. This can only be called from the main thread.
@@ -966,14 +966,14 @@ pub const Loop = struct {
         c.task_loop.thread_pool_completions.push(c);
 
         // Wake up our main loop
-        c.task_loop.wakeup() catch {};
+        //c.task_loop.wakeup() catch {};
     }
 
-    /// Sends an empty message to this loop's mach port so that it wakes
-    /// up if it is blocking on kevent().
-    fn wakeup(self: *Loop) !void {
+    ///// Sends an empty message to this loop's mach port so that it wakes
+    ///// up if it is blocking on kevent().
+    //fn wakeup(self: *Loop) !void {
         //try self.mach_port.notify();
-    }
+    //}
 };
 
 /// A completion is a request to perform some work with the loop.
@@ -1100,7 +1100,7 @@ pub const Completion = struct {
                 //    .udata = @intFromPtr(self),
                 //    .ext = .{ @intFromPtr(slice.ptr), slice.len },
                 //};
-            },
+            //},
 
             .proc => |v| kevent_init(.{
                 .ident = @intCast(v.pid),
