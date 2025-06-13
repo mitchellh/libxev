@@ -66,7 +66,7 @@ pub const Backend = enum {
     pub fn candidates() []const Backend {
         return switch (builtin.os.tag) {
             .linux => &.{ .io_uring, .epoll },
-            .ios, .macos => &.{.kqueue},
+            .freebsd, .ios, .macos => &.{.kqueue},
             .wasi => &.{.wasi_poll},
             .windows => &.{.iocp},
             else => {
