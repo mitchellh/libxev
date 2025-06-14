@@ -113,6 +113,23 @@ jobs:
           zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build test --summary all
           zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build -Demit-example -Demit-bench --summary all
 
+  test-aarch64-macos:
+    runs-on: macos-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.14.0
+
+    - name: test
+      run: zig build test --summary all
+
+    - name: build all benchmarks and examples
+      run: zig build -Demit-example -Demit-bench --summary all
+
   test-x86_64-windows:
     strategy:
       matrix:
