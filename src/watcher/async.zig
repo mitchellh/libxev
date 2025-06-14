@@ -15,19 +15,22 @@ pub fn Async(comptime xev: type) type {
         // Supported, uses eventfd
         .io_uring,
         .epoll,
-        .kqueue,
         => AsyncEventFd(xev),
 
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev, xev.Loop.threaded),
 
-        // Supported, uses mach ports
-        // .kqueue => AsyncMachPort(xev),
+        // Supported, uses mach port on Mac and eventfd on BSD
+        .kqueue => if (comptime builtin.target.os.tag.isDarwin())
+            AsyncMachPort(xev)
+        else
+            AsyncEventFd(xev),
+
         .iocp => AsyncIOCP(xev),
     };
 }
 
-/// Async implementation using eventfd (Linux).
+/// Async implementation using eventfd (Unix/Linux).
 fn AsyncEventFd(comptime xev: type) type {
     return struct {
         const Self = @This();
