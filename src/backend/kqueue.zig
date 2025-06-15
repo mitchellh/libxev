@@ -1548,7 +1548,7 @@ pub const Operation = union(OperationType) {
         c: *Completion,
     },
 
-    machport: if (!builtin.os.tag.isDarwin()) struct {} else struct {
+    machport: if (!builtin.os.tag.isDarwin()) void else struct {
         port: posix.system.mach_port_name_t,
         buffer: ReadBuffer,
     },
