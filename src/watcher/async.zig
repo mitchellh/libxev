@@ -6,6 +6,8 @@ const posix = std.posix;
 const common = @import("common.zig");
 const darwin = @import("../darwin.zig");
 
+pub extern "c" fn eventfd(initval: c_uint, flags: c_uint) c_int;
+
 pub fn Async(comptime xev: type) type {
     if (xev.dynamic) return AsyncDynamic(xev);
 
@@ -18,13 +20,17 @@ pub fn Async(comptime xev: type) type {
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev, xev.Loop.threaded),
 
-        // Supported, uses mach ports
-        .kqueue => AsyncMachPort(xev),
+        // Supported, uses mach port on Mac and eventfd on BSD
+        .kqueue => if (comptime builtin.target.os.tag.isDarwin())
+            AsyncMachPort(xev)
+        else
+            AsyncEventFd(xev),
+
         .iocp => AsyncIOCP(xev),
     };
 }
 
-/// Async implementation using eventfd (Linux).
+/// Async implementation using eventfd (Unix/Linux).
 fn AsyncEventFd(comptime xev: type) type {
     return struct {
         const Self = @This();
@@ -39,7 +45,8 @@ fn AsyncEventFd(comptime xev: type) type {
         /// to be woken up. The completion must be allocated in advance.
         pub fn init() !Self {
             return .{
-                .fd = try std.posix.eventfd(0, std.os.linux.EFD.CLOEXEC),
+                //.fd = try std.posix.eventfd(0, std.os.linux.EFD.CLOEXEC),
+                .fd = eventfd(0, 0),
             };
         }
 

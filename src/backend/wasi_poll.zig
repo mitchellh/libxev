@@ -1061,14 +1061,14 @@ pub const ShutdownError = error{
 
 pub const ReadError = Batch.Error || posix.ReadError || posix.PReadError ||
     error{
-    EOF,
-    Unknown,
-};
+        EOF,
+        Unknown,
+    };
 
 pub const WriteError = Batch.Error || posix.WriteError || posix.PWriteError ||
     error{
-    Unknown,
-};
+        Unknown,
+    };
 
 pub const AsyncError = error{
     Unknown,
