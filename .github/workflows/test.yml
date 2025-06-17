@@ -122,7 +122,7 @@ jobs:
     - name: Install zig
       uses: goto-bus-stop/setup-zig@v2
       with:
-        version: 0.14.0
+        version: 0.14.1
 
     - name: test
       run: zig build test --summary all
@@ -142,7 +142,7 @@ jobs:
     - name: Install zig
       uses: goto-bus-stop/setup-zig@v2
       with:
-        version: 0.14.0
+        version: 0.14.1
 
     - name: test
       run: zig build test --summary all

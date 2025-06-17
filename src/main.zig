@@ -52,7 +52,8 @@ pub const Backend = enum {
     pub fn default() Backend {
         return switch (builtin.os.tag) {
             .linux => .io_uring,
-            .ios, .macos, .freebsd => .kqueue,
+            .ios, .macos => .kqueue,
+            .freebsd => .kqueue,
             .wasi => .wasi_poll,
             .windows => .iocp,
             else => {
@@ -66,7 +67,8 @@ pub const Backend = enum {
     pub fn candidates() []const Backend {
         return switch (builtin.os.tag) {
             .linux => &.{ .io_uring, .epoll },
-            .freebsd, .ios, .macos => &.{.kqueue},
+            .ios, .macos => &.{.kqueue},
+            .freebsd => &.{.kqueue},
             .wasi => &.{.wasi_poll},
             .windows => &.{.iocp},
             else => {

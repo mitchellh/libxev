@@ -17,7 +17,12 @@ const log = std.log.scoped(.libxev_kqueue);
 /// True if this backend is available on this platform.
 pub fn available() bool {
     return switch (builtin.os.tag) {
-        .freebsd, .ios, .macos => true,
+        // macOS uses kqueue
+        .ios, .macos => true,
+
+        // BSDs use kqueue, but we only test on FreeBSD for now.
+        // kqueue isn't exactly the same here as it is on Apple platforms.
+        .freebsd => true,
 
         // Technically other BSDs support kqueue but our implementation
         // below hard requires mach ports currently. That's not a fundamental
@@ -28,9 +33,7 @@ pub fn available() bool {
 }
 
 pub const NOTE_EXIT_FLAGS = switch (builtin.os.tag) {
-    .ios,
-    .macos,
-    => std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
+    .ios, .macos => std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
     .freebsd => std.c.NOTE.EXIT,
     else => @compileError("kqueue not supported yet for target OS"),
 };

@@ -6,8 +6,6 @@ const posix = std.posix;
 const common = @import("common.zig");
 const darwin = @import("../darwin.zig");
 
-pub extern "c" fn eventfd(initval: c_uint, flags: c_uint) c_int;
-
 pub fn Async(comptime xev: type) type {
     if (xev.dynamic) return AsyncDynamic(xev);
 
@@ -20,7 +18,7 @@ pub fn Async(comptime xev: type) type {
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev, xev.Loop.threaded),
 
-        // Supported, uses mach port on Mac and eventfd on BSD
+        // Supported, uses mach port on Darwin and eventfd on BSD.
         .kqueue => if (comptime builtin.target.os.tag.isDarwin())
             AsyncMachPort(xev)
         else
@@ -41,12 +39,29 @@ fn AsyncEventFd(comptime xev: type) type {
         /// eventfd file descriptor
         fd: posix.fd_t,
 
+        /// This is only used for FreeBSD currently.
+        extern "c" fn eventfd(initval: c_uint, flags: c_uint) c_int;
+
         /// Create a new async. An async can be assigned to exactly one loop
         /// to be woken up. The completion must be allocated in advance.
         pub fn init() !Self {
             return .{
-                //.fd = try std.posix.eventfd(0, std.os.linux.EFD.CLOEXEC),
-                .fd = eventfd(0, 0),
+                .fd = switch (builtin.os.tag) {
+                    // std.posix is unavailable on FreeBSD. We call the
+                    // syscall directly.
+                    //
+                    // TODO: error handling
+                    .freebsd => eventfd(
+                        0,
+                        0x100000, // EFD_CLOEXEC
+                    ),
+
+                    // Use std.posix if we can.
+                    else => try std.posix.eventfd(
+                        0,
+                        std.os.linux.EFD.CLOEXEC,
+                    ),
+                },
             };
         }
 
