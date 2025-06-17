@@ -91,7 +91,9 @@ jobs:
     - run: nix build
 
   test-x86_64-freebsd:
-    runs-on: namespace-profile-mitchellh-sm
+    # Doesn't work on Namespace yet, opened support ticket.
+    # runs-on: namespace-profile-mitchellh-sm
+    runs-on: ubuntu-latest
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
