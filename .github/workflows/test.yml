@@ -90,6 +90,48 @@ jobs:
     # Run a full build to ensure that works
     - run: nix build
 
+  test-x86_64-freebsd:
+    # Doesn't work on Namespace yet, opened support ticket.
+    # runs-on: namespace-profile-mitchellh-sm
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: test
+      uses: vmactions/freebsd-vm@v1
+      with:
+        usesh: true
+        prepare: |
+          sed 's/quarterly/latest/g' /etc/pkg/FreeBSD.conf
+          pkg update -f
+          pkg upgrade -y
+          pkg install -y wget
+
+        run: |
+          # TODO: switch to pkg when available, and use v0.14.1
+          wget https://ziglang.org/builds/zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42.tar.xz
+          tar -xf zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42.tar.xz
+          zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build test --summary all
+          zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build -Demit-example -Demit-bench --summary all
+
+  test-aarch64-macos:
+    runs-on: macos-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install zig
+      uses: goto-bus-stop/setup-zig@v2
+      with:
+        version: 0.14.1
+
+    - name: test
+      run: zig build test --summary all
+
+    - name: build all benchmarks and examples
+      run: zig build -Demit-example -Demit-bench --summary all
+
   test-x86_64-windows:
     strategy:
       matrix:
@@ -102,7 +144,7 @@ jobs:
     - name: Install zig
       uses: goto-bus-stop/setup-zig@v2
       with:
-        version: 0.14.0
+        version: 0.14.1
 
     - name: test
       run: zig build test --summary all

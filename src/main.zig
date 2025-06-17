@@ -53,6 +53,7 @@ pub const Backend = enum {
         return switch (builtin.os.tag) {
             .linux => .io_uring,
             .ios, .macos => .kqueue,
+            .freebsd => .kqueue,
             .wasi => .wasi_poll,
             .windows => .iocp,
             else => {
@@ -67,6 +68,7 @@ pub const Backend = enum {
         return switch (builtin.os.tag) {
             .linux => &.{ .io_uring, .epoll },
             .ios, .macos => &.{.kqueue},
+            .freebsd => &.{.kqueue},
             .wasi => &.{.wasi_poll},
             .windows => &.{.iocp},
             else => {
@@ -202,6 +204,10 @@ test {
             _ = Epoll;
             _ = IO_Uring;
             _ = @import("linux/timerfd.zig");
+        },
+
+        .freebsd => {
+            _ = Kqueue;
         },
 
         .wasi => {

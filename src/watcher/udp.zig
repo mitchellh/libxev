@@ -902,6 +902,7 @@ fn UDPDynamic(comptime xev: type) type {
 fn UDPTests(comptime xev: type, comptime Impl: type) type {
     return struct {
         test "UDP: read/write" {
+            if (builtin.os.tag == .freebsd) return error.SkipZigTest;
             const testing = std.testing;
 
             var tpool = ThreadPool.init(.{});
