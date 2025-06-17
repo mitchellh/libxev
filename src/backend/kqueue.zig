@@ -45,12 +45,8 @@ pub const Loop = struct {
     /// The fd of the kqueue.
     kqueue_fd: posix.fd_t,
 
-    /// The mach port that this kqueue always has a filter for. Writing
-    /// an empty message to this port can be used to wake up the loop
-    /// at any time. Waking up the loop via this port won't trigger any
-    /// particular completion, it just forces tick to cycle.
-    mach_port: xev.Async,
-    mach_port_buffer: [32]u8 = undefined,
+    /// The wakeup mechanism (mach ports on Apple, eventfd on BSD).
+    wakeup_state: Wakeup,
 
     /// The number of active completions. This DOES NOT include completions that
     /// are queued in the submissions queue.
@@ -105,12 +101,12 @@ pub const Loop = struct {
         const fd = try posix.kqueue();
         errdefer posix.close(fd);
 
-        const mach_port = try xev.Async.init();
-        errdefer mach_port.deinit();
+        const wakeup_state: Wakeup = try .init();
+        errdefer wakeup_state.deinit();
 
         var res: Loop = .{
             .kqueue_fd = fd,
-            .mach_port = mach_port,
+            .wakeup_state = wakeup_state,
             .thread_pool = options.thread_pool,
             .thread_pool_completions = undefined,
             .cached_now = undefined,
@@ -124,7 +120,7 @@ pub const Loop = struct {
     /// were unprocessed are lost -- their callbacks will never be called.
     pub fn deinit(self: *Loop) void {
         posix.close(self.kqueue_fd);
-        if (comptime builtin.os.tag == .macos) self.mach_port.deinit();
+        self.wakeup_state.deinit();
     }
 
     /// Stop the loop. This can only be called from the main thread.
@@ -320,34 +316,12 @@ pub const Loop = struct {
                 self.thread_pool_completions.init();
             }
 
-            if (comptime builtin.target.os.tag == .macos) {
-                // Add our event so that we wake up when our mach port receives an
-                // event. We have to add here because we need a stable self pointer.
-                const events = [_]Kevent{.{
-                    .ident = @as(usize, @intCast(self.mach_port.port)),
-                    .filter = std.c.EVFILT.MACHPORT,
-                    .flags = std.c.EV.ADD | std.c.EV.ENABLE,
-                    .fflags = darwin.MACH_RCV_MSG,
-                    .data = 0,
-                    .udata = 0,
-                    .ext = .{
-                        @intFromPtr(&self.mach_port_buffer),
-                        self.mach_port_buffer.len,
-                    },
-                }};
-                const n = kevent_syscall(
-                    self.kqueue_fd,
-                    &events,
-                    events[0..0],
-                    null,
-                ) catch |err| {
-                    // We reset initialization because we can't do anything
-                    // safely unless we get this mach port registered!
-                    self.flags.init = false;
-                    return err;
-                };
-                assert(n == 0);
-            }
+            self.wakeup_state.setup(self.kqueue_fd) catch |err| {
+                // We reset initialization because we can't do anything
+                // safely unless we get this mach port registered!
+                self.flags.init = false;
+                return err;
+            };
         }
 
         // The list of events, used as both a changelist and eventlist.
@@ -982,7 +956,7 @@ pub const Loop = struct {
     /// Sends an empty message to this loop's mach port so that it wakes
     /// up if it is blocking on kevent().
     fn wakeup(self: *Loop) !void {
-        try self.mach_port.notify();
+        try self.wakeup_state.wakeup();
     }
 };
 
@@ -1446,6 +1420,76 @@ pub const Completion = struct {
                 },
             },
         };
+    }
+};
+
+/// The struct used for loop wakeup. This is only internal state.
+const Wakeup = if (builtin.os.tag.isDarwin()) struct {
+    const Self = @This();
+
+    /// The mach port that this kqueue always has a filter for. Writing
+    /// an empty message to this port can be used to wake up the loop
+    /// at any time. Waking up the loop via this port won't trigger any
+    /// particular completion, it just forces tick to cycle.
+    mach_port: xev.Async,
+    mach_port_buffer: [32]u8 = undefined,
+
+    fn init() !Self {
+        const mach_port = try xev.Async.init();
+        errdefer mach_port.deinit();
+        return .{ .mach_port = mach_port };
+    }
+
+    fn deinit(self: *Self) void {
+        self.mach_port.deinit();
+    }
+
+    fn setup(self: *Self, kqueue_fd: posix.fd_t) !void {
+        const events = [_]Kevent{.{
+            .ident = @as(usize, @intCast(self.mach_port.port)),
+            .filter = std.c.EVFILT.MACHPORT,
+            .flags = std.c.EV.ADD | std.c.EV.ENABLE,
+            .fflags = darwin.MACH_RCV_MSG,
+            .data = 0,
+            .udata = 0,
+            .ext = .{
+                @intFromPtr(&self.mach_port_buffer),
+                self.mach_port_buffer.len,
+            },
+        }};
+        const n = try kevent_syscall(
+            kqueue_fd,
+            &events,
+            events[0..0],
+            null,
+        );
+        assert(n == 0);
+    }
+
+    fn wakeup(self: *Self) !void {
+        try self.mach_port.notify();
+    }
+} else struct {
+    // TODO: We should use eventfd for FreeBSD. Until this is
+    // implemented, loop wakeup will crash on BSD.
+    const Self = @This();
+
+    fn init() !Self {
+        return .{};
+    }
+
+    fn deinit(self: *Self) void {
+        _ = self;
+    }
+
+    fn setup(self: *Self, kqueue_fd: posix.fd_t) !void {
+        _ = self;
+        _ = kqueue_fd;
+    }
+
+    fn wakeup(self: *Self) !void {
+        _ = self;
+        @panic("wakeup not implemented on this platform");
     }
 };
 
