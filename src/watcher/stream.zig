@@ -854,7 +854,10 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
 
                     // Rearm requeues this request, it doesn't return rearm
                     // on the actual callback here...
-                    if (action == .rearm) q_inner.push(req_inner);
+                    if (action == .rearm) {
+                        req_inner.next = null;
+                        q_inner.push(req_inner);
+                    }
 
                     // If we have another request, add that completion next.
                     if (q_inner.head) |req_next| l_inner.add(&req_next.completion);
