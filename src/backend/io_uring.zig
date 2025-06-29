@@ -1182,9 +1182,12 @@ test "io_uring: timerfd" {
     var called = false;
     var c: Completion = .{
         .op = .{
-            .read = .{
+            // Note: we should be able to use `read` here but on
+            // Kernel 6.15.4 there is a bug that prevents the read
+            // from ever firing with io_uring. I don't know why. I changed
+            // this to a poll so tests pass, which should also be fine!
+            .poll = .{
                 .fd = t.fd,
-                .buffer = .{ .array = undefined },
             },
         },
 

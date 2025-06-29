@@ -53,13 +53,14 @@ fn AsyncEventFd(comptime xev: type) type {
                     // TODO: error handling
                     .freebsd => eventfd(
                         0,
-                        0x100000, // EFD_CLOEXEC
+                        0x100000 | 0x4, // EFD_CLOEXEC | EFD_NONBLOCK
                     ),
 
                     // Use std.posix if we can.
                     else => try std.posix.eventfd(
                         0,
-                        std.os.linux.EFD.CLOEXEC,
+                        std.os.linux.EFD.CLOEXEC |
+                            std.os.linux.EFD.NONBLOCK,
                     ),
                 },
             };
@@ -81,7 +82,13 @@ fn AsyncEventFd(comptime xev: type) type {
         /// You should NOT register an async with multiple loops (the same loop
         /// is fine -- but unnecessary). The behavior when waiting on multiple
         /// loops is undefined.
-        pub fn wait(
+        pub const wait = switch (xev.backend) {
+            .io_uring, .epoll => waitPoll,
+            .kqueue => waitRead,
+            .iocp, .wasi_poll => @compileError("AsyncEventFd does not support wait for this backend"),
+        };
+
+        fn waitRead(
             self: Self,
             loop: *xev.Loop,
             c: *xev.Completion,
@@ -115,6 +122,63 @@ fn AsyncEventFd(comptime xev: type) type {
                             l_inner,
                             c_inner,
                             if (r.read) |v| assert(v > 0) else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+            loop.add(c);
+        }
+
+        fn waitPoll(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!void,
+            ) xev.CallbackAction,
+        ) void {
+            c.* = .{
+                .op = .{
+                    // We use a poll operation instead of a read operation
+                    // because in Kernel 6.15.4, read was regressed for
+                    // io_uring on eventfd/timerfd and would block forever.
+                    // However, poll works fine.
+                    .poll = .{
+                        .fd = self.fd,
+                        .events = posix.POLL.IN,
+                    },
+                },
+
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        if (r.poll) |_| {
+                            // We need to read so that we can consume the
+                            // eventfd value. We only read 8 bytes because
+                            // we only write up to 8 bytes and we own the fd.
+                            // We ignore errors here because we expect the
+                            // read to succeed given we just polled it.
+                            var buf: [8]u8 = undefined;
+                            _ = posix.read(c_inner.op.poll.fd, &buf) catch {};
+                        } else |_| {
+                            // We'll call the callback with the error later.
+                        }
+
+                        return @call(.always_inline, cb, .{
+                            common.userdataValue(Userdata, ud),
+                            l_inner,
+                            c_inner,
+                            if (r.poll) |_| {} else |err| err,
                         });
                     }
                 }).callback,
@@ -670,7 +734,7 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
                 ) xev.CallbackAction {
                     _ = r catch unreachable;
                     ud.?.* = true;
-                    return .disarm;
+                    return .rearm;
                 }
             }).callback);
 
@@ -678,8 +742,13 @@ fn AsyncTests(comptime xev: type, comptime Impl: type) type {
             try notifier.notify();
 
             // Wait for wake
-            try loop.run(.until_done);
+            try loop.run(.once);
             try testing.expect(wake);
+
+            // Make sure it only triggers once
+            wake = false;
+            try loop.run(.no_wait);
+            try testing.expect(!wake);
         }
 
         test "async: notify first" {
