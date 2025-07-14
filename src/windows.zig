@@ -4,7 +4,35 @@ const std = @import("std");
 const windows = std.os.windows;
 const posix = std.posix;
 
-pub usingnamespace std.os.windows;
+// Forwarded declarations of std.os.windows.
+pub const DWORD = windows.DWORD;
+pub const FALSE = windows.FALSE;
+pub const TRUE = windows.TRUE;
+pub const INFINITE = windows.INFINITE;
+pub const HANDLE = windows.HANDLE;
+pub const INVALID_HANDLE_VALUE = windows.INVALID_HANDLE_VALUE;
+pub const OVERLAPPED = windows.OVERLAPPED;
+pub const OVERLAPPED_ENTRY = windows.OVERLAPPED_ENTRY;
+pub const DUPLICATE_SAME_ACCESS = windows.DUPLICATE_SAME_ACCESS;
+pub const GENERIC_READ = windows.GENERIC_READ;
+pub const GENERIC_WRITE = windows.GENERIC_WRITE;
+pub const OPEN_ALWAYS = windows.OPEN_ALWAYS;
+pub const FILE_FLAG_OVERLAPPED = windows.FILE_FLAG_OVERLAPPED;
+pub const ReadFileError = windows.ReadFileError;
+pub const WriteFileError = windows.WriteFileError;
+pub const Win32Error = windows.Win32Error;
+pub const WSASocketW = windows.WSASocketW;
+pub const kernel32 = windows.kernel32;
+pub const ws2_32 = windows.ws2_32;
+pub const unexpectedWSAError = windows.unexpectedWSAError;
+pub const unexpectedError = windows.unexpectedError;
+pub const sliceToPrefixedFileW = windows.sliceToPrefixedFileW;
+pub const CloseHandle = windows.CloseHandle;
+pub const QueryPerformanceCounter = windows.QueryPerformanceCounter;
+pub const QueryPerformanceFrequency = windows.QueryPerformanceFrequency;
+pub const GetQueuedCompletionStatusEx = windows.GetQueuedCompletionStatusEx;
+pub const PostQueuedCompletionStatus = windows.PostQueuedCompletionStatus;
+pub const CreateIoCompletionPort = windows.CreateIoCompletionPort;
 
 pub extern "kernel32" fn DeleteFileW(lpFileName: [*:0]const u16) callconv(windows.WINAPI) windows.BOOL;
 
@@ -182,7 +210,7 @@ pub const exp = struct {
         lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
         lpName: ?windows.LPCSTR,
     ) !windows.HANDLE {
-        const handle = kernel32.CreateJobObjectA(lpSecurityAttributes, lpName);
+        const handle = exp.kernel32.CreateJobObjectA(lpSecurityAttributes, lpName);
         return switch (windows.kernel32.GetLastError()) {
             .SUCCESS => handle,
             .ALREADY_EXISTS => CreateJobObjectError.AlreadyExists,
@@ -191,7 +219,7 @@ pub const exp = struct {
     }
 
     pub fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) posix.UnexpectedError!void {
-        const result: windows.BOOL = kernel32.AssignProcessToJobObject(hJob, hProcess);
+        const result: windows.BOOL = exp.kernel32.AssignProcessToJobObject(hJob, hProcess);
         if (result == windows.FALSE) {
             const err = windows.kernel32.GetLastError();
             return switch (err) {
@@ -206,7 +234,7 @@ pub const exp = struct {
         lpJobObjectInformation: windows.LPVOID,
         cbJobObjectInformationLength: windows.DWORD,
     ) posix.UnexpectedError!void {
-        const result: windows.BOOL = kernel32.SetInformationJobObject(
+        const result: windows.BOOL = exp.kernel32.SetInformationJobObject(
             hJob,
             JobObjectInformationClass,
             lpJobObjectInformation,

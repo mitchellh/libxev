@@ -38,13 +38,19 @@ fn FileStream(comptime xev: type) type {
         /// The underlying file
         fd: FdType,
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .poll = true,
             .read = .read,
             .write = .write,
             .threadpool = true,
         });
+        pub const close = S.close;
+        pub const poll = S.poll;
+        pub const read = S.read;
+        pub const write = S.write;
+        pub const writeInit = S.writeInit;
+        pub const queueWrite = S.queueWrite;
 
         /// Initialize a File from a std.fs.File.
         pub fn init(file: std.fs.File) !Self {
@@ -318,7 +324,7 @@ fn FileDynamic(comptime xev: type) type {
 
         pub const Union = xev.Union(&.{"File"});
 
-        pub usingnamespace stream.Stream(xev, Self, .{
+        const S = stream.Stream(xev, Self, .{
             .close = true,
             .poll = true,
             .read = .read,
@@ -326,6 +332,11 @@ fn FileDynamic(comptime xev: type) type {
             .threadpool = true,
             .type = "File",
         });
+        pub const close = S.close;
+        pub const poll = S.poll;
+        pub const read = S.read;
+        pub const write = S.write;
+        pub const queueWrite = S.queueWrite;
 
         pub fn init(file: std.fs.File) !Self {
             return .{ .backend = switch (xev.backend) {
@@ -492,6 +503,18 @@ fn FileTests(
     comptime Impl: type,
 ) type {
     return struct {
+        test "File: Stream decls" {
+            if (!@hasDecl(Impl, "S")) return;
+            const Stream = Impl.S;
+            inline for (@typeInfo(Stream).@"struct".decls) |decl| {
+                const Decl = @TypeOf(@field(Stream, decl.name));
+                if (Decl == void) continue;
+                if (!@hasDecl(Impl, decl.name)) {
+                    @compileError("missing decl: " ++ decl.name);
+                }
+            }
+        }
+
         test "kqueue: zero-length read for readiness" {
             if (builtin.os.tag != .macos) return error.SkipZigTest;
 
