@@ -17,10 +17,7 @@ over the C API. For example, all callbacks in the Zig API must be available
 at comptime because the callback call is always inlined -- this results in
 a noticable performance improvement over equivalent C consumption of libxev.
 
-The primary Zig API is visible in `src/main.zig` in the libxev source. The main file uses a somewhat convoluted `usingnamespace` to setup the
-API so it isn't immediately obvious, but the API is provided by the `Xev`
-function. For example, available consts are: `xev.Loop`, `xev.Completion`,
-etc.
+The primary Zig API is visible in `src/main.zig` in the libxev source. 
 
 # INSTALLATION
 

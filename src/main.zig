@@ -2,10 +2,56 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// The low-level IO interfaces using the recommended compile-time
-/// interface for the target system.
+/// interface for the target system. We forward these as the default
+/// API of this package.
 const xev = Backend.default().Api();
-pub usingnamespace xev;
-//pub usingnamespace Epoll;
+pub const dynamic = xev.dynamic;
+pub const backend = xev.backend;
+pub const available = xev.available;
+pub const noopCallback = xev.noopCallback;
+pub const Sys = xev.Sys;
+pub const Loop = xev.Loop;
+pub const Completion = xev.Completion;
+pub const Result = xev.Result;
+pub const ReadBuffer = xev.ReadBuffer;
+pub const WriteBuffer = xev.WriteBuffer;
+pub const Options = xev.Options;
+pub const RunMode = xev.RunMode;
+pub const Callback = xev.Callback;
+pub const CallbackAction = xev.CallbackAction;
+pub const CompletionState = xev.CompletionState;
+pub const AcceptError = xev.AcceptError;
+pub const CancelError = xev.CancelError;
+pub const CloseError = xev.CloseError;
+pub const ConnectError = xev.ConnectError;
+pub const ShutdownError = xev.ShutdownError;
+pub const WriteError = xev.WriteError;
+pub const ReadError = xev.ReadError;
+pub const PollError = xev.PollError;
+pub const PollEvent = xev.PollEvent;
+pub const WriteQueue = xev.WriteQueue;
+pub const WriteRequest = xev.WriteRequest;
+pub const Async = xev.Async;
+pub const File = xev.File;
+pub const Process = xev.Process;
+pub const Stream = stream.GenericStream;
+pub const Timer = xev.Timer;
+pub const TCP = xev.TCP;
+pub const UDP = xev.UDP;
+
+comptime {
+    // This ensures that all the public decls from the API are forwarded
+    // from the main struct.
+    const main = @This();
+    const default = Backend.default().Api();
+    for (@typeInfo(default).@"struct".decls) |decl| {
+        const Decl = @TypeOf(@field(default, decl.name));
+        if (Decl == void) continue;
+        if (!@hasDecl(main, decl.name)) {
+            @compileError("missing decl: " ++ decl.name);
+        }
+    }
+}
 
 /// The dynamic interface that allows for runtime selection of the
 /// backend to use. This is useful if you want to support multiple
@@ -26,6 +72,7 @@ pub const DynamicXev = @import("dynamic.zig").Xev;
 /// all systems but if you reference them and force them to be analyzed
 /// the proper system APIs must exist. Due to Zig's lazy analysis, if you
 /// don't use any interface it will NOT be compiled (yay!).
+const Xev = @import("api.zig").Xev;
 pub const IO_Uring = Xev(.io_uring, @import("backend/io_uring.zig"));
 pub const Epoll = Xev(.epoll, @import("backend/epoll.zig"));
 pub const Kqueue = Xev(.kqueue, @import("backend/kqueue.zig"));
@@ -41,151 +88,7 @@ pub const ThreadPool = @import("ThreadPool.zig");
 pub const stream = @import("watcher/stream.zig");
 
 /// The backend types.
-pub const Backend = enum {
-    io_uring,
-    epoll,
-    kqueue,
-    wasi_poll,
-    iocp,
-
-    /// Returns a recommend default backend from inspecting the system.
-    pub fn default() Backend {
-        return switch (builtin.os.tag) {
-            .linux => .io_uring,
-            .ios, .macos => .kqueue,
-            .freebsd => .kqueue,
-            .wasi => .wasi_poll,
-            .windows => .iocp,
-            else => {
-                @compileLog(builtin.os);
-                @compileError("no default backend for this target");
-            },
-        };
-    }
-
-    /// Candidate backends for this platform in priority order.
-    pub fn candidates() []const Backend {
-        return switch (builtin.os.tag) {
-            .linux => &.{ .io_uring, .epoll },
-            .ios, .macos => &.{.kqueue},
-            .freebsd => &.{.kqueue},
-            .wasi => &.{.wasi_poll},
-            .windows => &.{.iocp},
-            else => {
-                @compileLog(builtin.os);
-                @compileError("no candidate backends for this target");
-            },
-        };
-    }
-
-    /// Returns the Api (return value of Xev) for the given backend type.
-    pub fn Api(comptime self: Backend) type {
-        return switch (self) {
-            .io_uring => IO_Uring,
-            .epoll => Epoll,
-            .kqueue => Kqueue,
-            .wasi_poll => WasiPoll,
-            .iocp => IOCP,
-        };
-    }
-};
-
-/// Creates the Xev API based on a backend type.
-///
-/// For the default backend type for your system (i.e. io_uring on Linux),
-/// this is the main API you interact with. It is `usingnamespaced` into
-/// the "xev" package so you'd use types such as `xev.Loop`, `xev.Completion`,
-/// etc.
-///
-/// Unless you're using a custom or specific backend type, you do NOT ever
-/// need to call the Xev function itself.
-pub fn Xev(comptime be: Backend, comptime T: type) type {
-    return struct {
-        const Self = @This();
-        const loop = @import("loop.zig");
-
-        /// This is used to detect a static vs dynamic API at comptime.
-        pub const dynamic = false;
-
-        /// The backend that this is. This is supplied at comptime so
-        /// it is up to the caller to say the right thing. This lets custom
-        /// implementations also "quack" like an implementation.
-        pub const backend = be;
-
-        /// A function to test if this API is available on the
-        /// current system.
-        pub const available = T.available;
-
-        /// The core loop APIs.
-        pub const Loop = T.Loop;
-        pub const Completion = T.Completion;
-        pub const Result = T.Result;
-        pub const ReadBuffer = T.ReadBuffer;
-        pub const WriteBuffer = T.WriteBuffer;
-        pub const Options = loop.Options;
-        pub const RunMode = loop.RunMode;
-        pub const CallbackAction = loop.CallbackAction;
-        pub const CompletionState = loop.CompletionState;
-
-        /// Error types
-        pub const AcceptError = T.AcceptError;
-        pub const CancelError = T.CancelError;
-        pub const CloseError = T.CloseError;
-        pub const ConnectError = T.ConnectError;
-        pub const ShutdownError = T.ShutdownError;
-        pub const WriteError = T.WriteError;
-        pub const ReadError = T.ReadError;
-
-        /// Shared stream types
-        const SharedStream = stream.Shared(Self);
-        pub const PollError = SharedStream.PollError;
-        pub const PollEvent = SharedStream.PollEvent;
-        pub const WriteQueue = SharedStream.WriteQueue;
-        pub const WriteRequest = SharedStream.WriteRequest;
-
-        /// The high-level helper interfaces that make it easier to perform
-        /// common tasks. These may not work with all possible Loop implementations.
-        pub const Async = @import("watcher/async.zig").Async(Self);
-        pub const File = @import("watcher/file.zig").File(Self);
-        pub const Process = @import("watcher/process.zig").Process(Self);
-        pub const Stream = stream.GenericStream(Self);
-        pub const Timer = @import("watcher/timer.zig").Timer(Self);
-        pub const TCP = @import("watcher/tcp.zig").TCP(Self);
-        pub const UDP = @import("watcher/udp.zig").UDP(Self);
-
-        /// The callback of the main Loop operations. Higher level interfaces may
-        /// use a different callback mechanism.
-        pub const Callback = *const fn (
-            userdata: ?*anyopaque,
-            loop: *Loop,
-            completion: *Completion,
-            result: Result,
-        ) CallbackAction;
-
-        /// A way to access the raw type.
-        pub const Sys = T;
-
-        /// A callback that does nothing and immediately disarms. This
-        /// implements xev.Callback and is the default value for completions.
-        pub fn noopCallback(
-            _: ?*anyopaque,
-            _: *Loop,
-            _: *Completion,
-            _: Result,
-        ) CallbackAction {
-            return .disarm;
-        }
-
-        test {
-            @import("std").testing.refAllDecls(@This());
-        }
-
-        test "completion is zero-able" {
-            const c: Completion = .{};
-            _ = c;
-        }
-    };
-}
+pub const Backend = @import("backend.zig").Backend;
 
 test {
     // Tested on all platforms
