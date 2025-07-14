@@ -43,6 +43,32 @@ pub const RunMode = enum(c_int) {
     until_done = 2,
 };
 
+/// The callback of the main Loop operations. Higher level interfaces may
+/// use a different callback mechanism.
+pub fn Callback(comptime T: type) type {
+    return *const fn (
+        userdata: ?*anyopaque,
+        loop: *T.Loop,
+        completion: *T.Completion,
+        result: T.Result,
+    ) CallbackAction;
+}
+
+/// A callback that does nothing and immediately disarms. This
+/// implements xev.Callback and is the default value for completions.
+pub fn NoopCallback(comptime T: type) Callback(T) {
+    return (struct {
+        pub fn noopCallback(
+            _: ?*anyopaque,
+            _: *T.Loop,
+            _: *T.Completion,
+            _: T.Result,
+        ) CallbackAction {
+            return .disarm;
+        }
+    }).noopCallback;
+}
+
 /// The result type for callbacks. This should be used by all loop
 /// implementations and higher level abstractions in order to control
 /// what to do after the loop completes.

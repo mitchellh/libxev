@@ -8,9 +8,16 @@ const darwin = @import("../darwin.zig");
 const queue = @import("../queue.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
-const main = @import("../main.zig");
-const xev = main.Kqueue;
-const ThreadPool = main.ThreadPool;
+const ThreadPool = @import("../ThreadPool.zig");
+const Async = @import("../main.zig").Kqueue.Async;
+
+const looppkg = @import("../loop.zig");
+const Options = looppkg.Options;
+const RunMode = looppkg.RunMode;
+const Callback = looppkg.Callback(@This());
+const CallbackAction = looppkg.CallbackAction;
+const CompletionState = looppkg.CompletionState;
+const noopCallback = looppkg.NoopCallback(@This());
 
 const log = std.log.scoped(.libxev_kqueue);
 
@@ -96,7 +103,7 @@ pub const Loop = struct {
 
     /// Initialize a new kqueue-backed event loop. See the Options docs
     /// for what options matter for kqueue.
-    pub fn init(options: xev.Options) !Loop {
+    pub fn init(options: Options) !Loop {
         // This creates a new kqueue fd
         const fd = try posix.kqueue();
         errdefer posix.close(fd);
@@ -289,7 +296,7 @@ pub const Loop = struct {
 
     /// Run the event loop. See RunMode documentation for details on modes.
     /// Once the loop is run, the pointer MUST remain stable.
-    pub fn run(self: *Loop, mode: xev.RunMode) !void {
+    pub fn run(self: *Loop, mode: RunMode) !void {
         switch (mode) {
             .no_wait => try self.tick(0),
             .once => try self.tick(1),
@@ -596,7 +603,7 @@ pub const Loop = struct {
         c: *Completion,
         next_ms: u64,
         userdata: ?*anyopaque,
-        comptime cb: xev.Callback,
+        comptime cb: Callback,
     ) void {
         c.* = .{
             .op = .{
@@ -618,7 +625,7 @@ pub const Loop = struct {
         c_cancel: *Completion,
         next_ms: u64,
         userdata: ?*anyopaque,
-        comptime cb: xev.Callback,
+        comptime cb: Callback,
     ) void {
         switch (c.flags.state) {
             .dead, .deleting => {
@@ -967,7 +974,7 @@ pub const Completion = struct {
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: xev.Callback = xev.noopCallback,
+    callback: Callback = noopCallback,
 
     //---------------------------------------------------------------
     // Internal fields
@@ -1025,7 +1032,7 @@ pub const Completion = struct {
     ///
     /// Third, if you stop the loop (loop.stop()), the completions registered
     /// with the loop will NOT be reset to a dead state.
-    pub fn state(self: Completion) xev.CompletionState {
+    pub fn state(self: Completion) CompletionState {
         return switch (self.flags.state) {
             .dead => .dead,
             .adding, .deleting, .active => .active,
@@ -1431,11 +1438,11 @@ const Wakeup = if (builtin.os.tag.isDarwin()) struct {
     /// an empty message to this port can be used to wake up the loop
     /// at any time. Waking up the loop via this port won't trigger any
     /// particular completion, it just forces tick to cycle.
-    mach_port: xev.Async,
+    mach_port: Async,
     mach_port_buffer: [32]u8 = undefined,
 
     fn init() !Self {
-        const mach_port = try xev.Async.init();
+        const mach_port = try Async.init();
         errdefer mach_port.deinit();
         return .{ .mach_port = mach_port };
     }
@@ -1887,7 +1894,7 @@ test "kqueue: stop" {
     var called = false;
     var c1: Completion = undefined;
     loop.timer(&c1, 1_000_000, &called, (struct {
-        fn callback(ud: ?*anyopaque, l: *xev.Loop, _: *xev.Completion, r: xev.Result) xev.CallbackAction {
+        fn callback(ud: ?*anyopaque, l: *Loop, _: *Completion, r: Result) CallbackAction {
             _ = l;
             _ = r;
             const b: *bool = @ptrCast(ud.?);
@@ -1914,14 +1921,14 @@ test "kqueue: timer" {
 
     // Add the timer
     var called = false;
-    var c1: xev.Completion = undefined;
+    var c1: Completion = undefined;
     loop.timer(&c1, 1, &called, (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             _ = r;
             const b: *bool = @ptrCast(ud.?);
@@ -1932,14 +1939,14 @@ test "kqueue: timer" {
 
     // Add another timer
     var called2 = false;
-    var c2: xev.Completion = undefined;
+    var c2: Completion = undefined;
     loop.timer(&c2, 100_000, &called2, (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             _ = r;
             const b: *bool = @ptrCast(ud.?);
@@ -1968,13 +1975,13 @@ test "kqueue: timer reset" {
     var loop = try Loop.init(.{});
     defer loop.deinit();
 
-    const cb: xev.Callback = (struct {
+    const cb: Callback = (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             const v: *?TimerTrigger = @ptrCast(ud.?);
             v.* = r.timer catch unreachable;
@@ -2010,13 +2017,13 @@ test "kqueue: timer reset before tick" {
     var loop = try Loop.init(.{});
     defer loop.deinit();
 
-    const cb: xev.Callback = (struct {
+    const cb: Callback = (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             const v: *?TimerTrigger = @ptrCast(ud.?);
             v.* = r.timer catch unreachable;
@@ -2048,13 +2055,13 @@ test "kqueue: timer reset after trigger" {
     var loop = try Loop.init(.{});
     defer loop.deinit();
 
-    const cb: xev.Callback = (struct {
+    const cb: Callback = (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             const v: *?TimerTrigger = @ptrCast(ud.?);
             v.* = r.timer catch unreachable;
@@ -2094,14 +2101,14 @@ test "kqueue: timer cancellation" {
 
     // Add the timer
     var trigger: ?TimerTrigger = null;
-    var c1: xev.Completion = undefined;
+    var c1: Completion = undefined;
     loop.timer(&c1, 100_000, &trigger, (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             const ptr: *?TimerTrigger = @ptrCast(@alignCast(ud.?));
             ptr.* = r.timer catch unreachable;
@@ -2115,7 +2122,7 @@ test "kqueue: timer cancellation" {
 
     // Cancel the timer
     var called = false;
-    var c_cancel: xev.Completion = .{
+    var c_cancel: Completion = .{
         .op = .{
             .cancel = .{
                 .c = &c1,
@@ -2126,10 +2133,10 @@ test "kqueue: timer cancellation" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
@@ -2155,14 +2162,14 @@ test "kqueue: canceling a completed operation" {
 
     // Add the timer
     var trigger: ?TimerTrigger = null;
-    var c1: xev.Completion = undefined;
+    var c1: Completion = undefined;
     loop.timer(&c1, 1, &trigger, (struct {
         fn callback(
             ud: ?*anyopaque,
-            l: *xev.Loop,
-            _: *xev.Completion,
-            r: xev.Result,
-        ) xev.CallbackAction {
+            l: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
             _ = l;
             const ptr: *?TimerTrigger = @ptrCast(@alignCast(ud.?));
             ptr.* = r.timer catch unreachable;
@@ -2176,7 +2183,7 @@ test "kqueue: canceling a completed operation" {
 
     // Cancel the timer
     var called = false;
-    var c_cancel: xev.Completion = .{
+    var c_cancel: Completion = .{
         .op = .{
             .cancel = .{
                 .c = &c1,
@@ -2187,10 +2194,10 @@ test "kqueue: canceling a completed operation" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.cancel catch unreachable;
@@ -2246,10 +2253,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 const conn = @as(*posix.socket_t, @ptrCast(@alignCast(ud.?)));
@@ -2262,7 +2269,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
 
     // Connect
     var connected = false;
-    var c_connect: xev.Completion = .{
+    var c_connect: Completion = .{
         .op = .{
             .connect = .{
                 .socket = client_conn,
@@ -2274,10 +2281,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.connect catch unreachable;
@@ -2295,7 +2302,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
     try testing.expect(connected);
 
     // Send
-    var c_send: xev.Completion = .{
+    var c_send: Completion = .{
         .op = .{
             .send = .{
                 .fd = client_conn,
@@ -2306,10 +2313,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.send catch unreachable;
@@ -2323,7 +2330,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
     // Receive
     var recv_buf: [128]u8 = undefined;
     var recv_len: usize = 0;
-    var c_recv: xev.Completion = .{
+    var c_recv: Completion = .{
         .op = .{
             .recv = .{
                 .fd = server_conn,
@@ -2335,10 +2342,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 const ptr = @as(*usize, @ptrCast(@alignCast(ud.?)));
@@ -2355,7 +2362,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
 
     // Shutdown
     var shutdown = false;
-    var c_client_shutdown: xev.Completion = .{
+    var c_client_shutdown: Completion = .{
         .op = .{
             .shutdown = .{
                 .socket = client_conn,
@@ -2366,10 +2373,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.shutdown catch unreachable;
@@ -2397,10 +2404,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 const ptr = @as(*?bool, @ptrCast(@alignCast(ud.?)));
@@ -2418,7 +2425,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
     try testing.expect(eof.? == true);
 
     // Close
-    var c_client_close: xev.Completion = .{
+    var c_client_close: Completion = .{
         .op = .{
             .close = .{
                 .fd = client_conn,
@@ -2429,10 +2436,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
@@ -2444,7 +2451,7 @@ test "kqueue: socket accept/connect/send/recv/close" {
     };
     loop.add(&c_client_close);
 
-    var c_server_close: xev.Completion = .{
+    var c_server_close: Completion = .{
         .op = .{
             .close = .{
                 .fd = ln,
@@ -2455,10 +2462,10 @@ test "kqueue: socket accept/connect/send/recv/close" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
@@ -2480,7 +2487,7 @@ test "kqueue: file IO on thread pool" {
     if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
 
-    var tpool = main.ThreadPool.init(.{});
+    var tpool = ThreadPool.init(.{});
     defer tpool.deinit();
     defer tpool.shutdown();
     var loop = try Loop.init(.{ .thread_pool = &tpool });
@@ -2497,7 +2504,7 @@ test "kqueue: file IO on thread pool" {
 
     // Perform a write and then a read
     var write_buf = [_]u8{ 1, 1, 2, 3, 5, 8, 13 };
-    var c_write: xev.Completion = .{
+    var c_write: Completion = .{
         .op = .{
             .write = .{
                 .fd = f.handle,
@@ -2510,10 +2517,10 @@ test "kqueue: file IO on thread pool" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = ud;
                 _ = l;
                 _ = c;
@@ -2536,7 +2543,7 @@ test "kqueue: file IO on thread pool" {
     // Read
     var read_buf: [128]u8 = undefined;
     var read_len: usize = 0;
-    var c_read: xev.Completion = .{
+    var c_read: Completion = .{
         .op = .{
             .read = .{
                 .fd = f2.handle,
@@ -2550,10 +2557,10 @@ test "kqueue: file IO on thread pool" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 const ptr = @as(*usize, @ptrCast(@alignCast(ud.?)));
@@ -2592,7 +2599,7 @@ test "kqueue: mach port" {
 
     // Add the waiter
     var called = false;
-    var c_wait: xev.Completion = .{
+    var c_wait: Completion = .{
         .op = .{
             .machport = .{
                 .port = mach_port,
@@ -2604,10 +2611,10 @@ test "kqueue: mach port" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.machport catch unreachable;
@@ -2689,10 +2696,10 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                _: *xev.Loop,
-                _: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                _: *Loop,
+                _: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = ud;
                 _ = r.accept catch |err| switch (err) {
                     error.Canceled => {},
@@ -2718,10 +2725,10 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                _: *xev.Loop,
-                _: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                _: *Loop,
+                _: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = r.cancel catch unreachable;
                 const ptr = @as(*?bool, @ptrCast(@alignCast(ud.?)));
                 ptr.* = true;
@@ -2738,7 +2745,7 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
     // Both callbacks are called active count should be 0
     try testing.expectEqual(@as(usize, 0), loop.active);
 
-    var c_server_close: xev.Completion = .{
+    var c_server_close: Completion = .{
         .op = .{
             .close = .{
                 .fd = ln,
@@ -2749,10 +2756,10 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
         .callback = (struct {
             fn callback(
                 ud: ?*anyopaque,
-                l: *xev.Loop,
-                c: *xev.Completion,
-                r: xev.Result,
-            ) xev.CallbackAction {
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
                 _ = l;
                 _ = c;
                 _ = r.close catch unreachable;
