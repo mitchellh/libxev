@@ -7,10 +7,10 @@ const queue = @import("../queue.zig");
 /// Options for creating a stream type. Each of the options makes the
 /// functionality available for the stream.
 pub const Options = struct {
-    read: ReadMethod,
-    write: WriteMethod,
-    close: bool,
-    poll: bool,
+    read: ReadMethod = .none,
+    write: WriteMethod = .none,
+    close: bool = false,
+    poll: bool = false,
 
     /// True to schedule the read/write on the threadpool.
     threadpool: bool = false,
@@ -104,10 +104,9 @@ pub fn Shared(comptime xev: type) type {
     };
 }
 
-/// Creates a stream type that is meant to be embedded within other
-/// types using "usingnamespace". A stream is something that supports read,
-/// write, close, etc. The exact operations supported are defined by the
-/// "options" struct.
+/// Creates a stream type that is meant to be embedded within other types.
+/// A stream is something that supports read, write, close, etc. The exact
+/// operations supported are defined by the "options" struct.
 ///
 /// T requirements:
 ///   - field named "fd" of type fd_t or socket_t
@@ -115,10 +114,25 @@ pub fn Shared(comptime xev: type) type {
 ///
 pub fn Stream(comptime xev: type, comptime T: type, comptime options: Options) type {
     return struct {
-        pub usingnamespace if (options.close) Closeable(xev, T, options) else struct {};
-        pub usingnamespace if (options.poll) Pollable(xev, T, options) else struct {};
-        pub usingnamespace if (options.read != .none) Readable(xev, T, options) else struct {};
-        pub usingnamespace if (options.write != .none) Writeable(xev, T, options) else struct {};
+        const C_: ?type = if (options.close) Closeable(xev, T, options) else null;
+        pub const close = if (C_) |C| C.close else {};
+
+        const P_: ?type = if (options.poll) Pollable(xev, T, options) else null;
+        pub const poll = if (P_) |P| poll: {
+            if (!@hasDecl(P, "poll")) break :poll {};
+            break :poll P.poll;
+        } else {};
+
+        const R_: ?type = if (options.read != .none) Readable(xev, T, options) else null;
+        pub const read = if (R_) |R| R.read else {};
+
+        const W_: ?type = if (options.write != .none) Writeable(xev, T, options) else null;
+        pub const writeInit = if (W_) |W| writeInit: {
+            if (xev.dynamic) break :writeInit {};
+            break :writeInit W.writeInit;
+        } else {};
+        pub const write = if (W_) |W| W.write else null;
+        pub const queueWrite = if (W_) |W| W.queueWrite else {};
     };
 }
 
@@ -1034,13 +1048,19 @@ pub fn GenericStream(comptime xev: type) type {
 
         pub const Union = xev.Union(&.{"Stream"});
 
-        pub usingnamespace Stream(xev, Self, .{
+        const S = Stream(xev, Self, .{
             .close = true,
             .poll = true,
             .read = .read,
             .write = .write,
             .type = "Stream",
         });
+        pub const close = S.close;
+        pub const poll = S.poll;
+        pub const read = S.read;
+        pub const write = S.write;
+        pub const writeInit = S.writeInit;
+        pub const queueWrite = S.queueWrite;
 
         pub fn initFd(fd: std.posix.pid_t) Self {
             return .{ .backend = switch (xev.backend) {
@@ -1075,12 +1095,18 @@ pub fn GenericStream(comptime xev: type) type {
         /// The underlying file
         fd: std.posix.fd_t,
 
-        pub usingnamespace Stream(xev, Self, .{
+        const S = Stream(xev, Self, .{
             .close = true,
             .poll = true,
             .read = .read,
             .write = .write,
         });
+        pub const close = S.close;
+        pub const poll = S.poll;
+        pub const read = S.read;
+        pub const write = S.write;
+        pub const writeInit = S.writeInit;
+        pub const queueWrite = S.queueWrite;
 
         /// Initialize a generic stream from a file descriptor.
         pub fn initFd(fd: std.posix.fd_t) Self {
@@ -1104,6 +1130,17 @@ pub fn GenericStream(comptime xev: type) type {
 
 fn GenericStreamTests(comptime xev: type, comptime Impl: type) type {
     return struct {
+        test "Stream decls" {
+            if (!@hasDecl(Impl, "S")) return;
+            inline for (@typeInfo(Impl.S).@"struct".decls) |decl| {
+                const Decl = @TypeOf(@field(Impl.S, decl.name));
+                if (Decl == void) continue;
+                if (!@hasDecl(Impl, decl.name)) {
+                    @compileError("missing decl: " ++ decl.name);
+                }
+            }
+        }
+
         test "pty: child to parent" {
             const testing = std.testing;
             switch (builtin.os.tag) {
