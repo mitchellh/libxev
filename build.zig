@@ -39,15 +39,20 @@ pub fn build(b: *std.Build) !void {
         "Install the example binaries to zig-out",
     ) orelse false;
 
+    const c_api_module = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Static C lib
     const static_lib: ?*Step.Compile = lib: {
         if (target.result.os.tag == .wasi) break :lib null;
 
-        const static_lib = b.addStaticLibrary(.{
+        const static_lib = b.addLibrary(.{
+            .linkage = .static,
             .name = "xev",
-            .root_source_file = b.path("src/c_api.zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = c_api_module,
         });
         static_lib.linkLibC();
         if (target.result.os.tag == .windows) {
@@ -62,11 +67,10 @@ pub fn build(b: *std.Build) !void {
         // We require native so we can link to libxml2
         if (!target.query.isNative()) break :lib null;
 
-        const dynamic_lib = b.addSharedLibrary(.{
+        const dynamic_lib = b.addLibrary(.{
+            .linkage = .dynamic,
             .name = "xev",
-            .root_source_file = b.path("src/c_api.zig"),
-            .target = target,
-            .optimize = optimize,
+            .root_module = c_api_module,
         });
         break :lib dynamic_lib;
     };
@@ -115,10 +119,12 @@ pub fn build(b: *std.Build) !void {
         );
         const test_exe = b.addTest(.{
             .name = "xev-test",
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .filter = test_filter,
+            .filters = if (test_filter) |filter| &.{filter} else &.{},
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
         });
         switch (target.result.os.tag) {
             .linux, .macos => test_exe.linkLibC(),
@@ -190,12 +196,14 @@ fn buildBenchmarks(
         // Executable builder.
         const exe = b.addExecutable(.{
             .name = name,
-            .root_source_file = b.path(b.fmt(
-                "src/bench/{s}",
-                .{entry.name},
-            )),
-            .target = target,
-            .optimize = .ReleaseFast, // benchmarks are always release fast
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(b.fmt(
+                    "src/bench/{s}",
+                    .{entry.name},
+                )),
+                .target = target,
+                .optimize = .ReleaseFast, // benchmarks are always release fast
+            }),
         });
         exe.root_module.addImport("xev", b.modules.get("xev").?);
 
@@ -239,12 +247,14 @@ fn buildExamples(
         const exe: *Step.Compile = if (is_zig) exe: {
             const exe = b.addExecutable(.{
                 .name = name,
-                .root_source_file = b.path(b.fmt(
-                    "examples/{s}",
-                    .{entry.name},
-                )),
-                .target = target,
-                .optimize = optimize,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(b.fmt(
+                        "examples/{s}",
+                        .{entry.name},
+                    )),
+                    .target = target,
+                    .optimize = optimize,
+                }),
             });
             exe.root_module.addImport("xev", b.modules.get("xev").?);
             break :exe exe;
@@ -252,8 +262,10 @@ fn buildExamples(
             const c_lib = c_lib_ orelse return error.UnsupportedPlatform;
             const exe = b.addExecutable(.{
                 .name = name,
-                .target = target,
-                .optimize = optimize,
+                .root_module = b.createModule(.{
+                    .target = target,
+                    .optimize = optimize,
+                }),
             });
             exe.linkLibC();
             exe.addIncludePath(b.path("include"));

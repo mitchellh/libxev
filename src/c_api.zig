@@ -11,6 +11,11 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const xev = @import("main.zig");
 
+const func_callconv: std.builtin.CallingConvention = if (blk: {
+    const order = builtin.zig_version.order(.{ .major = 0, .minor = 14, .patch = 1 });
+    break :blk order == .lt or order == .eq;
+}) .C else .c;
+
 export fn xev_loop_init(loop: *xev.Loop) c_int {
     // TODO: overflow
     loop.* = xev.Loop.init(.{}) catch |err| return errorCode(err);
@@ -89,7 +94,7 @@ export fn xev_threadpool_schedule(
 
 export fn xev_threadpool_task_init(
     t: *xev.ThreadPool.Task,
-    cb: *const fn (*xev.ThreadPool.Task) callconv(.C) void,
+    cb: *const fn (*xev.ThreadPool.Task) callconv(func_callconv) void,
 ) void {
     const extern_t = @as(*Task, @ptrCast(@alignCast(t)));
     extern_t.c_callback = cb;
@@ -148,7 +153,7 @@ export fn xev_timer_run(
         *xev.Completion,
         c_int,
         ?*anyopaque,
-    ) callconv(.C) xev.CallbackAction,
+    ) callconv(func_callconv) xev.CallbackAction,
 ) void {
     const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c)));
@@ -188,7 +193,7 @@ export fn xev_timer_reset(
         *xev.Completion,
         c_int,
         ?*anyopaque,
-    ) callconv(.C) xev.CallbackAction,
+    ) callconv(func_callconv) xev.CallbackAction,
 ) void {
     const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c)));
@@ -227,7 +232,7 @@ export fn xev_timer_cancel(
         *xev.Completion,
         c_int,
         ?*anyopaque,
-    ) callconv(.C) xev.CallbackAction,
+    ) callconv(func_callconv) xev.CallbackAction,
 ) void {
     const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c_cancel)));
@@ -282,7 +287,7 @@ export fn xev_async_wait(
         *xev.Completion,
         c_int,
         ?*anyopaque,
-    ) callconv(.C) xev.CallbackAction,
+    ) callconv(func_callconv) xev.CallbackAction,
 ) void {
     const Callback = @typeInfo(@TypeOf(cb)).pointer.child;
     const extern_c = @as(*Completion, @ptrCast(@alignCast(c)));
@@ -326,7 +331,7 @@ const Completion = extern struct {
 const Task = extern struct {
     const Data = [@sizeOf(xev.ThreadPool.Task)]u8;
     data: Data,
-    c_callback: *const fn (*xev.ThreadPool.Task) callconv(.C) void,
+    c_callback: *const fn (*xev.ThreadPool.Task) callconv(func_callconv) void,
 };
 
 /// Returns the unique error code for an error.
