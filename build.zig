@@ -104,7 +104,7 @@ pub fn build(b: *std.Build) !void {
 
     // Benchmarks and examples
     const benchmarks = try buildBenchmarks(b, target);
-    const examples = try buildExamples(b, target, optimize, static_lib);
+    const examples = if (emit_examples) try buildExamples(b, target, optimize, static_lib) else null;
 
     // Test Executable
     const test_exe: *Step.Compile = test_exe: {
@@ -150,7 +150,7 @@ pub fn build(b: *std.Build) !void {
             } } },
         ).step);
     };
-    if (emit_examples) for (examples) |exe| {
+    if (examples) |list| for (list) |exe| {
         b.getInstallStep().dependOn(&b.addInstallArtifact(
             exe,
             .{ .dest_dir = .{ .override = .{
