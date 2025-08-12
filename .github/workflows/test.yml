@@ -28,7 +28,7 @@ jobs:
       ZIG_GLOBAL_CACHE_DIR: /zig/global-cache
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Setup Cache
       uses: namespacelabs/nscloud-cache-action@v1.2.12
@@ -60,7 +60,7 @@ jobs:
       ZIG_GLOBAL_CACHE_DIR: /zig/global-cache
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Setup Cache
       uses: namespacelabs/nscloud-cache-action@v1.2.12
@@ -94,7 +94,7 @@ jobs:
     runs-on: namespace-profile-mitchellh-sm-systemd
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     # Required by Namespace
     - run: sudo systemctl start ssh
@@ -120,7 +120,7 @@ jobs:
     runs-on: macos-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Install zig
       uses: mlugg/setup-zig@v2
@@ -140,7 +140,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Install zig
       uses: mlugg/setup-zig@v2
