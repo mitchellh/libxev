@@ -170,7 +170,7 @@ fn buildBenchmarks(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
 ) ![]const *Step.Compile {
-    var steps: std.ArrayList(*Step.Compile) = .{};
+    var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(b.allocator);
 
     var dir = try std.fs.cwd().openDir(try b.build_root.join(
@@ -220,7 +220,7 @@ fn buildExamples(
     optimize: std.builtin.OptimizeMode,
     c_lib_: ?*Step.Compile,
 ) ![]const *Step.Compile {
-    var steps: std.ArrayList(*Step.Compile) = .{};
+    var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(b.allocator);
 
     var dir = try std.fs.cwd().openDir(try b.build_root.join(
@@ -294,7 +294,7 @@ fn buildExamples(
 }
 
 fn manPages(b: *std.Build) ![]const *Step {
-    var steps: std.ArrayList(*Step) = .{};
+    var steps: std.ArrayList(*Step) = .empty;
     defer steps.deinit(b.allocator);
 
     var dir = try std.fs.cwd().openDir(try b.build_root.join(
