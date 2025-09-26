@@ -1050,7 +1050,7 @@ pub const Completion = struct {
                 break :r .{ .connect = windows.unexpectedWSAError(windows.ws2_32.WSAGetLastError()) };
             },
 
-            .read => |*v| r: {
+            .read => |*v| {
                 var bytes_transferred: windows.DWORD = 0;
                 const result = windows.kernel32.GetOverlappedResult(v.fd, &self.overlapped, &bytes_transferred, windows.FALSE);
                 if (result == windows.FALSE) {
