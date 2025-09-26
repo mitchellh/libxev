@@ -558,19 +558,8 @@ pub const Loop = struct {
                     posix.bind(as_socket, &bind_addr.any, bind_addr.getOsSockLen()) catch unreachable;
                 }
 
-                // NOTE: This can be declared in somewhere else; it all happens in comptime though so no issue putting it here.
-                const LPFN_CONNECTEX = *const fn (
-                    Socket: windows.ws2_32.SOCKET,
-                    SockAddr: *const windows.ws2_32.sockaddr,
-                    SockLen: posix.socklen_t,
-                    SendBuf: ?*const anyopaque,
-                    SendBufLen: windows.DWORD,
-                    BytesSent: *windows.DWORD,
-                    Overlapped: *windows.OVERLAPPED,
-                ) callconv(.winapi) windows.BOOL;
-
                 // Dynamically load the ConnectEx function.
-                const ConnectEx = windows.loadWinsockExtensionFunction(LPFN_CONNECTEX, as_socket, windows.ws2_32.WSAID_CONNECTEX) catch |err| switch (err) {
+                const ConnectEx = windows.loadWinsockExtensionFunction(windows.LPFN_CONNECTEX, as_socket, windows.ws2_32.WSAID_CONNECTEX) catch |err| switch (err) {
                     error.OperationNotSupported => unreachable, // Something other than sockets has given.
                     error.FileDescriptorNotASocket => unreachable, // Must be preferred on a socket.
                     error.ShortRead => unreachable,
