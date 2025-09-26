@@ -984,7 +984,7 @@ pub const Completion = struct {
     /// Returns a handle for the current operation if it makes sense.
     fn handle(self: Completion) ?windows.HANDLE {
         return switch (self.op) {
-            inline .accept => |*v| v.socket,
+            inline .accept, .connect => |*v| v.socket,
             inline .read, .pread, .write, .pwrite, .recv, .send, .recvfrom, .sendto => |*v| v.fd,
             else => null,
         };
