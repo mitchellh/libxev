@@ -33,6 +33,7 @@ pub const QueryPerformanceFrequency = windows.QueryPerformanceFrequency;
 pub const GetQueuedCompletionStatusEx = windows.GetQueuedCompletionStatusEx;
 pub const PostQueuedCompletionStatus = windows.PostQueuedCompletionStatus;
 pub const CreateIoCompletionPort = windows.CreateIoCompletionPort;
+pub const loadWinsockExtensionFunction = windows.loadWinsockExtensionFunction;
 
 pub extern "kernel32" fn DeleteFileW(lpFileName: [*:0]const u16) callconv(windows.WINAPI) windows.BOOL;
 
