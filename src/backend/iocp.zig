@@ -547,7 +547,7 @@ pub const Loop = struct {
             .connect => |*v| action: {
                 const as_socket = asSocket(v.socket);
                 // Associate our socket with loop's completion port.
-                self.associate_fd(v.socket) catch unreachable;
+                self.associate_fd(completion.handle().?) catch unreachable;
 
                 // ConnectEx requires socket to be initially bound.
                 // https://github.com/tigerbeetle/tigerbeetle/blob/main/src/io/windows.zig#L467
