@@ -584,7 +584,7 @@ pub const Loop = struct {
                 // The following is necessary for various functions (shutdown, getsockopt, setsockopt, getsockname, getpeername) to work.
                 // https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_connectex#remarks
                 // https://stackoverflow.com/questions/13598530/connectex-requires-the-socket-to-be-initially-bound-but-to-what
-                _ = windows.ws2_32.setsockopt(asSocket(v.socket), windows.ws2_32.SOL.SOCKET, windows.ws2_32.SO.UPDATE_CONNECT_CONTEXT, null, 0);
+                _ = windows.ws2_32.setsockopt(as_socket, windows.ws2_32.SOL.SOCKET, windows.ws2_32.SO.UPDATE_CONNECT_CONTEXT, null, 0);
 
                 break :action .{ .result = .{ .connect = {} } };
             },
