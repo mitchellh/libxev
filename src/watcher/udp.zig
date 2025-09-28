@@ -108,7 +108,7 @@ fn UDPSendto(comptime xev: type) type {
             };
 
             switch (buf) {
-                inline .slice, .array => {
+                inline .slice, .array, .vectors => {
                     c.* = .{
                         .op = .{
                             .recvfrom = .{
@@ -171,7 +171,7 @@ fn UDPSendto(comptime xev: type) type {
             };
 
             switch (buf) {
-                inline .slice, .array => {
+                inline .slice, .array, .vectors => {
                     c.* = .{
                         .op = .{
                             .sendto = .{
@@ -286,7 +286,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
             };
 
             switch (buf) {
-                inline .slice, .array => {
+                inline .slice, .array, .vectors => {
                     c.* = .{
                         .op = .{
                             .recvfrom = .{
@@ -349,7 +349,7 @@ fn UDPSendtoIOCP(comptime xev: type) type {
             };
 
             switch (buf) {
-                inline .slice, .array => {
+                inline .slice, .array, .vectors => {
                     c.* = .{
                         .op = .{
                             .sendto = .{
@@ -516,6 +516,11 @@ fn UDPSendMsg(comptime xev: type) type {
                         .len = arr.len,
                     };
                 },
+
+                .vectors => |*vecs| {
+                    s.op.recv.msghdr.iov = &vecs.data;
+                    s.op.recv.msghdr.iovlen = @intCast(vecs.len);
+                },
             }
 
             c.* = .{
@@ -620,6 +625,11 @@ fn UDPSendMsg(comptime xev: type) type {
                         .base = &arr.array,
                         .len = arr.len,
                     };
+                },
+
+                .vectors => |vecs| {
+                    s.op.send.msghdr.iov = &vecs.data;
+                    s.op.send.msghdr.iovlen = @intCast(vecs.len);
                 },
             }
 

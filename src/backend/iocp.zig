@@ -549,6 +549,11 @@ pub const Loop = struct {
                 if (result != 0) {
                     const err = windows.ws2_32.WSAGetLastError();
                     break :action switch (err) {
+                        .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .connect = error.Canceled } },
+                        .WSAECONNREFUSED => .{ .result = .{ .connect = error.ConnectionRefused } },
+                        .WSAECONNRESET => .{ .result = .{ .connect = error.ConnectionResetByPeer } },
+                        .WSAETIMEDOUT => .{ .result = .{ .connect = error.ConnectionTimedOut } },
+                        .WSAEHOSTUNREACH, .WSAENETUNREACH => .{ .result = .{ .connect = error.NetworkUnreachable } },
                         else => .{ .result = .{ .connect = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -557,7 +562,14 @@ pub const Loop = struct {
 
             .read => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                const buffer: []u8 = switch (v.buffer) {
+                    .slice => |slice| slice,
+                    .array => |*array| array,
+                    .vectors => |*vecs|
+                    // Windows ReadFile doesn't support vectored I/O
+                    // Fall back to reading into the first buffer only
+                    if (vecs.len > 0) @as([]u8, @ptrCast(vecs.data[0].buf[0..vecs.data[0].len])) else &.{},
+                };
                 break :action if (windows.exp.ReadFile(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
@@ -570,7 +582,14 @@ pub const Loop = struct {
 
             .pread => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
+                const buffer: []u8 = switch (v.buffer) {
+                    .slice => |slice| slice,
+                    .array => |*array| array,
+                    .vectors => |*vecs|
+                    // Windows ReadFile doesn't support vectored I/O
+                    // Fall back to reading into the first buffer only
+                    if (vecs.len > 0) @as([]u8, @ptrCast(vecs.data[0].buf[0..vecs.data[0].len])) else &.{},
+                };
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.Offset = @intCast(v.offset & 0xFFFF_FFFF_FFFF_FFFF);
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.OffsetHigh = @intCast(v.offset >> 32);
                 break :action if (windows.exp.ReadFile(v.fd, buffer, &completion.overlapped)) |_|
@@ -587,7 +606,14 @@ pub const Loop = struct {
 
             .write => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                const buffer: []const u8 = switch (v.buffer) {
+                    .slice => |slice| slice,
+                    .array => |*array| array.array[0..array.len],
+                    .vectors => |*vecs|
+                    // Windows WriteFile doesn't support vectored I/O
+                    // Fall back to writing from the first buffer only
+                    if (vecs.len > 0) @as([]const u8, @ptrCast(vecs.data[0].buf[0..vecs.data[0].len])) else &.{},
+                };
                 break :action if (windows.exp.WriteFile(v.fd, buffer, &completion.overlapped)) |_|
                     .{
                         .submitted = {},
@@ -600,7 +626,14 @@ pub const Loop = struct {
 
             .pwrite => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
+                const buffer: []const u8 = switch (v.buffer) {
+                    .slice => |slice| slice,
+                    .array => |*array| array.array[0..array.len],
+                    .vectors => |*vecs|
+                    // Windows WriteFile doesn't support vectored I/O
+                    // Fall back to writing from the first buffer only
+                    if (vecs.len > 0) @as([]const u8, @ptrCast(vecs.data[0].buf[0..vecs.data[0].len])) else &.{},
+                };
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.Offset = @intCast(v.offset & 0xFFFF_FFFF_FFFF_FFFF);
                 completion.overlapped.DUMMYUNIONNAME.DUMMYSTRUCTNAME.OffsetHigh = @intCast(v.offset >> 32);
                 break :action if (windows.exp.WriteFile(v.fd, buffer, &completion.overlapped)) |_|
@@ -615,12 +648,26 @@ pub const Loop = struct {
 
             .send => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
-                v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @as(u32, @intCast(buffer.len)) };
+                const buffer_count: u32 = switch (v.buffer) {
+                    .slice => |slice| blk: {
+                        v.wsa_buffer = .{ .buf = @constCast(slice.ptr), .len = @as(u32, @intCast(slice.len)) };
+                        break :blk 1;
+                    },
+                    .array => |*array| blk: {
+                        const buffer = array.array[0..array.len];
+                        v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @as(u32, @intCast(buffer.len)) };
+                        break :blk 1;
+                    },
+                    .vectors => |*vecs| @as(u32, @intCast(vecs.len)),
+                };
+                const wsa_buffers: [*]windows.ws2_32.WSABUF = switch (v.buffer) {
+                    .vectors => |*vecs| @as([*]windows.ws2_32.WSABUF, @ptrCast(&vecs.data[0])),
+                    else => @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
+                };
                 const result = windows.ws2_32.WSASend(
                     asSocket(v.fd),
-                    @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
-                    1,
+                    wsa_buffers,
+                    buffer_count,
                     null,
                     0,
                     &completion.overlapped,
@@ -640,15 +687,28 @@ pub const Loop = struct {
 
             .recv => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
-                v.wsa_buffer = .{ .buf = buffer.ptr, .len = @as(u32, @intCast(buffer.len)) };
+                const buffer_count: u32 = switch (v.buffer) {
+                    .slice => |slice| blk: {
+                        v.wsa_buffer = .{ .buf = slice.ptr, .len = @as(u32, @intCast(slice.len)) };
+                        break :blk 1;
+                    },
+                    .array => |*array| blk: {
+                        v.wsa_buffer = .{ .buf = array.ptr, .len = @as(u32, @intCast(array.len)) };
+                        break :blk 1;
+                    },
+                    .vectors => |*vecs| @as(u32, @intCast(vecs.len)),
+                };
+                const wsa_buffers: [*]windows.ws2_32.WSABUF = switch (v.buffer) {
+                    .vectors => |*vecs| @as([*]windows.ws2_32.WSABUF, @ptrCast(&vecs.data[0])),
+                    else => @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
+                };
 
                 var flags: u32 = 0;
 
                 const result = windows.ws2_32.WSARecv(
                     asSocket(v.fd),
-                    @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
-                    1,
+                    wsa_buffers,
+                    buffer_count,
                     null,
                     &flags,
                     &completion.overlapped,
@@ -668,12 +728,26 @@ pub const Loop = struct {
 
             .sendto => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []const u8 = if (v.buffer == .slice) v.buffer.slice else v.buffer.array.array[0..v.buffer.array.len];
-                v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @as(u32, @intCast(buffer.len)) };
+                const buffer_count: u32 = switch (v.buffer) {
+                    .slice => |slice| blk: {
+                        v.wsa_buffer = .{ .buf = @constCast(slice.ptr), .len = @as(u32, @intCast(slice.len)) };
+                        break :blk 1;
+                    },
+                    .array => |*array| blk: {
+                        const buffer = array.array[0..array.len];
+                        v.wsa_buffer = .{ .buf = @constCast(buffer.ptr), .len = @as(u32, @intCast(buffer.len)) };
+                        break :blk 1;
+                    },
+                    .vectors => |*vecs| @as(u32, @intCast(vecs.len)),
+                };
+                const wsa_buffers: [*]windows.ws2_32.WSABUF = switch (v.buffer) {
+                    .vectors => |*vecs| @as([*]windows.ws2_32.WSABUF, @ptrCast(&vecs.data[0])),
+                    else => @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
+                };
                 const result = windows.ws2_32.WSASendTo(
                     asSocket(v.fd),
-                    @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
-                    1,
+                    wsa_buffers,
+                    buffer_count,
                     null,
                     0,
                     &v.addr.any,
@@ -695,15 +769,28 @@ pub const Loop = struct {
 
             .recvfrom => |*v| action: {
                 self.associate_fd(completion.handle().?) catch unreachable;
-                const buffer: []u8 = if (v.buffer == .slice) v.buffer.slice else &v.buffer.array;
-                v.wsa_buffer = .{ .buf = buffer.ptr, .len = @as(u32, @intCast(buffer.len)) };
+                const buffer_count: u32 = switch (v.buffer) {
+                    .slice => |slice| blk: {
+                        v.wsa_buffer = .{ .buf = slice.ptr, .len = @as(u32, @intCast(slice.len)) };
+                        break :blk 1;
+                    },
+                    .array => |*array| blk: {
+                        v.wsa_buffer = .{ .buf = array.ptr, .len = @as(u32, @intCast(array.len)) };
+                        break :blk 1;
+                    },
+                    .vectors => |*vecs| @as(u32, @intCast(vecs.len)),
+                };
+                const wsa_buffers: [*]windows.ws2_32.WSABUF = switch (v.buffer) {
+                    .vectors => |*vecs| @as([*]windows.ws2_32.WSABUF, @ptrCast(&vecs.data[0])),
+                    else => @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
+                };
 
                 var flags: u32 = 0;
 
                 const result = windows.ws2_32.WSARecvFrom(
                     asSocket(v.fd),
-                    @as([*]windows.ws2_32.WSABUF, @ptrCast(&v.wsa_buffer)),
-                    1,
+                    wsa_buffers,
+                    buffer_count,
                     null,
                     &flags,
                     &v.addr,
@@ -1347,6 +1434,10 @@ pub const CloseError = error{
 
 pub const ConnectError = error{
     Canceled,
+    ConnectionRefused,
+    ConnectionResetByPeer,
+    ConnectionTimedOut,
+    NetworkUnreachable,
     Unexpected,
 };
 
@@ -1420,7 +1511,30 @@ pub const ReadBuffer = union(enum) {
     /// for future fields.
     array: [32]u8,
 
-    // TODO: future will have vectors
+    /// Read into multiple buffers using vectored I/O.
+    /// On Windows, this uses WSARecv with WSABUF arrays.
+    vectors: struct {
+        data: [2]windows.ws2_32.WSABUF,
+        len: usize,
+    },
+
+    /// Create a ReadBuffer from a slice of byte slices, automatically
+    /// choosing the optimal representation (slice for single buffer,
+    /// vectors for multiple buffers).
+    pub fn fromSlices(slices: [][]u8) ReadBuffer {
+        std.debug.assert(slices.len <= 2);
+        if (slices.len == 0) return .{ .slice = &.{} };
+        if (slices.len == 1) return .{ .slice = slices[0] };
+
+        // Convert to Windows-specific WSABUF format for vectored I/O
+        // Note: WSABUF has different field order than iovec (len, buf vs base, len)
+        var data: [2]windows.ws2_32.WSABUF = undefined;
+        const len = @min(slices.len, 2);
+        for (slices[0..len], 0..) |slice, i| {
+            data[i] = .{ .len = @intCast(slice.len), .buf = slice.ptr };
+        }
+        return .{ .vectors = .{ .data = data, .len = len } };
+    }
 };
 
 /// WriteBuffer are the various options for writing.
@@ -1434,7 +1548,31 @@ pub const WriteBuffer = union(enum) {
         len: usize,
     },
 
-    // TODO: future will have vectors
+    /// Write from multiple buffers using vectored I/O.
+    /// On Windows, this uses WSASend with WSABUF arrays.
+    vectors: struct {
+        data: [2]windows.ws2_32.WSABUF,
+        len: usize,
+    },
+
+    /// Create a WriteBuffer from a slice of byte slices, automatically
+    /// choosing the optimal representation (slice for single buffer,
+    /// vectors for multiple buffers).
+    pub fn fromSlices(slices: []const []const u8) WriteBuffer {
+        std.debug.assert(slices.len <= 2);
+        if (slices.len == 0) return .{ .slice = "" };
+        if (slices.len == 1) return .{ .slice = slices[0] };
+
+        // Convert to Windows-specific WSABUF format for vectored I/O
+        // Note: WSABUF has different field order than iovec (len, buf vs base, len)
+        // Note: WSABUF.buf is [*]u8 but we have const data - cast away const for Windows API
+        var data: [2]windows.ws2_32.WSABUF = undefined;
+        const len = @min(slices.len, 2);
+        for (slices[0..len], 0..) |slice, i| {
+            data[i] = .{ .len = @intCast(slice.len), .buf = @constCast(slice.ptr) };
+        }
+        return .{ .vectors = .{ .data = data, .len = len } };
+    }
 };
 
 /// Timer that is inserted into the heap.

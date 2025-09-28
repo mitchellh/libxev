@@ -532,7 +532,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
             ) xev.CallbackAction,
         ) void {
             switch (buf) {
-                inline .slice, .array => {
+                inline .slice, .array, .vectors => {
                     c.* = .{
                         .op = switch (options.read) {
                             .none => unreachable,
@@ -604,6 +604,7 @@ pub fn Readable(comptime xev: type, comptime T: type, comptime options: Options)
                             switch (buf) {
                                 .array => {},
                                 .slice => |v| if (v.len == 0) break :kqueue {},
+                                .vectors => |v| if (v.len == 0) break :kqueue {},
                             }
 
                             if (options.threadpool) c.flags.threadpool = true;
@@ -958,7 +959,7 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             buf: xev.WriteBuffer,
         ) void {
             switch (buf) {
-                inline .slice, .array => {
+                inline .slice, .array, .vectors => {
                     c.* = .{
                         .op = switch (options.write) {
                             .none => unreachable,
@@ -1007,6 +1008,11 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
             return switch (buf) {
                 .slice => |slice| slice.len,
                 .array => |array| array.len,
+                .vectors => |vecs| blk: {
+                    var total: usize = 0;
+                    for (vecs.data[0..vecs.len]) |vec| total += vec.len;
+                    break :blk total;
+                },
             };
         }
 
@@ -1030,6 +1036,29 @@ pub fn Writeable(comptime xev: type, comptime T: type, comptime options: Options
                         array.array[offset..][0..rem_len],
                     );
                     return wb;
+                },
+                .vectors => |vecs| {
+                    var result = xev.WriteBuffer{ .vectors = .{ .data = undefined, .len = 0 } };
+                    var skip = offset;
+
+                    for (vecs.data[0..vecs.len]) |vec| {
+                        if (skip >= vec.len) {
+                            skip -= vec.len;
+                            continue;
+                        }
+
+                        if (skip > 0) {
+                            result.vectors.data[result.vectors.len] = .{
+                                .base = vec.base + skip,
+                                .len = vec.len - skip,
+                            };
+                            skip = 0;
+                        } else {
+                            result.vectors.data[result.vectors.len] = vec;
+                        }
+                        result.vectors.len += 1;
+                    }
+                    return result;
                 },
             }
         }

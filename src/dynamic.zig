@@ -308,11 +308,9 @@ fn DynamicReadBuffer(comptime dynamic: type) type {
             buf: dynamic.superset(be).Api().ReadBuffer,
         ) Self {
             return switch (buf) {
-                inline else => |data, tag| @unionInit(
-                    Self,
-                    @tagName(tag),
-                    data,
-                ),
+                .slice => |v| .{ .slice = v },
+                .array => |v| .{ .array = v },
+                .vectors => @panic("vectors not supported in dynamic API"),
             };
         }
 
@@ -328,6 +326,19 @@ fn DynamicReadBuffer(comptime dynamic: type) type {
                     @tagName(tag),
                     data,
                 ),
+            };
+        }
+
+        /// Create a ReadBuffer from a slice of byte slices, automatically
+        /// delegating to the current backend's fromSlices implementation.
+        pub fn fromSlices(slices: [][]u8) Self {
+            std.debug.assert(slices.len <= 2);
+            return switch (dynamic.backend) {
+                inline else => |tag| {
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const backend_buf = api.ReadBuffer.fromSlices(slices);
+                    return Self.fromBackend(tag, backend_buf);
+                },
             };
         }
     };
@@ -352,6 +363,7 @@ fn DynamicWriteBuffer(comptime dynamic: type) type {
             return switch (buf) {
                 .slice => |v| .{ .slice = v },
                 .array => |v| .{ .array = .{ .array = v.array, .len = v.len } },
+                .vectors => @panic("vectors not supported in dynamic API"),
             };
         }
 
@@ -364,6 +376,19 @@ fn DynamicWriteBuffer(comptime dynamic: type) type {
             return switch (self) {
                 .slice => |v| .{ .slice = v },
                 .array => |v| .{ .array = .{ .array = v.array, .len = v.len } },
+            };
+        }
+
+        /// Create a WriteBuffer from a slice of byte slices, automatically
+        /// delegating to the current backend's fromSlices implementation.
+        pub fn fromSlices(slices: []const []const u8) Self {
+            std.debug.assert(slices.len <= 2);
+            return switch (dynamic.backend) {
+                inline else => |tag| {
+                    const api = (comptime dynamic.superset(tag)).Api();
+                    const backend_buf = api.WriteBuffer.fromSlices(slices);
+                    return Self.fromBackend(tag, backend_buf);
+                },
             };
         }
     };

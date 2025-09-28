@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
+const posix_ext = @import("../posix.zig");
 const queue = @import("../queue.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
@@ -979,6 +980,7 @@ pub const Completion = struct {
                 const n_ = switch (op.buffer) {
                     .slice => |v| posix.read(op.fd, v),
                     .array => |*v| posix.read(op.fd, v),
+                    .vectors => |v| posix.readv(op.fd, v.data[0..v.len]),
                 };
 
                 break :res .{
@@ -993,6 +995,7 @@ pub const Completion = struct {
                 const n_ = switch (op.buffer) {
                     .slice => |v| posix.pread(op.fd, v, op.offset),
                     .array => |*v| posix.pread(op.fd, v, op.offset),
+                    .vectors => |v| posix.preadv(op.fd, v.data[0..v.len], op.offset),
                 };
 
                 break :res .{
@@ -1007,6 +1010,7 @@ pub const Completion = struct {
                 .write = switch (op.buffer) {
                     .slice => |v| posix.write(op.fd, v),
                     .array => |*v| posix.write(op.fd, v.array[0..v.len]),
+                    .vectors => |v| posix.writev(op.fd, v.data[0..v.len]),
                 },
             },
 
@@ -1014,6 +1018,7 @@ pub const Completion = struct {
                 .pwrite = switch (op.buffer) {
                     .slice => |v| posix.pwrite(op.fd, v, op.offset),
                     .array => |*v| posix.pwrite(op.fd, v.array[0..v.len], op.offset),
+                    .vectors => |v| posix.pwritev(op.fd, v.data[0..v.len], op.offset),
                 },
             },
 
@@ -1021,6 +1026,19 @@ pub const Completion = struct {
                 .send = switch (op.buffer) {
                     .slice => |v| posix.send(op.fd, v, 0),
                     .array => |*v| posix.send(op.fd, v.array[0..v.len], 0),
+                    .vectors => |v| blk: {
+                        // Use sendmsg for vectored I/O instead of writev
+                        var msg: posix.msghdr_const = .{
+                            .name = null,
+                            .namelen = 0,
+                            .iov = v.data[0..v.len].ptr,
+                            .iovlen = v.len,
+                            .control = null,
+                            .controllen = 0,
+                            .flags = 0,
+                        };
+                        break :blk posix.sendmsg(op.fd, &msg, 0);
+                    },
                 },
             },
 
@@ -1031,23 +1049,30 @@ pub const Completion = struct {
                     err,
             },
 
-            .recvmsg => |*op| res: {
-                const res = std.os.linux.recvmsg(op.fd, op.msghdr, 0);
-                break :res .{
-                    .recvmsg = if (res == 0)
-                        error.EOF
-                    else if (res > 0)
-                        res
-                    else switch (posix.errno(res)) {
-                        else => |err| posix.unexpectedErrno(err),
-                    },
-                };
+            .recvmsg => |*op| .{
+                .recvmsg = if (posix_ext.recvmsg(op.fd, op.msghdr, 0)) |n|
+                    if (n == 0) error.EOF else n
+                else |err|
+                    err,
             },
 
             .recv => |*op| res: {
                 const n_ = switch (op.buffer) {
                     .slice => |v| posix.recv(op.fd, v, 0),
                     .array => |*v| posix.recv(op.fd, v, 0),
+                    .vectors => |v| blk: {
+                        // Use recvmsg for vectored I/O instead of readv
+                        var msg: posix.msghdr = .{
+                            .name = null,
+                            .namelen = 0,
+                            .iov = @ptrCast(@constCast(v.data[0..v.len].ptr)),
+                            .iovlen = v.len,
+                            .control = null,
+                            .controllen = 0,
+                            .flags = 0,
+                        };
+                        break :blk posix_ext.recvmsg(op.fd, &msg, 0);
+                    },
                 };
 
                 break :res .{
@@ -1293,7 +1318,29 @@ pub const ReadBuffer = union(enum) {
     /// for future fields.
     array: [32]u8,
 
-    // TODO: future will have vectors
+    /// Read into multiple buffers using vectored I/O (readv).
+    /// Contains up to 2 iovecs for efficient syscall usage.
+    vectors: struct {
+        data: [2]posix.iovec,
+        len: usize,
+    },
+
+    /// Create a ReadBuffer from a slice of byte slices, automatically
+    /// choosing the optimal representation (slice for single buffer,
+    /// vectors for multiple buffers).
+    pub fn fromSlices(slices: [][]u8) ReadBuffer {
+        std.debug.assert(slices.len <= 2);
+        if (slices.len == 0) return .{ .slice = &.{} };
+        if (slices.len == 1) return .{ .slice = slices[0] };
+
+        // Convert to platform-specific iovec format for vectored I/O
+        var data: [2]posix.iovec = undefined;
+        const len = @min(slices.len, 2);
+        for (slices[0..len], 0..) |slice, i| {
+            data[i] = .{ .base = slice.ptr, .len = slice.len };
+        }
+        return .{ .vectors = .{ .data = data, .len = len } };
+    }
 };
 
 /// WriteBuffer are the various options for writing.
@@ -1307,7 +1354,29 @@ pub const WriteBuffer = union(enum) {
         len: usize,
     },
 
-    // TODO: future will have vectors
+    /// Write from multiple buffers using vectored I/O (writev).
+    /// Contains up to 2 iovecs for efficient syscall usage.
+    vectors: struct {
+        data: [2]posix.iovec_const,
+        len: usize,
+    },
+
+    /// Create a WriteBuffer from a slice of byte slices, automatically
+    /// choosing the optimal representation (slice for single buffer,
+    /// vectors for multiple buffers).
+    pub fn fromSlices(slices: []const []const u8) WriteBuffer {
+        std.debug.assert(slices.len <= 2);
+        if (slices.len == 0) return .{ .slice = "" };
+        if (slices.len == 1) return .{ .slice = slices[0] };
+
+        // Convert to platform-specific iovec format for vectored I/O
+        var data: [2]posix.iovec_const = undefined;
+        const len = @min(slices.len, 2);
+        for (slices[0..len], 0..) |slice, i| {
+            data[i] = .{ .base = slice.ptr, .len = slice.len };
+        }
+        return .{ .vectors = .{ .data = data, .len = len } };
+    }
 };
 
 const ThreadPoolError = error{
@@ -1346,6 +1415,7 @@ pub const ReadError = ThreadPoolError || posix.EpollCtlError ||
     posix.ReadError ||
     posix.PReadError ||
     posix.RecvFromError ||
+    posix_ext.RecvMsgError ||
     error{
         DupFailed,
         EOF,
