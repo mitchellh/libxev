@@ -73,7 +73,7 @@ fn asyncCallback(
 
     // We're done
     state = .stop;
-    while (state != .stopped) std.time.sleep(0);
+    while (state != .stopped) std.Thread.sleep(0);
     return .disarm;
 }
 
