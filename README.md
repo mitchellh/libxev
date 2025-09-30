@@ -75,11 +75,11 @@ easy to cross-compile.
 
 There are plenty of missing features that I still want to add:
 
-  * Pipe high-level API
-  * Signal handlers
-  * Filesystem events
-  * Windows backend
-  * Freestanding WebAssembly support via an external event loop (i.e. the browser)
+* Pipe high-level API
+* Signal handlers
+* Filesystem events
+* Windows backend
+* Freestanding WebAssembly support via an external event loop (i.e. the browser)
 
 And more...
 
@@ -240,7 +240,7 @@ to be installed (this is available in most package managers).
 Once you've built the man pages, you can render them by path:
 
 ```
-$ man zig-out/share/man/man7/xev.7
+man zig-out/share/man/man7/xev.7
 ```
 
 And the final approach is to install libxev via your favorite package
@@ -272,7 +272,7 @@ directory.
 
 # Build
 
-Build requires the installation of the Zig 0.14.0. libxev follows stable
+Build requires the installation of the Zig 0.15.1. libxev follows stable
 Zig releases and generally does not support nightly builds. When a stable
 release is imminent we may have a branch that supports it.
 **libxev has no other build dependencies.**
