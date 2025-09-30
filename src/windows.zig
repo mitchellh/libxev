@@ -34,7 +34,7 @@ pub const GetQueuedCompletionStatusEx = windows.GetQueuedCompletionStatusEx;
 pub const PostQueuedCompletionStatus = windows.PostQueuedCompletionStatus;
 pub const CreateIoCompletionPort = windows.CreateIoCompletionPort;
 
-pub extern "kernel32" fn DeleteFileW(lpFileName: [*:0]const u16) callconv(windows.WINAPI) windows.BOOL;
+pub extern "kernel32" fn DeleteFileW(lpFileName: [*:0]const u16) callconv(.winapi) windows.BOOL;
 
 pub const exp = struct {
     pub const STATUS_PENDING = 0x00000103;
@@ -124,15 +124,15 @@ pub const exp = struct {
     };
 
     pub const kernel32 = struct {
-        pub extern "kernel32" fn GetProcessId(Process: windows.HANDLE) callconv(windows.WINAPI) windows.DWORD;
-        pub extern "kernel32" fn CreateJobObjectA(lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES, lpName: ?windows.LPCSTR) callconv(windows.WINAPI) windows.HANDLE;
-        pub extern "kernel32" fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) callconv(windows.WINAPI) windows.BOOL;
+        pub extern "kernel32" fn GetProcessId(Process: windows.HANDLE) callconv(.winapi) windows.DWORD;
+        pub extern "kernel32" fn CreateJobObjectA(lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES, lpName: ?windows.LPCSTR) callconv(.winapi) windows.HANDLE;
+        pub extern "kernel32" fn AssignProcessToJobObject(hJob: windows.HANDLE, hProcess: windows.HANDLE) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn SetInformationJobObject(
             hJob: windows.HANDLE,
             JobObjectInformationClass: JOBOBJECT_INFORMATION_CLASS,
             lpJobObjectInformation: windows.LPVOID,
             cbJobObjectInformationLength: windows.DWORD,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
     };
 
     pub const CreateFileError = error{} || posix.UnexpectedError;
