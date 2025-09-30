@@ -2,8 +2,7 @@
   description = "libxev is a high performance, cross-platform event loop.";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/release-24.05";
-    nixpkgs-unstable.url = "github:nixos/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "https://channels.nixos.org/nixos-25.05/nixexprs.tar.xz";
     flake-utils.url = "github:numtide/flake-utils";
     zig.url = "github:mitchellh/zig-overlay";
 
@@ -24,11 +23,7 @@
       # Other overlays
       (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
-        zig = inputs.zig.packages.${prev.system}."0.14.1";
-
-        # Latest versions
-        wasmtime = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmtime;
-        wasmer = inputs.nixpkgs-unstable.legacyPackages.${prev.system}.wasmer;
+        zig = inputs.zig.packages.${prev.system}."0.15.1";
 
         # Our package
         libxev = prev.callPackage ./nix/package.nix {};
