@@ -559,8 +559,12 @@ pub const Loop = struct {
                 }
             }
 
-            // If we ran through the loop once we break if we don't care.
-            if (wait == 0) break;
+            // If we ran through the loop once we break if we don't care to wait,
+            // but only if there are no pending changes (DELETEs) to submit.
+            // We must loop back to submit pending DELETEs via kevent_syscall
+            // before exiting, otherwise kqueue keeps the registration alive
+            // and may deliver events to already-dead completions (use-after-free).
+            if (wait == 0 and changes == 0) break;
         }
     }
 
