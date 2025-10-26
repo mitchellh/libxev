@@ -788,6 +788,8 @@ pub const Completion = struct {
                     @intCast(res)
                 else switch (@as(posix.E, @enumFromInt(-res))) {
                     .CANCELED => error.Canceled,
+                    // If a write is interrupted, we retry it automatically.
+                    .INTR => return .rearm,
                     else => |errno| posix.unexpectedErrno(errno),
                 },
             },
