@@ -1,5 +1,8 @@
 on: [push, pull_request]
 name: Test
+env:
+  ZIG_VERSION: 0.15.2
+
 jobs:
   build:
     strategy:
@@ -104,16 +107,16 @@ jobs:
       with:
         usesh: true
         prepare: |
-          sed 's/quarterly/latest/g' /etc/pkg/FreeBSD.conf
-          pkg update -f
+          pkg update
           pkg upgrade -y
           pkg install -y wget
 
         run: |
-          wget https://ziglang.org/download/0.15.1/zig-x86_64-freebsd-0.15.1.tar.xz
-          tar -xf zig-x86_64-freebsd-0.15.1.tar.xz
-          zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build test --summary all
-          zig-x86_64-freebsd-0.15.0-dev.777+6810ffa42/zig build -Demit-example -Demit-bench --summary all
+          wget -O /tmp/zig-x86_64-freebsd-${{ env.ZIG_VERSION }}.tar.xz https://ziglang.org/download/${{ env.ZIG_VERSION }}/zig-x86_64-freebsd-${{ env.ZIG_VERSION }}.tar.xz
+          tar -xf /tmp/zig-x86_64-freebsd-${{ env.ZIG_VERSION }}.tar.xz -C /tmp
+          alias zig=/tmp/zig-x86_64-freebsd-${{ env.ZIG_VERSION }}/zig
+          zig build test --summary all
+          zig build -Demit-example -Demit-bench --summary all
 
   test-aarch64-macos:
     runs-on: macos-latest
@@ -124,7 +127,7 @@ jobs:
     - name: Install zig
       uses: mlugg/setup-zig@v2
       with:
-        version: 0.15.1
+        version: ${{ env.ZIG_VERSION }}
 
     - name: test
       run: zig build test --summary all
@@ -144,7 +147,7 @@ jobs:
     - name: Install zig
       uses: mlugg/setup-zig@v2
       with:
-        version: 0.15.1
+        version: ${{ env.ZIG_VERSION }}
 
     - name: test
       run: zig build test --summary all
