@@ -33,8 +33,20 @@ pub const QueryPerformanceFrequency = windows.QueryPerformanceFrequency;
 pub const GetQueuedCompletionStatusEx = windows.GetQueuedCompletionStatusEx;
 pub const PostQueuedCompletionStatus = windows.PostQueuedCompletionStatus;
 pub const CreateIoCompletionPort = windows.CreateIoCompletionPort;
+pub const loadWinsockExtensionFunction = windows.loadWinsockExtensionFunction;
 
 pub extern "kernel32" fn DeleteFileW(lpFileName: [*:0]const u16) callconv(.winapi) windows.BOOL;
+
+/// https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_connectex
+pub const LPFN_CONNECTEX = *const fn (
+    Socket: windows.ws2_32.SOCKET,
+    SockAddr: *const windows.ws2_32.sockaddr,
+    SockLen: posix.socklen_t,
+    SendBuf: ?*const anyopaque,
+    SendBufLen: windows.DWORD,
+    BytesSent: *windows.DWORD,
+    Overlapped: *windows.OVERLAPPED,
+) callconv(.winapi) windows.BOOL;
 
 pub const exp = struct {
     pub const STATUS_PENDING = 0x00000103;
