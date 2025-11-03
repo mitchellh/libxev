@@ -34,7 +34,7 @@ pub const WriteRequest = xev.WriteRequest;
 pub const Async = xev.Async;
 pub const File = xev.File;
 pub const Process = xev.Process;
-pub const Stream = stream.GenericStream;
+pub const Stream = xev.Stream;
 pub const Timer = xev.Timer;
 pub const TCP = xev.TCP;
 pub const UDP = xev.UDP;
@@ -49,6 +49,9 @@ comptime {
         if (Decl == void) continue;
         if (!@hasDecl(main, decl.name)) {
             @compileError("missing decl: " ++ decl.name);
+        }
+        if (Decl != @TypeOf(@field(main, decl.name))) {
+            @compileError("decl has wrong type: " ++ decl.name);
         }
     }
 }
