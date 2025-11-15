@@ -259,6 +259,7 @@ pub const Loop = struct {
 
             // Process the completions we already have completed.
             while (self.completions.pop()) |c| {
+                std.debug.print("whu\n", .{});
                 // We store whether this completion was active so we can decrement the active count
                 // later.
                 const c_active = c.flags.state == .active;
@@ -282,6 +283,7 @@ pub const Loop = struct {
 
             // Process asyncs
             if (!self.asyncs.empty()) {
+                std.debug.print("whu\n", .{});
                 var asyncs = self.asyncs;
                 self.asyncs = .{};
 
@@ -310,10 +312,15 @@ pub const Loop = struct {
             }
 
             // If we have processed enough event, we break out of the loop.
-            if (wait_rem == 0) break;
+            //
+            // We continue with timeout 0 if this ins nonblocking otherwise
+            // nothing gets done if user only does .no_wait.
+            if (wait_rem == 0 and wait != 0) break;
 
             // Determine our next timeout based on the timers.
             const timeout: ?windows.DWORD = timeout: {
+                if (wait == 0) break :timeout 0;
+
                 // If we have a timer, we want to set the timeout to our next timer value. If we
                 // have no timer, we wait forever.
                 const t = self.timers.peek() orelse break :timeout null;

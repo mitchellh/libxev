@@ -547,7 +547,9 @@ fn UDPSendMsg(comptime xev: type) type {
                             c_inner,
                             s_inner,
                             // cancelation can cause this to be uninitialized
-                            if (r.recvmsg) |_| std.net.Address.initPosix(
+                            if (r.recvmsg) |_| if (s_inner.op.recv.addr_buffer.family == 0xaaaa) b: {
+                                break :b undefined;
+                            } else std.net.Address.initPosix(
                                 @ptrCast(&s_inner.op.recv.addr_buffer),
                             ) else |_| undefined,
                             initFd(c_inner.op.recvmsg.fd),
