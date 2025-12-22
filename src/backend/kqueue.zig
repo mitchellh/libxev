@@ -954,7 +954,7 @@ pub const Loop = struct {
         // Add to our completion queue
         c.task_loop.thread_pool_completions.push(c);
 
-        if (comptime builtin.target.os.tag == .macos) {
+        if (comptime builtin.target.os.tag.isDarwin()) {
             // Wake up our main loop
             c.task_loop.wakeup() catch {};
         }
@@ -1070,7 +1070,7 @@ pub const Completion = struct {
                 .udata = @intFromPtr(self),
             }),
 
-            .machport => if (comptime builtin.os.tag != .macos) return null else kevent: {
+            .machport => if (comptime !builtin.os.tag.isDarwin()) return null else kevent: {
                 // We can't use |*v| above because it crahses the Zig
                 // compiler (as of 0.11.0-dev.1413). We can retry another time.
                 const v = &self.op.machport;
