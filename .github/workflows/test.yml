@@ -34,7 +34,7 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Setup Cache
-      uses: namespacelabs/nscloud-cache-action@v1.2.21
+      uses: namespacelabs/nscloud-cache-action@v1.4.1
       with:
         path: |
           /nix
@@ -66,7 +66,7 @@ jobs:
       uses: actions/checkout@v6
 
     - name: Setup Cache
-      uses: namespacelabs/nscloud-cache-action@v1.2.21
+      uses: namespacelabs/nscloud-cache-action@v1.4.1
       with:
         path: |
           /nix
