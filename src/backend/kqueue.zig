@@ -25,7 +25,7 @@ const log = std.log.scoped(.libxev_kqueue);
 pub fn available() bool {
     return switch (builtin.os.tag) {
         // macOS uses kqueue
-        .ios, .macos => true,
+        .ios, .macos, .visionos => true,
 
         // BSDs use kqueue, but we only test on FreeBSD for now.
         // kqueue isn't exactly the same here as it is on Apple platforms.
@@ -40,7 +40,7 @@ pub fn available() bool {
 }
 
 pub const NOTE_EXIT_FLAGS = switch (builtin.os.tag) {
-    .ios, .macos => std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
+    .ios, .macos, .visionos => std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
     .freebsd => std.c.NOTE.EXIT,
     else => @compileError("kqueue not supported yet for target OS"),
 };
@@ -1800,7 +1800,7 @@ const Timer = struct {
 /// Kevent is either kevent_s or kevent64_s depending on the target platform.
 /// This lets us support both Mac and non-Mac platforms.
 const Kevent = switch (builtin.os.tag) {
-    .ios, .macos => posix.system.kevent64_s,
+    .ios, .macos, .visionos => posix.system.kevent64_s,
     .freebsd => std.c.Kevent,
     else => @compileError("kqueue not supported yet for target OS"),
 };
