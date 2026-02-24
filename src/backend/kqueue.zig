@@ -2664,6 +2664,116 @@ test "kqueue: mach port" {
     try testing.expect(!called);
 }
 
+test "kqueue: timer armed from delayed callback must not fire early" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    const send_delay_ms: u64 = 50;
+    const timer_delay_ms: u64 = 20;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // Allocate the port used to wake the loop after a delayed send.
+    const mach_self = posix.system.mach_task_self();
+    var mach_port: posix.system.mach_port_name_t = undefined;
+    try testing.expectEqual(
+        darwin.KernE.SUCCESS,
+        darwin.getKernError(posix.system.mach_port_allocate(
+            mach_self,
+            @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
+            &mach_port,
+        )),
+    );
+    defer _ = posix.system.mach_port_deallocate(mach_self, mach_port);
+
+    const State = struct {
+        timer_started_ns: i128 = 0,
+        timer_fired_ns: i128 = 0,
+        timer_trigger: ?TimerTrigger = null,
+        timer_completion: Completion = undefined,
+    };
+
+    var state: State = .{};
+
+    const timer_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            _: *Loop,
+            _: *Completion,
+            r: Result,
+        ) CallbackAction {
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.timer_fired_ns = std.time.nanoTimestamp();
+            s.timer_trigger = r.timer catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    var c_wait: Completion = .{
+        .op = .{
+            .machport = .{
+                .port = mach_port,
+                .buffer = .{ .array = undefined },
+            },
+        },
+
+        .userdata = &state,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *Loop,
+                _: *Completion,
+                r: Result,
+            ) CallbackAction {
+                _ = r.machport catch unreachable;
+                const s: *State = @ptrCast(@alignCast(ud.?));
+                s.timer_started_ns = std.time.nanoTimestamp();
+                l.timer(&s.timer_completion, timer_delay_ms, s, timer_cb);
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_wait);
+
+    // Send to the mach port only after the loop has been blocked for a while.
+    const sender = try std.Thread.spawn(.{}, (struct {
+        fn run(port: posix.system.mach_port_name_t) void {
+            std.Thread.sleep(send_delay_ms * std.time.ns_per_ms);
+
+            var msg: darwin.mach_msg_header_t = .{
+                .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND_ONCE),
+                .msgh_size = @sizeOf(darwin.mach_msg_header_t),
+                .msgh_remote_port = port,
+                .msgh_local_port = darwin.MACH_PORT_NULL,
+                .msgh_voucher_port = undefined,
+                .msgh_id = undefined,
+            };
+
+            const rc = darwin.mach_msg(
+                &msg,
+                darwin.MACH_SEND_MSG,
+                msg.msgh_size,
+                0,
+                darwin.MACH_PORT_NULL,
+                darwin.MACH_MSG_TIMEOUT_NONE,
+                darwin.MACH_PORT_NULL,
+            );
+            assert(darwin.getMachMsgError(rc) == darwin.MachMsgE.SUCCESS);
+        }
+    }).run, .{mach_port});
+    defer sender.join();
+
+    try loop.run(.until_done);
+
+    try testing.expect(state.timer_trigger.? == .expiration);
+
+    const elapsed_ns = state.timer_fired_ns - state.timer_started_ns;
+    const elapsed_ms: i128 = @divFloor(elapsed_ns, std.time.ns_per_ms);
+    try testing.expect(elapsed_ms >= @as(i128, @intCast(timer_delay_ms)));
+}
+
 test "kqueue: socket accept/cancel cancellation should decrease active count" {
     const mem = std.mem;
     const net = std.net;
