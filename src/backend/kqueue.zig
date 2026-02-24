@@ -659,7 +659,7 @@ pub const Loop = struct {
         }
     }
 
-    fn timer_next(self: Loop, next_ms: u64) posix.timespec {
+    fn timer_next(self: *Loop, next_ms: u64) posix.timespec {
         // Get the timestamp of the absolute time that we'll execute this timer.
         // There are lots of failure scenarios here in math. If we see any
         // of them we just use the maximum value.
@@ -674,6 +674,8 @@ pub const Loop = struct {
             isize,
             (next_ms % std.time.ms_per_s) * std.time.ns_per_ms,
         ) orelse return max;
+
+        self.update_now();
 
         return .{
             .sec = std.math.add(isize, self.cached_now.sec, next_s) catch
