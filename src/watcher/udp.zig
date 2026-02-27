@@ -130,7 +130,10 @@ fn UDPSendto(comptime xev: type) type {
                                     l_inner,
                                     c_inner,
                                     s_inner,
-                                    std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)),
+                                    // cancelation can cause this to be uninitialized
+                                    if (r.recvfrom) |_| std.net.Address.initPosix(
+                                        @alignCast(&c_inner.op.recvfrom.addr),
+                                    ) else |_| undefined,
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
@@ -308,7 +311,10 @@ fn UDPSendtoIOCP(comptime xev: type) type {
                                     l_inner,
                                     c_inner,
                                     s_inner,
-                                    std.net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)),
+                                    // cancelation can cause this to be uninitialized
+                                    if (r.recvfrom) |_| std.net.Address.initPosix(
+                                        @alignCast(&c_inner.op.recvfrom.addr),
+                                    ) else |_| undefined,
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
@@ -540,7 +546,12 @@ fn UDPSendMsg(comptime xev: type) type {
                             l_inner,
                             c_inner,
                             s_inner,
-                            std.net.Address.initPosix(@ptrCast(&s_inner.op.recv.addr_buffer)),
+                            // cancelation can cause this to be uninitialized
+                            if (r.recvmsg) |_| if (s_inner.op.recv.addr_buffer.family == 0xaaaa) b: {
+                                break :b undefined;
+                            } else std.net.Address.initPosix(
+                                @ptrCast(&s_inner.op.recv.addr_buffer),
+                            ) else |_| undefined,
                             initFd(c_inner.op.recvmsg.fd),
                             s_inner.op.recv.buf,
                             if (r.recvmsg) |v| v else |err| err,
