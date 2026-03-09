@@ -560,7 +560,7 @@ pub const Loop = struct {
             }
 
             // If we ran through the loop once we break if we don't care.
-            if (wait == 0) break;
+            if (wait == 0 and changes == 0) break;
         }
     }
 
