@@ -256,13 +256,11 @@ the file extension.
 To build an example, use the following:
 
 ```
-$ zig build -Dexample-name=_basic.zig
+$ zig build -Demit-example=true
 ...
-$ zig-out/bin/example-basic
+$ zig-out/bin/example-name
 ...
 ```
-
-The `-Dexample-name` value should be the filename including the extension.
 
 ### Code Comments
 
