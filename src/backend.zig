@@ -12,7 +12,10 @@ pub const Backend = enum {
     /// Returns a recommend default backend from inspecting the system.
     pub fn default() Backend {
         return switch (builtin.os.tag) {
-            .linux => .io_uring,
+            .linux => if (builtin.abi.isAndroid())
+                .epoll
+            else
+                .io_uring,
             .ios, .macos, .visionos => .kqueue,
             .freebsd => .kqueue,
             .wasi => .wasi_poll,
@@ -27,7 +30,10 @@ pub const Backend = enum {
     /// Candidate backends for this platform in priority order.
     pub fn candidates() []const Backend {
         return switch (builtin.os.tag) {
-            .linux => &.{ .io_uring, .epoll },
+            .linux => if (builtin.abi.isAndroid())
+                &.{.epoll}
+            else
+                &.{ .io_uring, .epoll },
             .ios, .macos, .visionos => &.{.kqueue},
             .freebsd => &.{.kqueue},
             .wasi => &.{.wasi_poll},
