@@ -24,10 +24,8 @@ pub fn build(b: *std.Build) !void {
         &[_][]const u8{},
     )) |_|
         true
-    else |err| switch (err) {
-        error.FileNotFound => false,
-        else => return err,
-    };
+    else |_|
+        false;
 
     const emit_bench = b.option(
         bool,
@@ -56,10 +54,10 @@ pub fn build(b: *std.Build) !void {
             .name = "xev",
             .root_module = c_api_module,
         });
-        static_lib.linkLibC();
+        static_lib.root_module.link_libc = true;
         if (target.result.os.tag == .windows) {
-            static_lib.linkSystemLibrary("ws2_32");
-            static_lib.linkSystemLibrary("mswsock");
+            static_lib.root_module.linkSystemLibrary("ws2_32", .{});
+            static_lib.root_module.linkSystemLibrary("mswsock", .{});
         }
         break :lib static_lib;
     };
@@ -74,6 +72,7 @@ pub fn build(b: *std.Build) !void {
             .name = "xev",
             .root_module = c_api_module,
         });
+        dynamic_lib.root_module.link_libc = true;
         break :lib dynamic_lib;
     };
 
@@ -129,7 +128,7 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         switch (target.result.os.tag) {
-            .linux, .macos => test_exe.linkLibC(),
+            .linux, .macos => test_exe.root_module.link_libc = true,
             else => {},
         }
         break :test_exe test_exe;
@@ -271,8 +270,8 @@ fn buildExamples(
                     .optimize = optimize,
                 }),
             });
-            exe.linkLibC();
-            exe.addIncludePath(b.path("include"));
+            exe.root_module.link_libc = true;
+            exe.root_module.addIncludePath(b.path("include"));
             exe.addCSourceFile(.{
                 .file = b.path(b.fmt(
                     "examples/{s}",
