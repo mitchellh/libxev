@@ -1,6 +1,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 const posix = std.posix;
+const xev_posix = @import("../posix.zig");
 
 /// Timerfd is a wrapper around the timerfd system calls. See the
 /// timerfd_create man page for information on timerfd and associated
@@ -26,7 +27,7 @@ pub const Timerfd = struct {
     }
 
     pub fn deinit(self: *const Timerfd) void {
-        posix.close(self.fd);
+        xev_posix.close(self.fd);
     }
 
     /// timerfd_settime

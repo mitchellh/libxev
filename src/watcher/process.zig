@@ -4,6 +4,7 @@ const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
 const common = @import("common.zig");
+const xev_posix = @import("../posix.zig");
 
 /// Process management, such as waiting for process exit.
 pub fn Process(comptime xev: type) type {
@@ -59,7 +60,7 @@ fn ProcessPidFd(comptime xev: type) type {
 
         /// Clean up the process watcher.
         pub fn deinit(self: *Self) void {
-            std.posix.close(self.fd);
+            xev_posix.close(self.fd);
         }
 
         /// Wait for the process to exit. This will automatically call
@@ -106,7 +107,7 @@ fn ProcessPidFd(comptime xev: type) type {
                             // We need to wait on the pidfd because it is noted as ready
                             const fd = c_inner.op.poll.fd;
                             var info: linux.siginfo_t = undefined;
-                            const res = linux.waitid(.PIDFD, fd, &info, linux.W.EXITED);
+                            const res = linux.waitid(.PIDFD, fd, &info, linux.W.EXITED, null);
 
                             break :arg switch (posix.errno(res)) {
                                 .SUCCESS => @as(u32, @intCast(info.fields.common.second.sigchld.status)),
@@ -139,6 +140,16 @@ fn ProcessPidFd(comptime xev: type) type {
                 Self,
             );
         }
+    };
+}
+
+fn reapProcess(pid: posix.pid_t) void {
+    var status: c_int = undefined;
+    while (true) switch (posix.errno(posix.system.waitpid(pid, &status, 0))) {
+        .SUCCESS => return,
+        .INTR => continue,
+        .CHILD => return,
+        else => unreachable,
     };
 }
 
@@ -200,7 +211,7 @@ fn ProcessKqueue(comptime xev: type) type {
                         // `wait` on a process. The Linux side (pidfd) does this
                         // automatically since the `waitid` syscall is used.
                         if (r.proc) |_| {
-                            _ = posix.waitpid(c_inner.op.proc.pid, 0);
+                            reapProcess(c_inner.op.proc.pid);
                         } else |_| {}
 
                         return @call(.always_inline, cb, .{
@@ -248,7 +259,7 @@ fn ProcessIocp(comptime xev: type) type {
                 windows.FALSE,
                 windows.DUPLICATE_SAME_ACCESS,
             );
-            if (dup_result == 0) return windows.unexpectedError(windows.kernel32.GetLastError());
+            if (dup_result == .FALSE) return windows.unexpectedError(windows.kernel32.GetLastError());
 
             const job = try windows.exp.CreateJobObject(null, null);
             errdefer _ = windows.CloseHandle(job);
@@ -303,7 +314,7 @@ fn ProcessIocp(comptime xev: type) type {
 
                                     var exit_code: windows.DWORD = undefined;
                                     const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
-                                    const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != 0;
+                                    const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != .FALSE;
                                     if (!has_code) std.log.warn("unable to get exit code for process={}", .{windows.kernel32.GetLastError()});
                                     if (exit_code == windows.exp.STILL_ACTIVE) return .rearm;
 
@@ -320,12 +331,12 @@ fn ProcessIocp(comptime xev: type) type {
                                         .JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS,
                                         => b: {
                                             const process: windows.HANDLE = @ptrCast(c_inner.op.job_object.userdata);
-                                            const pid = windows.exp.kernel32.GetProcessId(process);
+                                            const pid = windows.exp.k32.GetProcessId(process);
                                             if (pid == 0) break :b WaitError.Unexpected;
                                             if (message.value != pid) return .rearm;
 
                                             var exit_code: windows.DWORD = undefined;
-                                            const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != 0;
+                                            const has_code = windows.kernel32.GetExitCodeProcess(process, &exit_code) != .FALSE;
                                             if (!has_code) std.log.warn("unable to get exit code for process={}", .{windows.kernel32.GetLastError()});
                                             break :b if (has_code) exit_code else WaitError.Unexpected;
                                         },
@@ -469,15 +480,14 @@ fn ProcessTests(
 
         test "process wait" {
             const testing = std.testing;
-            const alloc = testing.allocator;
+            const io = testing.io;
 
-            var child = std.process.Child.init(argv_0, alloc);
-            try child.spawn();
+            const child = try std.process.spawn(io, .{ .argv = argv_0 });
 
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var p = try Impl.init(child.id);
+            var p = try Impl.init(child.id.?);
             defer p.deinit();
 
             // Wait
@@ -503,15 +513,14 @@ fn ProcessTests(
         test "process wait with non-zero exit code" {
             if (builtin.os.tag == .freebsd) return error.SkipZigTest;
             const testing = std.testing;
-            const alloc = testing.allocator;
+            const io = testing.io;
 
-            var child = std.process.Child.init(argv_42, alloc);
-            try child.spawn();
+            const child = try std.process.spawn(io, .{ .argv = argv_42 });
 
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var p = try Impl.init(child.id);
+            var p = try Impl.init(child.id.?);
             defer p.deinit();
 
             // Wait
@@ -536,18 +545,17 @@ fn ProcessTests(
 
         test "process wait on a process that already exited" {
             const testing = std.testing;
-            const alloc = testing.allocator;
+            const io = testing.io;
 
-            var child = std.process.Child.init(argv_0, alloc);
-            try child.spawn();
+            var child = try std.process.spawn(io, .{ .argv = argv_0 });
 
             var loop = try xev.Loop.init(.{});
             defer loop.deinit();
 
-            var p = try Impl.init(child.id);
+            var p = try Impl.init(child.id.?);
             defer p.deinit();
 
-            _ = try child.wait();
+            _ = try child.wait(io);
 
             // Wait
             var code: ?u32 = null;

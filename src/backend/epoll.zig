@@ -3,11 +3,61 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
+const xev_posix = @import("../posix.zig");
+const net = xev_posix.net;
 const queue = @import("../queue.zig");
 const queue_mpsc = @import("../queue_mpsc.zig");
 const heap = @import("../heap.zig");
 const ThreadPool = @import("../ThreadPool.zig");
 const Async = @import("../main.zig").Epoll.Async;
+
+/// In Zig 0.16, `std.posix.epoll_create1`, `epoll_ctl`, and `epoll_wait`
+/// were removed. These helpers replicate the old wrappers using the raw
+/// Linux syscall layer (`std.os.linux`).
+const epoll_helper = struct {
+    const EpollCreateError = error{
+        ProcessFdQuotaExceeded,
+        SystemFdQuotaExceeded,
+        SystemResources,
+        Unexpected,
+    };
+
+    fn epoll_create1(flags: u32) EpollCreateError!i32 {
+        const rc = linux.epoll_create1(flags);
+        switch (linux.errno(rc)) {
+            .SUCCESS => return @intCast(rc),
+            .MFILE => return error.ProcessFdQuotaExceeded,
+            .NFILE => return error.SystemFdQuotaExceeded,
+            .NOMEM => return error.SystemResources,
+            else => return error.Unexpected,
+        }
+    }
+
+    fn epoll_ctl(epfd: i32, op: u32, fd: i32, event: ?*linux.epoll_event) EpollCtlError!void {
+        const rc = linux.epoll_ctl(epfd, op, fd, event);
+        switch (linux.errno(rc)) {
+            .SUCCESS => return,
+            .EXIST => return error.FileDescriptorAlreadyPresentInSet,
+            .LOOP => return error.OperationCausesCircularLoop,
+            .NOENT => return error.FileDescriptorNotRegistered,
+            .NOMEM => return error.SystemResources,
+            .NOSPC => return error.UserResourceLimitReached,
+            .PERM => return error.FileDescriptorIncompatibleWithEpoll,
+            else => return error.Unexpected,
+        }
+    }
+
+    fn epoll_wait(epfd: i32, events: []linux.epoll_event, timeout: i32) usize {
+        while (true) {
+            const rc = linux.epoll_wait(epfd, events.ptr, @intCast(events.len), timeout);
+            switch (linux.errno(rc)) {
+                .SUCCESS => return @intCast(rc),
+                .INTR => continue,
+                else => unreachable,
+            }
+        }
+    }
+};
 
 const looppkg = @import("../loop.zig");
 const Options = looppkg.Options;
@@ -79,7 +129,7 @@ pub const Loop = struct {
         errdefer eventfd.deinit();
 
         var res: Loop = .{
-            .fd = try posix.epoll_create1(std.os.linux.EPOLL.CLOEXEC),
+            .fd = try epoll_helper.epoll_create1(std.os.linux.EPOLL.CLOEXEC),
             .eventfd = eventfd,
             .thread_pool = options.thread_pool,
             .thread_pool_completions = undefined,
@@ -90,7 +140,7 @@ pub const Loop = struct {
     }
 
     pub fn deinit(self: *Loop) void {
-        posix.close(self.fd);
+        xev_posix.close(self.fd);
         self.eventfd.deinit();
     }
 
@@ -187,10 +237,10 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        if (posix.clock_gettime(posix.CLOCK.MONOTONIC)) |new_time| {
-            self.cached_now = new_time;
-        } else |_| {
-            // Errors are ignored.
+        var ts: std.os.linux.timespec = undefined;
+        const rc = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
+        if (linux.errno(rc) == .SUCCESS) {
+            self.cached_now = ts;
         }
     }
 
@@ -305,7 +355,7 @@ pub const Loop = struct {
                 .events = linux.EPOLL.IN | linux.EPOLL.RDHUP,
                 .data = .{ .fd = self.eventfd.fd },
             };
-            posix.epoll_ctl(
+            epoll_helper.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_ADD,
                 self.eventfd.fd,
@@ -421,20 +471,14 @@ pub const Loop = struct {
                 break :timeout @as(i32, @intCast(ms_next -| ms_now));
             };
 
-            const n = posix.epoll_wait(self.fd, &events, timeout);
-            if (n < 0) {
-                switch (posix.errno(n)) {
-                    .INTR => continue,
-                    else => |err| return posix.unexpectedErrno(err),
-                }
-            }
+            const n = epoll_helper.epoll_wait(self.fd, &events, timeout);
 
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
                 // Handle wakeup eventfd
                 if (ev.data.fd == self.eventfd.fd) {
                     var buffer: u64 = undefined;
-                    _ = posix.read(self.eventfd.fd, std.mem.asBytes(&buffer)) catch {};
+                    _ = xev_posix.read(self.eventfd.fd, std.mem.asBytes(&buffer)) catch {};
                     continue;
                 }
 
@@ -453,7 +497,7 @@ pub const Loop = struct {
                         // We can't use self.stop because we can't trust
                         // that c is still a valid pointer.
                         if (fd) |v| {
-                            posix.epoll_ctl(
+                            epoll_helper.epoll_ctl(
                                 self.fd,
                                 linux.EPOLL.CTL_DEL,
                                 v,
@@ -461,7 +505,7 @@ pub const Loop = struct {
                             ) catch unreachable;
 
                             if (close_dup) {
-                                posix.close(v);
+                                xev_posix.close(v);
                             }
                         }
 
@@ -547,7 +591,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .accept = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -558,7 +602,7 @@ pub const Loop = struct {
             .connect => |*v| res: {
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .connect = err };
 
-                if (posix.connect(fd, &v.addr.any, v.addr.getOsSockLen())) {
+                if (xev_posix.connect(fd, &v.addr.any, v.addr.getOsSockLen())) {
                     break :res .{ .connect = {} };
                 } else |err| switch (err) {
                     // If we would block then we register with epoll
@@ -575,7 +619,7 @@ pub const Loop = struct {
                     .data = .{ .ptr = @intFromPtr(completion) },
                 };
 
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -597,7 +641,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -619,7 +663,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .read = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -641,7 +685,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -663,7 +707,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .write = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -678,7 +722,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .send = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -693,7 +737,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recv = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -712,7 +756,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .sendmsg = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -727,7 +771,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .recvmsg = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -743,12 +787,23 @@ pub const Loop = struct {
                         break :res .{ .close = err };
                 }
 
-                posix.close(v.fd);
+                xev_posix.close(v.fd);
                 break :res .{ .close = {} };
             },
 
             .shutdown => |v| res: {
-                break :res .{ .shutdown = posix.shutdown(v.socket, v.how) };
+                const how_int: i32 = switch (v.how) {
+                    .recv => linux.SHUT.RD,
+                    .send => linux.SHUT.WR,
+                    .both => linux.SHUT.RDWR,
+                };
+                const rc = linux.shutdown(v.socket, how_int);
+                break :res .{ .shutdown = switch (linux.errno(rc)) {
+                    .SUCCESS => {},
+                    .NOTCONN => error.SocketNotConnected,
+                    .NOBUFS => error.SystemResources,
+                    else => |err| posix.unexpectedErrno(err),
+                } };
             },
 
             .timer => |*v| res: {
@@ -770,7 +825,7 @@ pub const Loop = struct {
                 };
 
                 const fd = completion.fd_maybe_dup() catch |err| break :res .{ .poll = err };
-                break :res if (posix.epoll_ctl(
+                break :res if (epoll_helper.epoll_ctl(
                     self.fd,
                     linux.EPOLL.CTL_ADD,
                     fd,
@@ -816,7 +871,7 @@ pub const Loop = struct {
         // Delete. This should never fail.
         const maybe_fd = if (completion.flags.dup) completion.flags.dup_fd else completion.fd();
         if (maybe_fd) |fd| {
-            posix.epoll_ctl(
+            epoll_helper.epoll_ctl(
                 self.fd,
                 linux.EPOLL.CTL_DEL,
                 fd,
@@ -958,7 +1013,7 @@ pub const Completion = struct {
             => unreachable,
 
             .accept => |*op| .{
-                .accept = if (posix.accept(
+                .accept = if (xev_posix.accept(
                     op.socket,
                     &op.addr,
                     &op.addr_size,
@@ -970,15 +1025,15 @@ pub const Completion = struct {
             },
 
             .connect => |*op| .{
-                .connect = if (posix.getsockoptError(op.socket)) {} else |err| err,
+                .connect = if (xev_posix.getsockoptError(op.socket)) {} else |err| err,
             },
 
             .poll => .{ .poll = {} },
 
             .read => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| posix.read(op.fd, v),
-                    .array => |*v| posix.read(op.fd, v),
+                    .slice => |v| xev_posix.read(op.fd, v),
+                    .array => |*v| xev_posix.read(op.fd, v),
                 };
 
                 break :res .{
@@ -991,8 +1046,8 @@ pub const Completion = struct {
 
             .pread => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| posix.pread(op.fd, v, op.offset),
-                    .array => |*v| posix.pread(op.fd, v, op.offset),
+                    .slice => |v| xev_posix.pread(op.fd, v, op.offset),
+                    .array => |*v| xev_posix.pread(op.fd, v, op.offset),
                 };
 
                 break :res .{
@@ -1005,27 +1060,27 @@ pub const Completion = struct {
 
             .write => |*op| .{
                 .write = switch (op.buffer) {
-                    .slice => |v| posix.write(op.fd, v),
-                    .array => |*v| posix.write(op.fd, v.array[0..v.len]),
+                    .slice => |v| xev_posix.write(op.fd, v),
+                    .array => |*v| xev_posix.write(op.fd, v.array[0..v.len]),
                 },
             },
 
             .pwrite => |*op| .{
                 .pwrite = switch (op.buffer) {
-                    .slice => |v| posix.pwrite(op.fd, v, op.offset),
-                    .array => |*v| posix.pwrite(op.fd, v.array[0..v.len], op.offset),
+                    .slice => |v| xev_posix.pwrite(op.fd, v, op.offset),
+                    .array => |*v| xev_posix.pwrite(op.fd, v.array[0..v.len], op.offset),
                 },
             },
 
             .send => |*op| .{
                 .send = switch (op.buffer) {
-                    .slice => |v| posix.send(op.fd, v, 0),
-                    .array => |*v| posix.send(op.fd, v.array[0..v.len], 0),
+                    .slice => |v| xev_posix.send(op.fd, v, 0),
+                    .array => |*v| xev_posix.send(op.fd, v.array[0..v.len], 0),
                 },
             },
 
             .sendmsg => |*op| .{
-                .sendmsg = if (posix.sendmsg(op.fd, op.msghdr, 0)) |v|
+                .sendmsg = if (xev_posix.sendmsg(op.fd, op.msghdr, 0)) |v|
                     v
                 else |err|
                     err,
@@ -1038,7 +1093,7 @@ pub const Completion = struct {
                         error.EOF
                     else if (res > 0)
                         res
-                    else switch (posix.errno(res)) {
+                    else switch (linux.errno(res)) {
                         else => |err| posix.unexpectedErrno(err),
                     },
                 };
@@ -1046,8 +1101,8 @@ pub const Completion = struct {
 
             .recv => |*op| res: {
                 const n_ = switch (op.buffer) {
-                    .slice => |v| posix.recv(op.fd, v, 0),
-                    .array => |*v| posix.recv(op.fd, v, 0),
+                    .slice => |v| xev_posix.recv(op.fd, v, 0),
+                    .array => |*v| xev_posix.recv(op.fd, v, 0),
                 };
 
                 break :res .{
@@ -1059,7 +1114,7 @@ pub const Completion = struct {
             },
 
             .close => |*op| res: {
-                posix.close(op.fd);
+                xev_posix.close(op.fd);
                 break :res .{ .close = {} };
             },
         };
@@ -1072,7 +1127,7 @@ pub const Completion = struct {
         if (!self.flags.dup) return old_fd;
         if (self.flags.dup_fd > 0) return self.flags.dup_fd;
 
-        self.flags.dup_fd = posix.dup(old_fd) catch return error.DupFailed;
+        self.flags.dup_fd = xev_posix.dup(old_fd) catch return error.DupFailed;
         return self.flags.dup_fd;
     }
 
@@ -1162,7 +1217,7 @@ pub const Operation = union(OperationType) {
 
     connect: struct {
         socket: posix.socket_t,
-        addr: std.net.Address,
+        addr: net.Address,
     },
 
     /// Poll for events but do not perform any operations on them being
@@ -1206,7 +1261,7 @@ pub const Operation = union(OperationType) {
 
     sendmsg: struct {
         fd: posix.fd_t,
-        msghdr: *posix.msghdr_const,
+        msghdr: *linux.msghdr_const,
 
         /// Optionally, a write buffer can be specified and the given
         /// msghdr will be populated with information about this buffer.
@@ -1218,7 +1273,7 @@ pub const Operation = union(OperationType) {
 
     recvmsg: struct {
         fd: posix.fd_t,
-        msghdr: *posix.msghdr,
+        msghdr: *linux.msghdr,
     },
 
     close: struct {
@@ -1227,7 +1282,7 @@ pub const Operation = union(OperationType) {
 
     shutdown: struct {
         socket: posix.socket_t,
-        how: posix.ShutdownHow = .both,
+        how: ShutdownHow = .both,
     },
 
     timer: Timer,
@@ -1319,44 +1374,63 @@ pub const CancelError = ThreadPoolError || error{
     NotFound,
 };
 
-pub const AcceptError = posix.EpollCtlError || error{
+pub const ShutdownHow = std.Io.net.ShutdownHow;
+
+pub const EpollCtlError = error{
+    FileDescriptorAlreadyPresentInSet,
+    OperationCausesCircularLoop,
+    FileDescriptorNotRegistered,
+    SystemResources,
+    UserResourceLimitReached,
+    FileDescriptorIncompatibleWithEpoll,
+} || posix.UnexpectedError;
+
+pub const PosixShutdownError = error{
+    ConnectionAborted,
+    ConnectionResetByPeer,
+    BlockingOperationInProgress,
+    NetworkSubsystemFailed,
+    SocketNotConnected,
+    SystemResources,
+} || posix.UnexpectedError;
+
+pub const AcceptError = EpollCtlError || error{
     DupFailed,
     Unknown,
 };
 
-pub const CloseError = posix.EpollCtlError || ThreadPoolError || error{
+pub const CloseError = EpollCtlError || ThreadPoolError || error{
     Unknown,
 };
 
-pub const PollError = posix.EpollCtlError || error{
+pub const PollError = EpollCtlError || error{
     DupFailed,
     Unknown,
 };
 
-pub const ShutdownError = posix.EpollCtlError || posix.ShutdownError || error{
+pub const ShutdownError = EpollCtlError || PosixShutdownError || error{
     Unknown,
 };
 
-pub const ConnectError = posix.EpollCtlError || posix.ConnectError || error{
+pub const ConnectError = EpollCtlError || std.Io.net.IpAddress.ConnectError || xev_posix.ConnectError || error{
     DupFailed,
     Unknown,
 };
 
-pub const ReadError = ThreadPoolError || posix.EpollCtlError ||
-    posix.ReadError ||
-    posix.PReadError ||
-    posix.RecvFromError ||
+pub const ReadError = ThreadPoolError || EpollCtlError ||
+    xev_posix.ReadError ||
+    xev_posix.PReadError ||
+    xev_posix.RecvFromError ||
     error{
         DupFailed,
         EOF,
         Unknown,
     };
 
-pub const WriteError = ThreadPoolError || posix.EpollCtlError ||
-    posix.WriteError ||
-    posix.PWriteError ||
-    posix.SendError ||
-    posix.SendMsgError ||
+pub const WriteError = ThreadPoolError || EpollCtlError ||
+    xev_posix.WriteError ||
+    xev_posix.PWriteError ||
+    xev_posix.SendError ||
     error{
         DupFailed,
         Unknown,
@@ -1381,7 +1455,7 @@ test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 208), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 184), @sizeOf(Completion));
 }
 
 test "epoll: default completion" {
@@ -1671,7 +1745,6 @@ test "epoll: timerfd" {
 
 test "epoll: socket accept/connect/send/recv/close" {
     const mem = std.mem;
-    const net = std.net;
     const os = posix;
     const testing = std.testing;
 
@@ -1681,19 +1754,19 @@ test "epoll: socket accept/connect/send/recv/close" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.close(ln);
+    var ln = try xev_posix.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer xev_posix.close(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try os.bind(ln, &address.any, address.getOsSockLen());
-    try os.listen(ln, kernel_backlog);
+    try xev_posix.bind(ln, &address.any, address.getOsSockLen());
+    try xev_posix.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    var client_conn = try os.socket(
+    var client_conn = try xev_posix.socket(
         address.any.family,
         os.SOCK.NONBLOCK | os.SOCK.STREAM | os.SOCK.CLOEXEC,
         0,
     );
-    errdefer os.close(client_conn);
+    errdefer xev_posix.close(client_conn);
 
     // Accept
     var server_conn: os.socket_t = 0;

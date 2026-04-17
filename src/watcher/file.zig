@@ -5,6 +5,7 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const main = @import("../main.zig");
 const stream = @import("stream.zig");
+const xev_posix = @import("../posix.zig");
 
 /// File operations.
 ///
@@ -52,15 +53,15 @@ fn FileStream(comptime xev: type) type {
         pub const writeInit = S.writeInit;
         pub const queueWrite = S.queueWrite;
 
-        /// Initialize a File from a std.fs.File.
-        pub fn init(file: std.fs.File) !Self {
+        /// Initialize a File from a std.Io.File.
+        pub fn init(file: std.Io.File) !Self {
             return .{
                 .fd = file.handle,
             };
         }
 
         /// Initialize a File from a file descriptor.
-        pub fn initFd(fd: std.fs.File.Handle) Self {
+        pub fn initFd(fd: std.Io.File.Handle) Self {
             return .{
                 .fd = fd,
             };
@@ -322,6 +323,7 @@ fn FileStream(comptime xev: type) type {
             if (builtin.os.tag == .freebsd) return error.SkipZigTest;
 
             const testing = std.testing;
+            const io = testing.io;
 
             var tpool = main.ThreadPool.init(.{});
             defer tpool.deinit();
@@ -331,12 +333,12 @@ fn FileStream(comptime xev: type) type {
 
             // Create our file
             const path = "test_watcher_file";
-            const f = try std.fs.cwd().createFile(path, .{
+            const f = try std.Io.Dir.cwd().createFile(io, path, .{
                 .read = true,
                 .truncate = true,
             });
-            defer f.close();
-            defer std.fs.cwd().deleteFile(path) catch {};
+            defer f.close(io);
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
             const file = try Self.init(f);
             var write_queue: xev.WriteQueue = .{};
@@ -413,10 +415,10 @@ fn FileStream(comptime xev: type) type {
             try loop.run(.until_done);
 
             // Make sure the data is on disk
-            try f.sync();
+            try f.sync(io);
 
-            const f2 = try std.fs.cwd().openFile(path, .{});
-            defer f2.close();
+            const f2 = try std.Io.Dir.cwd().openFile(io, path, .{});
+            defer f2.close(io);
             const file2 = try Self.init(f2);
 
             // Read
@@ -465,7 +467,7 @@ fn FileDynamic(comptime xev: type) type {
         pub const write = S.write;
         pub const queueWrite = S.queueWrite;
 
-        pub fn init(file: std.fs.File) !Self {
+        pub fn init(file: std.Io.File) !Self {
             return .{ .backend = switch (xev.backend) {
                 inline else => |tag| backend: {
                     const api = (comptime xev.superset(tag)).Api();
@@ -651,9 +653,9 @@ fn FileTests(
             defer loop.deinit();
 
             // Create our pipe and write to it so its ready to be read
-            const pipe = try posix.pipe2(.{ .CLOEXEC = true });
-            defer posix.close(pipe[1]);
-            _ = try posix.write(pipe[1], "x");
+            const pipe = try xev_posix.pipe2(.{ .CLOEXEC = true });
+            defer xev_posix.close(pipe[1]);
+            _ = try xev_posix.write(pipe[1], "x");
 
             // Create our file
             const file = Impl.initFd(pipe[0]);
@@ -691,9 +693,9 @@ fn FileTests(
             defer loop.deinit();
 
             // Create our pipe and write to it so its ready to be read
-            const pipe = try posix.pipe2(.{ .CLOEXEC = true });
-            defer posix.close(pipe[1]);
-            _ = try posix.write(pipe[1], "x");
+            const pipe = try xev_posix.pipe2(.{ .CLOEXEC = true });
+            defer xev_posix.close(pipe[1]);
+            _ = try xev_posix.write(pipe[1], "x");
 
             // Create our file
             const file = Impl.initFd(pipe[0]);
@@ -728,6 +730,7 @@ fn FileTests(
             if (builtin.os.tag == .freebsd) return error.SkipZigTest;
 
             const testing = std.testing;
+            const io = testing.io;
 
             var tpool = main.ThreadPool.init(.{});
             defer tpool.deinit();
@@ -737,12 +740,12 @@ fn FileTests(
 
             // Create our file
             const path = "test_watcher_file";
-            const f = try std.fs.cwd().createFile(path, .{
+            const f = try std.Io.Dir.cwd().createFile(io, path, .{
                 .read = true,
                 .truncate = true,
             });
-            defer f.close();
-            defer std.fs.cwd().deleteFile(path) catch {};
+            defer f.close(io);
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
             const file = try Impl.init(f);
 
@@ -767,10 +770,10 @@ fn FileTests(
             try loop.run(.until_done);
 
             // Make sure the data is on disk
-            try f.sync();
+            try f.sync(io);
 
-            const f2 = try std.fs.cwd().openFile(path, .{});
-            defer f2.close();
+            const f2 = try std.Io.Dir.cwd().openFile(io, path, .{});
+            defer f2.close(io);
             const file2 = try Impl.init(f2);
 
             // Read
@@ -803,6 +806,7 @@ fn FileTests(
             if (builtin.os.tag == .freebsd) return error.SkipZigTest;
 
             const testing = std.testing;
+            const io = testing.io;
 
             var tpool = main.ThreadPool.init(.{});
             defer tpool.deinit();
@@ -812,12 +816,12 @@ fn FileTests(
 
             // Create our file
             const path = "test_watcher_file";
-            const f = try std.fs.cwd().createFile(path, .{
+            const f = try std.Io.Dir.cwd().createFile(io, path, .{
                 .read = true,
                 .truncate = true,
             });
-            defer f.close();
-            defer std.fs.cwd().deleteFile(path) catch {};
+            defer f.close(io);
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
             const file = try Impl.init(f);
 
@@ -842,10 +846,10 @@ fn FileTests(
             try loop.run(.until_done);
 
             // Make sure the data is on disk
-            try f.sync();
+            try f.sync(io);
 
-            const f2 = try std.fs.cwd().openFile(path, .{});
-            defer f2.close();
+            const f2 = try std.Io.Dir.cwd().openFile(io, path, .{});
+            defer f2.close(io);
             const file2 = try Impl.init(f2);
 
             var read_buf: [128]u8 = undefined;
@@ -876,6 +880,7 @@ fn FileTests(
             if (builtin.os.tag == .freebsd) return error.SkipZigTest;
 
             const testing = std.testing;
+            const io = testing.io;
 
             var tpool = main.ThreadPool.init(.{});
             defer tpool.deinit();
@@ -885,12 +890,12 @@ fn FileTests(
 
             // Create our file
             const path = "test_watcher_file";
-            const f = try std.fs.cwd().createFile(path, .{
+            const f = try std.Io.Dir.cwd().createFile(io, path, .{
                 .read = true,
                 .truncate = true,
             });
-            defer f.close();
-            defer std.fs.cwd().deleteFile(path) catch {};
+            defer f.close(io);
+            defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
             const file = try Impl.init(f);
             var write_queue: xev.WriteQueue = .{};
@@ -944,10 +949,10 @@ fn FileTests(
             try loop.run(.until_done);
 
             // Make sure the data is on disk
-            try f.sync();
+            try f.sync(io);
 
-            const f2 = try std.fs.cwd().openFile(path, .{});
-            defer f2.close();
+            const f2 = try std.Io.Dir.cwd().openFile(io, path, .{});
+            defer f2.close(io);
             const file2 = try Impl.init(f2);
 
             // Read

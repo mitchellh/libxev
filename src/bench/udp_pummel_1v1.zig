@@ -1,7 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const Instant = std.time.Instant;
 const xev = @import("xev");
 //const xev = @import("xev").Dynamic;
 
@@ -17,11 +16,11 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
-    try run(1, 1);
+pub fn main(init: std.process.Init) !void {
+    try run(1, 1, init.io);
 }
 
-pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int) !void {
+pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int, io: std.Io) !void {
     const base_port = 12345;
 
     var thread_pool = xev.ThreadPool.init(.{});
@@ -37,7 +36,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
 
     var receivers: [n_receivers]Receiver = undefined;
     for (&receivers, 0..) |*r, i| {
-        const addr = try std.net.Address.parseIp4("127.0.0.1", @as(u16, @intCast(base_port + i)));
+        const addr = try std.Io.net.IpAddress.parse("127.0.0.1", @as(u16, @intCast(base_port + i)));
         r.* = .{ .udp = try xev.UDP.init(addr) };
         try r.udp.bind(addr);
         r.udp.read(
@@ -53,7 +52,7 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
 
     var senders: [n_senders]Sender = undefined;
     for (&senders, 0..) |*s, i| {
-        const addr = try std.net.Address.parseIp4(
+        const addr = try std.Io.net.IpAddress.parse(
             "127.0.0.1",
             @as(u16, @intCast(base_port + (i % n_receivers))),
         );
@@ -70,11 +69,11 @@ pub fn run(comptime n_senders: comptime_int, comptime n_receivers: comptime_int)
         );
     }
 
-    const start_time = try Instant.now();
+    const start_time = std.Io.Clock.awake.now(io);
     try loop.run(.until_done);
-    const end_time = try Instant.now();
+    const end_time = std.Io.Clock.awake.now(io);
 
-    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
+    const elapsed: f64 = @floatFromInt(start_time.durationTo(end_time).nanoseconds);
     std.log.info("udp_pummel_{d}v{d}: {d:.0}f/s received, {d:.0}f/s sent, {d} received, {d} sent in {d:.1} seconds", .{
         n_senders,
         n_receivers,
@@ -125,7 +124,7 @@ const Receiver = struct {
         _: *xev.Loop,
         _: *xev.Completion,
         _: *xev.UDP.State,
-        _: std.net.Address,
+        _: std.Io.net.IpAddress,
         _: xev.UDP,
         b: xev.ReadBuffer,
         r: xev.ReadError!usize,

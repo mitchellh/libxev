@@ -23,7 +23,7 @@
       # Other overlays
       (final: prev: rec {
         zigpkgs = inputs.zig.packages.${prev.system};
-        zig = inputs.zig.packages.${prev.system}."0.15.2";
+        zig = inputs.zig.packages.${prev.system}."0.16.0";
 
         # Our package
         libxev = prev.callPackage ./nix/package.nix {};

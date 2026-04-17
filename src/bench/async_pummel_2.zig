@@ -5,6 +5,6 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
-    try run(2);
+pub fn main(init: std.process.Init) !void {
+    try run(2, init.io);
 }
