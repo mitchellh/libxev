@@ -427,18 +427,15 @@ fn DynamicPollEvent(comptime xev: type) type {
 /// Preserves the same backing type and integer values for the
 /// subset making it easy to convert between the two.
 fn EnumSubset(comptime T: type, comptime values: []const T) type {
-    var fields: [values.len]std.builtin.Type.EnumField = undefined;
-    for (values, 0..) |value, i| fields[i] = .{
-        .name = @tagName(value),
-        .value = @intFromEnum(value),
-    };
+    const tag_type = @typeInfo(T).@"enum".tag_type;
+    var field_names: [values.len][:0]const u8 = undefined;
+    var field_values: [values.len]tag_type = undefined;
+    for (values, 0..) |value, i| {
+        field_names[i] = @tagName(value);
+        field_values[i] = @intFromEnum(value);
+    }
 
-    return @Type(.{ .@"enum" = .{
-        .tag_type = @typeInfo(T).@"enum".tag_type,
-        .fields = &fields,
-        .decls = &.{},
-        .is_exhaustive = true,
-    } });
+    return @Enum(tag_type, .exhaustive, &field_names, &field_values);
 }
 
 /// Creates a union type that can hold the implementation of a given
@@ -462,16 +459,16 @@ fn Union(
     // below using this variable for more info.
     var largest: usize = 0;
 
-    var fields: [bes.len + 1]std.builtin.Type.UnionField = undefined;
+    var field_names: [bes.len + 1][:0]const u8 = undefined;
+    var field_types: [bes.len + 1]type = undefined;
+    var field_attrs: [bes.len + 1]std.builtin.Type.UnionField.Attributes = @splat(.{});
     for (bes, 0..) |be, i| {
         var T: type = be.Api();
         for (field) |f| T = @field(T, f);
         largest = @max(largest, @sizeOf(T));
-        fields[i] = .{
-            .name = @tagName(be),
-            .type = T,
-            .alignment = @alignOf(T),
-        };
+        field_names[i] = @tagName(be);
+        field_types[i] = T;
+        field_attrs[i] = .{ .@"align" = @alignOf(T) };
     }
 
     // If our union only has zero-sized types, we need to add some
@@ -482,25 +479,19 @@ fn Union(
     // our examples can build with Dynamic then we're good.
     var count: usize = bes.len;
     if (largest == 0) {
-        fields[count] = .{
-            .name = "_zig_bug_padding",
-            .type = u8,
-            .alignment = @alignOf(u8),
-        };
+        field_names[count] = "_zig_bug_padding";
+        field_types[count] = u8;
+        field_attrs[count] = .{ .@"align" = @alignOf(u8) };
         count += 1;
     }
 
-    return @Type(.{
-        .@"union" = .{
-            .layout = .auto,
-            .tag_type = if (tagged) EnumSubset(
-                AllBackend,
-                bes,
-            ) else null,
-            .fields = fields[0..count],
-            .decls = &.{},
-        },
-    });
+    return @Union(
+        .auto,
+        if (tagged) EnumSubset(AllBackend, bes) else null,
+        field_names[0..count],
+        field_types[0..count],
+        field_attrs[0..count],
+    );
 }
 
 /// Create a new error set from a list of error sets within

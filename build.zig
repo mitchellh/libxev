@@ -26,7 +26,6 @@ pub fn build(b: *std.Build) !void {
         true
     else |err| switch (err) {
         error.FileNotFound => false,
-        else => return err,
     };
 
     const emit_bench = b.option(
@@ -41,12 +40,6 @@ pub fn build(b: *std.Build) !void {
         "Install the example binaries to zig-out",
     ) orelse false;
 
-    const c_api_module = b.createModule(.{
-        .root_source_file = b.path("src/c_api.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Static C lib
     const static_lib: ?*Step.Compile = lib: {
         if (target.result.os.tag == .wasi) break :lib null;
@@ -54,12 +47,16 @@ pub fn build(b: *std.Build) !void {
         const static_lib = b.addLibrary(.{
             .linkage = .static,
             .name = "xev",
-            .root_module = c_api_module,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/c_api.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
         });
-        static_lib.linkLibC();
         if (target.result.os.tag == .windows) {
-            static_lib.linkSystemLibrary("ws2_32");
-            static_lib.linkSystemLibrary("mswsock");
+            static_lib.root_module.linkSystemLibrary("ws2_32", .{});
+            static_lib.root_module.linkSystemLibrary("mswsock", .{});
         }
         break :lib static_lib;
     };
@@ -72,7 +69,11 @@ pub fn build(b: *std.Build) !void {
         const dynamic_lib = b.addLibrary(.{
             .linkage = .dynamic,
             .name = "xev",
-            .root_module = c_api_module,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/c_api.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
         });
         break :lib dynamic_lib;
     };
@@ -119,20 +120,19 @@ pub fn build(b: *std.Build) !void {
             "test-filter",
             "Filter for test",
         );
-        const test_exe = b.addTest(.{
+        break :test_exe b.addTest(.{
             .name = "xev-test",
             .filters = if (test_filter) |filter| &.{filter} else &.{},
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/main.zig"),
                 .target = target,
                 .optimize = optimize,
+                .link_libc = switch (target.result.os.tag) {
+                    .linux, .macos => true,
+                    else => null,
+                },
             }),
         });
-        switch (target.result.os.tag) {
-            .linux, .macos => test_exe.linkLibC(),
-            else => {},
-        }
-        break :test_exe test_exe;
     };
 
     // "test" Step
@@ -172,19 +172,24 @@ fn buildBenchmarks(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
 ) ![]const *Step.Compile {
+    const io = b.graph.io;
     const alloc = b.allocator;
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.fs.cwd().openDir(try b.build_root.join(
-        b.allocator,
-        &.{ "src", "bench" },
-    ), .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(
+        io,
+        try b.build_root.join(
+            b.allocator,
+            &.{ "src", "bench" },
+        ),
+        .{ .iterate = true },
+    );
+    defer dir.close(io);
 
     // Go through and add each as a step
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         // Get the index of the last '.' so we can strip the extension.
         const index = std.mem.lastIndexOfScalar(
             u8,
@@ -223,19 +228,24 @@ fn buildExamples(
     optimize: std.builtin.OptimizeMode,
     c_lib_: ?*Step.Compile,
 ) ![]const *Step.Compile {
+    const io = b.graph.io;
     const alloc = b.allocator;
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.fs.cwd().openDir(try b.build_root.join(
-        b.allocator,
-        &.{"examples"},
-    ), .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(
+        io,
+        try b.build_root.join(
+            b.allocator,
+            &.{"examples"},
+        ),
+        .{ .iterate = true },
+    );
+    defer dir.close(io);
 
     // Go through and add each as a step
     var it = dir.iterate();
-    while (try it.next()) |entry| {
+    while (try it.next(io)) |entry| {
         // Get the index of the last '.' so we can strip the extension.
         const index = std.mem.lastIndexOfScalar(
             u8,
@@ -269,11 +279,11 @@ fn buildExamples(
                 .root_module = b.createModule(.{
                     .target = target,
                     .optimize = optimize,
+                    .link_libc = true,
                 }),
             });
-            exe.linkLibC();
-            exe.addIncludePath(b.path("include"));
-            exe.addCSourceFile(.{
+            exe.root_module.addIncludePath(b.path("include"));
+            exe.root_module.addCSourceFile(.{
                 .file = b.path(b.fmt(
                     "examples/{s}",
                     .{entry.name},
@@ -286,7 +296,7 @@ fn buildExamples(
                     "-D_POSIX_C_SOURCE=199309L",
                 },
             });
-            exe.linkLibrary(c_lib);
+            exe.root_module.linkLibrary(c_lib);
             break :exe exe;
         };
 
@@ -298,18 +308,20 @@ fn buildExamples(
 }
 
 fn manPages(b: *std.Build) ![]const *Step {
+    const io = b.graph.io;
     const alloc = b.allocator;
     var steps: std.ArrayList(*Step) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.fs.cwd().openDir(try b.build_root.join(
-        b.allocator,
-        &.{"docs"},
-    ), .{ .iterate = true });
-    defer dir.close();
+    var dir = try std.Io.Dir.cwd().openDir(
+        io,
+        try b.build_root.join(b.allocator, &.{"docs"}),
+        .{ .iterate = true },
+    );
+    defer dir.close(io);
 
     var it = dir.iterate();
-    while (try it.next()) |*entry| {
+    while (try it.next(io)) |*entry| {
         // Filenames must end in "{section}.scd" and sections are
         // single numerals.
         const base = entry.name[0 .. entry.name.len - 4];
@@ -321,7 +333,7 @@ fn manPages(b: *std.Build) ![]const *Step {
         ) });
 
         try steps.append(alloc, &b.addInstallFile(
-            cmd.captureStdOut(),
+            cmd.captureStdOut(.{}),
             b.fmt("share/man/man{s}/{s}", .{ section, base }),
         ).step);
     }

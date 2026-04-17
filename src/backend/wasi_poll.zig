@@ -3,6 +3,10 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const wasi = std.os.wasi;
 const posix = std.posix;
+
+pub const ShutdownHow = std.Io.net.ShutdownHow;
+
+const xev_posix = @import("../posix.zig");
 const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
@@ -1003,7 +1007,7 @@ pub const Operation = union(OperationType) {
 
     shutdown: struct {
         socket: posix.socket_t,
-        how: posix.ShutdownHow = .both,
+        how: ShutdownHow = .both,
     },
 
     close: struct {
@@ -1059,13 +1063,13 @@ pub const ShutdownError = error{
     Unexpected,
 };
 
-pub const ReadError = Batch.Error || posix.ReadError || posix.PReadError ||
+pub const ReadError = Batch.Error || xev_posix.ReadError || xev_posix.PReadError ||
     error{
         EOF,
         Unknown,
     };
 
-pub const WriteError = Batch.Error || posix.WriteError || posix.PWriteError ||
+pub const WriteError = Batch.Error || xev_posix.WriteError || xev_posix.PWriteError ||
     error{
         Unknown,
     };

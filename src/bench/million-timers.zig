@@ -1,11 +1,13 @@
 const std = @import("std");
-const Instant = std.time.Instant;
 const xev = @import("xev");
 //const xev = @import("xev").Dynamic;
 
 pub const NUM_TIMERS: usize = 10 * 1000 * 1000;
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.gpa;
+    const io = init.io;
+
     var thread_pool = xev.ThreadPool.init(.{});
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
@@ -17,15 +19,11 @@ pub fn main() !void {
     });
     defer loop.deinit();
 
-    const GPA = std.heap.GeneralPurposeAllocator(.{});
-    var gpa: GPA = .{};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
-
     var cs = try alloc.alloc(xev.Completion, NUM_TIMERS);
     defer alloc.free(cs);
 
-    const before_all = try Instant.now();
+    const clock = std.Io.Clock.awake;
+    const before_all = clock.now(io);
     var i: usize = 0;
     var timeout: u64 = 1;
     while (i < NUM_TIMERS) : (i += 1) {
@@ -34,15 +32,21 @@ pub fn main() !void {
         timer.run(&loop, &cs[i], timeout, void, null, timerCallback);
     }
 
-    const before_run = try Instant.now();
+    const before_run = clock.now(io);
     try loop.run(.until_done);
-    const after_run = try Instant.now();
-    const after_all = try Instant.now();
+    const after_run = clock.now(io);
+    const after_all = clock.now(io);
 
-    std.log.info("{d:.2} seconds total", .{@as(f64, @floatFromInt(after_all.since(before_all))) / 1e9});
-    std.log.info("{d:.2} seconds init", .{@as(f64, @floatFromInt(before_run.since(before_all))) / 1e9});
-    std.log.info("{d:.2} seconds dispatch", .{@as(f64, @floatFromInt(after_run.since(before_run))) / 1e9});
-    std.log.info("{d:.2} seconds cleanup", .{@as(f64, @floatFromInt(after_all.since(after_run))) / 1e9});
+    const dur = struct {
+        fn ns(from: std.Io.Timestamp, to: std.Io.Timestamp) f64 {
+            return @floatFromInt(from.durationTo(to).nanoseconds);
+        }
+    }.ns;
+
+    std.log.info("{d:.2} seconds total", .{dur(before_all, after_all) / 1e9});
+    std.log.info("{d:.2} seconds init", .{dur(before_all, before_run) / 1e9});
+    std.log.info("{d:.2} seconds dispatch", .{dur(before_run, after_run) / 1e9});
+    std.log.info("{d:.2} seconds cleanup", .{dur(after_run, after_all) / 1e9});
 }
 
 pub const std_options: std.Options = .{

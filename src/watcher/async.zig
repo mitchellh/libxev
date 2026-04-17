@@ -5,6 +5,7 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const common = @import("common.zig");
 const darwin = @import("../darwin.zig");
+const xev_posix = @import("../posix.zig");
 
 pub fn Async(comptime xev: type) type {
     if (xev.dynamic) return AsyncDynamic(xev);
@@ -56,12 +57,14 @@ fn AsyncEventFd(comptime xev: type) type {
                         0x100000 | 0x4, // EFD_CLOEXEC | EFD_NONBLOCK
                     ),
 
-                    // Use std.posix if we can.
-                    else => try std.posix.eventfd(
-                        0,
-                        std.os.linux.EFD.CLOEXEC |
-                            std.os.linux.EFD.NONBLOCK,
-                    ),
+                    // Use the raw linux syscall.
+                    else => blk: {
+                        const rc = std.os.linux.eventfd(0, std.os.linux.EFD.CLOEXEC | std.os.linux.EFD.NONBLOCK);
+                        break :blk switch (std.posix.errno(rc)) {
+                            .SUCCESS => @as(std.posix.fd_t, @intCast(rc)),
+                            else => |err| return std.posix.unexpectedErrno(err),
+                        };
+                    },
                 },
             };
         }
@@ -69,7 +72,7 @@ fn AsyncEventFd(comptime xev: type) type {
         /// Clean up the async. This will forcibly deinitialize any resources
         /// and may result in erroneous wait callbacks to be fired.
         pub fn deinit(self: *Self) void {
-            std.posix.close(self.fd);
+            xev_posix.close(self.fd);
         }
 
         /// Wait for a message on this async. Note that async messages may be
@@ -202,7 +205,7 @@ fn AsyncEventFd(comptime xev: type) type {
         pub fn notify(self: Self) !void {
             // We want to just write "1" in the correct byte order as our host.
             const val = @as([8]u8, @bitCast(@as(u64, 1)));
-            _ = posix.write(self.fd, &val) catch |err| switch (err) {
+            _ = xev_posix.write(self.fd, &val) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return err,
             };
@@ -253,7 +256,7 @@ fn AsyncMachPort(comptime xev: type) type {
             var mach_port: posix.system.mach_port_name_t = undefined;
             switch (darwin.getKernError(posix.system.mach_port_allocate(
                 mach_self,
-                @intFromEnum(posix.system.MACH_PORT_RIGHT.RECEIVE),
+                posix.system.MACH.PORT.RIGHT.RECEIVE,
                 &mach_port,
             ))) {
                 .SUCCESS => {}, // Success
@@ -266,7 +269,7 @@ fn AsyncMachPort(comptime xev: type) type {
                 mach_self,
                 mach_port,
                 mach_port,
-                @intFromEnum(posix.system.MACH_MSG_TYPE.MAKE_SEND),
+                posix.system.MACH.MSG.TYPE.MAKE_SEND,
             ))) {
                 .SUCCESS => {}, // Success
                 else => return error.MachPortAllocFailed,
@@ -399,7 +402,7 @@ fn AsyncMachPort(comptime xev: type) type {
             var msg: darwin.mach_msg_header_t = .{
                 // We use COPY_SEND which will not increment any send ref
                 // counts because it'll reuse the existing send right.
-                .msgh_bits = @intFromEnum(posix.system.MACH_MSG_TYPE.COPY_SEND),
+                .msgh_bits = @intFromEnum(posix.system.MACH.MSG.TYPE.COPY_SEND),
                 .msgh_size = @sizeOf(darwin.mach_msg_header_t),
                 .msgh_remote_port = self.port,
                 .msgh_local_port = darwin.MACH_PORT_NULL,
@@ -534,7 +537,7 @@ fn AsyncIOCP(comptime xev: type) type {
 
         pub const WaitError = xev.Sys.AsyncError;
 
-        guard: std.Thread.Mutex = .{},
+        guard: std.Io.Mutex = .init,
         wakeup: bool = false,
         waiter: ?struct {
             loop: *xev.Loop,
@@ -583,8 +586,9 @@ fn AsyncIOCP(comptime xev: type) type {
             };
             loop.add(c);
 
-            self.guard.lock();
-            defer self.guard.unlock();
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.guard.lockUncancelable(io);
+            defer self.guard.unlock(io);
 
             self.waiter = .{
                 .loop = loop,
@@ -595,8 +599,9 @@ fn AsyncIOCP(comptime xev: type) type {
         }
 
         pub fn notify(self: *Self) !void {
-            self.guard.lock();
-            defer self.guard.unlock();
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.guard.lockUncancelable(io);
+            defer self.guard.unlock(io);
 
             if (self.waiter) |w| {
                 w.loop.async_notify(w.c);

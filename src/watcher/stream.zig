@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const builtin = @import("builtin");
 const common = @import("common.zig");
 const queue = @import("../queue.zig");
+const xev_posix = @import("../posix.zig");
 
 /// Options for creating a stream type. Each of the options makes the
 /// functionality available for the stream.
@@ -1437,7 +1438,7 @@ const Pty = struct {
     }
 
     pub fn deinit(self: *Pty) void {
-        std.posix.close(self.parent);
-        std.posix.close(self.child);
+        xev_posix.close(self.parent);
+        xev_posix.close(self.child);
     }
 };

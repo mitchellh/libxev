@@ -3,12 +3,16 @@ const builtin = @import("builtin");
 const assert = std.debug.assert;
 const linux = std.os.linux;
 const posix = std.posix;
+const net = @import("../posix.zig").net;
+const xev_posix = @import("../posix.zig");
 const queue = @import("../queue.zig");
 const looppkg = @import("../loop.zig");
 const Callback = looppkg.Callback(@This());
 const CallbackAction = looppkg.CallbackAction;
 const CompletionState = looppkg.CompletionState;
 const noopCallback = looppkg.NoopCallback(@This());
+
+pub const ShutdownHow = std.Io.net.ShutdownHow;
 
 /// True if this backend is available on this platform.
 pub fn available() bool {
@@ -125,11 +129,11 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        if (posix.clock_gettime(posix.CLOCK.MONOTONIC)) |new_time| {
-            self.cached_now = new_time;
+        var ts: linux.timespec = undefined;
+        const rc = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
+        if (posix.errno(rc) == .SUCCESS) {
+            self.cached_now = ts;
             self.flags.now_outdated = false;
-        } else |_| {
-            // Errors are ignored.
         }
     }
 
@@ -219,6 +223,7 @@ pub const Loop = struct {
         RingShuttingDown,
         OpcodeNotSupported,
         SignalInterrupt,
+        InvalidThread,
     };
 
     /// Submit all queued operations. This never does an io_uring submit
@@ -930,7 +935,7 @@ pub const Operation = union(OperationType) {
 
     connect: struct {
         socket: posix.socket_t,
-        addr: std.net.Address,
+        addr: net.Address,
     },
 
     poll: struct {
@@ -961,7 +966,7 @@ pub const Operation = union(OperationType) {
 
     sendmsg: struct {
         fd: posix.fd_t,
-        msghdr: *posix.msghdr_const,
+        msghdr: *linux.msghdr_const,
 
         /// Optionally, a write buffer can be specified and the given
         /// msghdr will be populated with information about this buffer.
@@ -973,12 +978,12 @@ pub const Operation = union(OperationType) {
 
     recvmsg: struct {
         fd: posix.fd_t,
-        msghdr: *posix.msghdr,
+        msghdr: *linux.msghdr,
     },
 
     shutdown: struct {
         socket: posix.socket_t,
-        how: posix.ShutdownHow = .both,
+        how: ShutdownHow = .both,
     },
 
     pwrite: struct {
@@ -1122,7 +1127,7 @@ test "Completion size" {
     const testing = std.testing;
 
     // Just so we are aware when we change the size
-    try testing.expectEqual(@as(usize, 152), @sizeOf(Completion));
+    try testing.expectEqual(@as(usize, 128), @sizeOf(Completion));
 }
 
 test "io_uring: available" {
@@ -1404,7 +1409,6 @@ test "io_uring: timer remove" {
 
 test "io_uring: socket accept/connect/send/recv/close" {
     const mem = std.mem;
-    const net = std.net;
     const os = posix;
     const testing = std.testing;
 
@@ -1414,15 +1418,15 @@ test "io_uring: socket accept/connect/send/recv/close" {
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
     const kernel_backlog = 1;
-    var ln = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.close(ln);
+    var ln = try xev_posix.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer xev_posix.close(ln);
     try os.setsockopt(ln, os.SOL.SOCKET, os.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try os.bind(ln, &address.any, address.getOsSockLen());
-    try os.listen(ln, kernel_backlog);
+    try xev_posix.bind(ln, &address.any, address.getOsSockLen());
+    try xev_posix.listen(ln, kernel_backlog);
 
     // Create a TCP client socket
-    var client_conn = try os.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
-    errdefer os.close(client_conn);
+    var client_conn = try xev_posix.socket(address.any.family, os.SOCK.STREAM | os.SOCK.CLOEXEC, 0);
+    errdefer xev_posix.close(client_conn);
 
     // Accept
     var server_conn: os.socket_t = 0;
@@ -1629,8 +1633,6 @@ test "io_uring: socket accept/connect/send/recv/close" {
 
 test "io_uring: sendmsg/recvmsg" {
     const mem = std.mem;
-    const net = std.net;
-    const os = posix;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});
@@ -1638,21 +1640,21 @@ test "io_uring: sendmsg/recvmsg" {
 
     // Create a TCP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    const server = try posix.socket(address.any.family, posix.SOCK.DGRAM, 0);
-    defer posix.close(server);
+    const server = try xev_posix.socket(address.any.family, posix.SOCK.DGRAM, 0);
+    defer xev_posix.close(server);
     try posix.setsockopt(server, posix.SOL.SOCKET, posix.SO.REUSEPORT, &mem.toBytes(@as(c_int, 1)));
     try posix.setsockopt(server, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try posix.bind(server, &address.any, address.getOsSockLen());
+    try xev_posix.bind(server, &address.any, address.getOsSockLen());
 
-    const client = try posix.socket(address.any.family, posix.SOCK.DGRAM, 0);
-    defer posix.close(client);
+    const client = try xev_posix.socket(address.any.family, posix.SOCK.DGRAM, 0);
+    defer xev_posix.close(client);
 
     // Send
     const buffer_send = [_]u8{42} ** 128;
-    const iovecs_send = [_]os.iovec_const{
-        os.iovec_const{ .base = &buffer_send, .len = buffer_send.len },
+    const iovecs_send = [_]posix.iovec_const{
+        posix.iovec_const{ .base = &buffer_send, .len = buffer_send.len },
     };
-    var msg_send = os.msghdr_const{
+    var msg_send = linux.msghdr_const{
         .name = &address.any,
         .namelen = address.getOsSockLen(),
         .iov = &iovecs_send,
@@ -1684,12 +1686,12 @@ test "io_uring: sendmsg/recvmsg" {
     // Recv
 
     var buffer_recv = [_]u8{0} ** 128;
-    var iovecs_recv = [_]os.iovec{
-        os.iovec{ .base = &buffer_recv, .len = buffer_recv.len },
+    var iovecs_recv = [_]posix.iovec{
+        posix.iovec{ .base = &buffer_recv, .len = buffer_recv.len },
     };
     const addr = [_]u8{0} ** 4;
     var address_recv = net.Address.initIp4(addr, 0);
-    var msg_recv: os.msghdr = os.msghdr{
+    var msg_recv: linux.msghdr = linux.msghdr{
         .name = &address_recv.any,
         .namelen = address_recv.getOsSockLen(),
         .iov = &iovecs_recv,
@@ -1728,7 +1730,6 @@ test "io_uring: sendmsg/recvmsg" {
 
 test "io_uring: socket read cancellation" {
     const mem = std.mem;
-    const net = std.net;
     const testing = std.testing;
 
     var loop = try Loop.init(.{});
@@ -1736,10 +1737,10 @@ test "io_uring: socket read cancellation" {
 
     // Create a UDP server socket
     const address = try net.Address.parseIp4("127.0.0.1", 3131);
-    const socket = try posix.socket(address.any.family, posix.SOCK.DGRAM | posix.SOCK.CLOEXEC, 0);
-    errdefer posix.close(socket);
+    const socket = try xev_posix.socket(address.any.family, posix.SOCK.DGRAM | posix.SOCK.CLOEXEC, 0);
+    errdefer xev_posix.close(socket);
     try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
-    try posix.bind(socket, &address.any, address.getOsSockLen());
+    try xev_posix.bind(socket, &address.any, address.getOsSockLen());
 
     // Read
     var read_result: Result = undefined;

@@ -1,5 +1,4 @@
 const std = @import("std");
-const Instant = std.time.Instant;
 const xev = @import("xev");
 
 pub fn main() !void {

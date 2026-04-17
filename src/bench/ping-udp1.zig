@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const Instant = std.time.Instant;
 const xev = @import("xev");
 //const xev = @import("xev").Dynamic;
 
@@ -10,11 +9,11 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
-    try run(1);
+pub fn main(init: std.process.Init) !void {
+    try run(1, init.io);
 }
 
-pub fn run(comptime count: comptime_int) !void {
+pub fn run(comptime count: comptime_int, io: std.Io) !void {
     var thread_pool = xev.ThreadPool.init(.{});
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
@@ -26,7 +25,7 @@ pub fn run(comptime count: comptime_int) !void {
     });
     defer loop.deinit();
 
-    const addr = try std.net.Address.parseIp4("127.0.0.1", 3131);
+    const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 3131);
 
     var pingers: [count]Pinger = undefined;
     for (&pingers) |*p| {
@@ -34,9 +33,9 @@ pub fn run(comptime count: comptime_int) !void {
         try p.start(&loop);
     }
 
-    const start_time = try Instant.now();
+    const start_time = std.Io.Clock.awake.now(io);
     try loop.run(.until_done);
-    const end_time = try Instant.now();
+    const end_time = std.Io.Clock.awake.now(io);
 
     const total: usize = total: {
         var total: usize = 0;
@@ -44,7 +43,7 @@ pub fn run(comptime count: comptime_int) !void {
         break :total total;
     };
 
-    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
+    const elapsed: f64 = @floatFromInt(start_time.durationTo(end_time).nanoseconds);
     std.log.info("ping_pongs: {d} pingers, ~{d:.0} roundtrips/s", .{
         count,
         @as(f64, @floatFromInt(total)) / (elapsed / 1e9),
@@ -53,7 +52,7 @@ pub fn run(comptime count: comptime_int) !void {
 
 const Pinger = struct {
     udp: xev.UDP,
-    addr: std.net.Address,
+    addr: std.Io.net.IpAddress,
     state: usize = 0,
     pongs: u64 = 0,
     read_buf: [1024]u8 = undefined,
@@ -65,7 +64,7 @@ const Pinger = struct {
 
     pub const PING = "PING\n";
 
-    pub fn init(addr: std.net.Address) !Pinger {
+    pub fn init(addr: std.Io.net.IpAddress) !Pinger {
         return .{
             .udp = try xev.UDP.init(addr),
             .state = 0,
@@ -108,7 +107,7 @@ const Pinger = struct {
         loop: *xev.Loop,
         c: *xev.Completion,
         _: *xev.UDP.State,
-        _: std.net.Address,
+        _: std.Io.net.IpAddress,
         socket: xev.UDP,
         buf: xev.ReadBuffer,
         r: xev.ReadError!usize,

@@ -1,15 +1,19 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const Instant = std.time.Instant;
 const xev = @import("xev");
 //const xev = @import("xev").Dynamic;
+
+
 
 pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.gpa;
+    const io = init.io;
+
     var thread_pool = xev.ThreadPool.init(.{});
     defer thread_pool.deinit();
     defer thread_pool.shutdown();
@@ -20,11 +24,6 @@ pub fn main() !void {
         .thread_pool = &thread_pool,
     });
     defer loop.deinit();
-
-    const GPA = std.heap.GeneralPurposeAllocator(.{});
-    var gpa: GPA = .{};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
 
     var server_loop = try xev.Loop.init(.{
         .entries = std.math.pow(u13, 2, 12),
@@ -50,12 +49,13 @@ pub fn main() !void {
     defer client.deinit();
     try client.start();
 
-    const start_time = try Instant.now();
+    const clock = std.Io.Clock.awake;
+    const start_time = clock.now(io);
     try client_loop.run(.until_done);
     server_thr.join();
-    const end_time = try Instant.now();
+    const end_time = clock.now(io);
 
-    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
+    const elapsed: f64 = @floatFromInt(start_time.durationTo(end_time).nanoseconds);
     std.log.info("{d:.2} roundtrips/s", .{@as(f64, @floatFromInt(client.pongs)) / (elapsed / 1e9)});
     std.log.info("{d:.2} seconds total", .{elapsed / 1e9});
 }
@@ -68,9 +68,10 @@ const TCPPool = std.heap.MemoryPool(xev.TCP);
 /// The client state
 const Client = struct {
     loop: *xev.Loop,
-    completion_pool: CompletionPool,
-    read_buf: [1024]u8,
-    pongs: u64,
+    alloc: Allocator,
+    completion_pool: CompletionPool = .empty,
+    read_buf: [1024]u8 = undefined,
+    pongs: u64 = 0,
     state: usize = 0,
     stop: bool = false,
 
@@ -79,24 +80,20 @@ const Client = struct {
     pub fn init(alloc: Allocator, loop: *xev.Loop) !Client {
         return .{
             .loop = loop,
-            .completion_pool = CompletionPool.init(alloc),
-            .read_buf = undefined,
-            .pongs = 0,
-            .state = 0,
-            .stop = false,
+            .alloc = alloc,
         };
     }
 
     pub fn deinit(self: *Client) void {
-        self.completion_pool.deinit();
+        self.completion_pool.deinit(self.alloc);
     }
 
     /// Must be called with stable self pointer.
     pub fn start(self: *Client) !void {
-        const addr = try std.net.Address.parseIp4("127.0.0.1", 3131);
+        const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 3131);
         const socket = try xev.TCP.init(addr);
 
-        const c = try self.completion_pool.create();
+        const c = try self.completion_pool.create(self.alloc);
         socket.connect(self.loop, c, addr, Client, self, connectCallback);
     }
 
@@ -115,7 +112,7 @@ const Client = struct {
         socket.write(l, c, .{ .slice = PING[0..PING.len] }, Client, self, writeCallback);
 
         // Read
-        const c_read = self.completion_pool.create() catch unreachable;
+        const c_read = self.completion_pool.create(self.alloc) catch unreachable;
         socket.read(l, c_read, .{ .slice = &self.read_buf }, Client, self, readCallback);
         return .disarm;
     }
@@ -165,7 +162,7 @@ const Client = struct {
                 }
 
                 // Send another ping
-                const c_ping = self.completion_pool.create() catch unreachable;
+                const c_ping = self.completion_pool.create(self.alloc) catch unreachable;
                 socket.write(l, c_ping, .{ .slice = PING[0..PING.len] }, Client, self, writeCallback);
             }
         }
@@ -209,35 +206,33 @@ const Client = struct {
 /// The server state
 const Server = struct {
     loop: *xev.Loop,
-    buffer_pool: BufferPool,
-    completion_pool: CompletionPool,
-    socket_pool: TCPPool,
-    stop: bool,
+    alloc: Allocator,
+    buffer_pool: BufferPool = .empty,
+    completion_pool: CompletionPool = .empty,
+    socket_pool: TCPPool = .empty,
+    stop: bool = false,
 
     pub fn init(alloc: Allocator, loop: *xev.Loop) !Server {
         return .{
             .loop = loop,
-            .buffer_pool = BufferPool.init(alloc),
-            .completion_pool = CompletionPool.init(alloc),
-            .socket_pool = TCPPool.init(alloc),
-            .stop = false,
+            .alloc = alloc,
         };
     }
 
     pub fn deinit(self: *Server) void {
-        self.buffer_pool.deinit();
-        self.completion_pool.deinit();
-        self.socket_pool.deinit();
+        self.buffer_pool.deinit(self.alloc);
+        self.completion_pool.deinit(self.alloc);
+        self.socket_pool.deinit(self.alloc);
     }
 
     /// Must be called with stable self pointer.
     pub fn start(self: *Server) !void {
-        const addr = try std.net.Address.parseIp4("127.0.0.1", 3131);
+        const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 3131);
         var socket = try xev.TCP.init(addr);
 
-        const c = try self.completion_pool.create();
+        const c = try self.completion_pool.create(self.alloc);
         try socket.bind(addr);
-        try socket.listen(std.os.linux.SOMAXCONN);
+        try socket.listen(128);
         socket.accept(self.loop, c, Server, self, acceptCallback);
     }
 
@@ -262,11 +257,11 @@ const Server = struct {
         const self = self_.?;
 
         // Create our socket
-        const socket = self.socket_pool.create() catch unreachable;
+        const socket = self.socket_pool.create(self.alloc) catch unreachable;
         socket.* = r catch unreachable;
 
         // Start reading -- we can reuse c here because its done.
-        const buf = self.buffer_pool.create() catch unreachable;
+        const buf = self.buffer_pool.create(self.alloc) catch unreachable;
         socket.read(l, c, .{ .slice = buf }, Server, self, readCallback);
         return .disarm;
     }
@@ -296,8 +291,8 @@ const Server = struct {
         };
 
         // Echo it back
-        const c_echo = self.completion_pool.create() catch unreachable;
-        const buf_write = self.buffer_pool.create() catch unreachable;
+        const c_echo = self.completion_pool.create(self.alloc) catch unreachable;
+        const buf_write = self.buffer_pool.create(self.alloc) catch unreachable;
         @memcpy(buf_write, buf.slice[0..n]);
         socket.write(loop, c_echo, .{ .slice = buf_write[0..n] }, Server, self, writeCallback);
 

@@ -39,6 +39,12 @@ const ThreadPool = @This();
 const std = @import("std");
 const assert = std.debug.assert;
 const Atomic = std.atomic.Value;
+const Io = std.Io;
+
+// I know we shouldn't use a global io here, but we are doing this
+// during the transition period so libxev is at least usable with Zig
+// 0.16 until we do a cleaner transition.
+const io = Io.Threaded.global_single_threaded.io();
 
 stack_size: u32,
 max_threads: u32,
@@ -487,7 +493,7 @@ const Event = struct {
             // Acquiring to WAITING will make the next notify() or shutdown() wake a sleeping futex thread
             // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all threads are awoken.
             // This unfortunately results in the last notify() or shutdown() doing an extra futex wake but that's fine.
-            std.Thread.Futex.wait(&self.state, WAITING);
+            io.futexWaitUncancelable(u32, &self.state.raw, WAITING);
             state = self.state.load(.monotonic);
             acquire_with = WAITING;
         }
@@ -513,7 +519,7 @@ const Event = struct {
         // Only wake threads sleeping in futex if the state is WAITING.
         // Avoids unnecessary wake ups.
         if (state == WAITING) {
-            std.Thread.Futex.wake(&self.state, wake_threads);
+            io.futexWake(u32, &self.state.raw, wake_threads);
         }
     }
 };

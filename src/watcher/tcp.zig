@@ -5,6 +5,9 @@ const posix = std.posix;
 const stream = @import("stream.zig");
 const common = @import("common.zig");
 const ThreadPool = @import("../ThreadPool.zig");
+const net = @import("../posix.zig").net;
+const xev_posix = @import("../posix.zig");
+const windows = @import("../windows.zig");
 
 /// TCP client and server.
 ///
@@ -42,11 +45,12 @@ fn TCPStream(comptime xev: type) type {
         /// Initialize a new TCP with the family from the given address. Only
         /// the family is used, the actual address has no impact on the created
         /// resource.
-        pub fn init(addr: std.net.Address) !Self {
+        pub fn init(addr: std.Io.net.IpAddress) !Self {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
+            const posix_addr = net.Address.fromIpAddress(addr);
             const fd = if (xev.backend == .iocp)
-                try std.os.windows.WSASocketW(addr.any.family, posix.SOCK.STREAM, 0, null, 0, std.os.windows.ws2_32.WSA_FLAG_OVERLAPPED)
+                try windows.WSASocketW(posix_addr.any.family, windows.ws2_32.SOCK.STREAM, 0, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED)
             else fd: {
                 // On io_uring we don't use non-blocking sockets because we may
                 // just get EAGAIN over and over from completions.
@@ -55,7 +59,7 @@ fn TCPStream(comptime xev: type) type {
                     if (xev.backend != .io_uring) flags |= posix.SOCK.NONBLOCK;
                     break :flags flags;
                 };
-                break :fd try posix.socket(addr.any.family, flags, 0);
+                break :fd try xev_posix.socket(posix_addr.any.family, flags, 0);
             };
 
             return .{
@@ -71,13 +75,19 @@ fn TCPStream(comptime xev: type) type {
         }
 
         /// Bind the address to the socket.
-        pub fn bind(self: Self, addr: std.net.Address) !void {
+        pub fn bind(self: Self, addr: std.Io.net.IpAddress) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            const fd = if (xev.backend == .iocp) @as(std.os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
-
-            try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-            try posix.bind(fd, &addr.any, addr.getOsSockLen());
+            const posix_addr = net.Address.fromIpAddress(addr);
+            if (xev.backend == .iocp) {
+                const sock = @as(windows.ws2_32.SOCKET, @ptrCast(self.fd));
+                if (windows.ws2_32.setsockopt(sock, windows.ws2_32.SOL.SOCKET, windows.ws2_32.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)), @sizeOf(c_int)) != 0) return error.Unexpected;
+                if (windows.ws2_32.bind(sock, &posix_addr.any, @as(i32, @intCast(posix_addr.getOsSockLen()))) != 0) return error.Unexpected;
+            } else {
+                const fd = self.fd;
+                try posix.setsockopt(fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+                try xev_posix.bind(fd, &posix_addr.any, posix_addr.getOsSockLen());
+            }
         }
 
         /// Listen for connections on the socket. This puts the socket into passive
@@ -85,9 +95,12 @@ fn TCPStream(comptime xev: type) type {
         pub fn listen(self: Self, backlog: u31) !void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
-            const fd = if (xev.backend == .iocp) @as(std.os.windows.ws2_32.SOCKET, @ptrCast(self.fd)) else self.fd;
-
-            try posix.listen(fd, backlog);
+            if (xev.backend == .iocp) {
+                const sock = @as(windows.ws2_32.SOCKET, @ptrCast(self.fd));
+                if (windows.ws2_32.listen(sock, @as(i32, backlog)) != 0) return error.Unexpected;
+            } else {
+                try xev_posix.listen(self.fd, backlog);
+            }
         }
 
         /// Accept a single connection.
@@ -148,7 +161,7 @@ fn TCPStream(comptime xev: type) type {
             self: Self,
             loop: *xev.Loop,
             c: *xev.Completion,
-            addr: std.net.Address,
+            addr: std.Io.net.IpAddress,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
@@ -161,11 +174,12 @@ fn TCPStream(comptime xev: type) type {
         ) void {
             if (xev.backend == .wasi_poll) @compileError("unsupported in WASI");
 
+            const posix_addr = net.Address.fromIpAddress(addr);
             c.* = .{
                 .op = .{
                     .connect = .{
                         .socket = self.fd,
-                        .addr = addr,
+                        .addr = posix_addr,
                     },
                 },
 
@@ -269,7 +283,7 @@ fn TCPDynamic(comptime xev: type) type {
         pub const write = S.write;
         pub const queueWrite = S.queueWrite;
 
-        pub fn init(addr: std.net.Address) !Self {
+        pub fn init(addr: std.Io.net.IpAddress) !Self {
             return .{ .backend = switch (xev.backend) {
                 inline else => |tag| backend: {
                     const api = (comptime xev.superset(tag)).Api();
@@ -295,7 +309,7 @@ fn TCPDynamic(comptime xev: type) type {
             } };
         }
 
-        pub fn bind(self: Self, addr: std.net.Address) !void {
+        pub fn bind(self: Self, addr: std.Io.net.IpAddress) !void {
             switch (xev.backend) {
                 inline else => |tag| try @field(
                     self.backend,
@@ -383,7 +397,7 @@ fn TCPDynamic(comptime xev: type) type {
             self: Self,
             loop: *xev.Loop,
             c: *xev.Completion,
-            addr: std.net.Address,
+            addr: std.Io.net.IpAddress,
             comptime Userdata: type,
             userdata: ?*Userdata,
             comptime cb: *const fn (
@@ -529,7 +543,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             defer loop.deinit();
 
             // Choose random available port (Zig #14907)
-            var address = try std.net.Address.parseIp4("127.0.0.1", 0);
+            var address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
             const server = try Impl.init(address);
 
             // Bind and listen
@@ -537,19 +551,19 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             try server.listen(1);
 
             // Retrieve bound port and initialize client
-            var sock_len = address.getOsSockLen();
-            const fd = if (xev.dynamic)
-                server.fd()
-            else if (xev.backend == .iocp)
-                @as(std.os.windows.ws2_32.SOCKET, @ptrCast(server.fd))
-            else
-                server.fd;
-            try posix.getsockname(fd, &address.any, &sock_len);
+            var internal_addr = net.Address.fromIpAddress(address);
+            var sock_len = internal_addr.getOsSockLen();
+            if (@hasField(@TypeOf(xev.backend), "iocp") and xev.backend == .iocp) {
+                const sock = @as(windows.ws2_32.SOCKET, @ptrCast(if (xev.dynamic) server.fd() else server.fd));
+                var sl: i32 = @intCast(sock_len);
+                std.debug.assert(windows.ws2_32.getsockname(sock, &internal_addr.any, &sl) == 0);
+                sock_len = @intCast(sl);
+            } else {
+                const fd = if (xev.dynamic) server.fd() else server.fd;
+                try xev_posix.getsockname(fd, &internal_addr.any, &sock_len);
+            }
+            address = internal_addr.toIpAddress();
             const client = try Impl.init(address);
-
-            //const address = try std.net.Address.parseIp4("127.0.0.1", 3132);
-            //var server = try Impl.init(address);
-            //var client = try Impl.init(address);
 
             // Completions we need
             var c_accept: xev.Completion = undefined;
@@ -710,7 +724,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             defer loop.deinit();
 
             // Choose random available port (Zig #14907)
-            var address = try std.net.Address.parseIp4("127.0.0.1", 0);
+            var address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
             const server = try Impl.init(address);
 
             // Bind and listen
@@ -718,11 +732,13 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             try server.listen(1);
 
             // Retrieve bound port and initialize client
-            var sock_len = address.getOsSockLen();
-            try posix.getsockname(if (xev.dynamic)
+            var internal_addr = net.Address.fromIpAddress(address);
+            var sock_len = internal_addr.getOsSockLen();
+            try xev_posix.getsockname(if (xev.dynamic)
                 server.fd()
             else
-                server.fd, &address.any, &sock_len);
+                server.fd, &internal_addr.any, &sock_len);
+            address = internal_addr.toIpAddress();
             const client = try Impl.init(address);
 
             // Completions we need

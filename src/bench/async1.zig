@@ -1,7 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
-const Instant = std.time.Instant;
 const xev = @import("xev");
 //const xev = @import("xev").Dynamic;
 
@@ -12,11 +11,11 @@ pub const std_options: std.Options = .{
 // Tune-ables
 pub const NUM_PINGS = 1000 * 1000;
 
-pub fn main() !void {
-    try run(1);
+pub fn main(init: std.process.Init) !void {
+    try run(1, init.io);
 }
 
-pub fn run(comptime thread_count: comptime_int) !void {
+pub fn run(comptime thread_count: comptime_int, io: std.Io) !void {
     if (comptime xev.dynamic) try xev.detect();
     var loop = try xev.Loop.init(.{});
     defer loop.deinit();
@@ -31,12 +30,12 @@ pub fn run(comptime thread_count: comptime_int) !void {
         threads[i] = try std.Thread.spawn(.{}, Thread.threadMain, .{ctx});
     }
 
-    const start_time = try Instant.now();
+    const start_time = std.Io.Clock.awake.now(io);
     try loop.run(.until_done);
     for (&threads) |thr| thr.join();
-    const end_time = try Instant.now();
+    const end_time = std.Io.Clock.awake.now(io);
 
-    const elapsed = @as(f64, @floatFromInt(end_time.since(start_time)));
+    const elapsed: f64 = @floatFromInt(start_time.durationTo(end_time).nanoseconds);
     std.log.info("async{d}: {d:.2} seconds ({d:.2}/sec)", .{
         thread_count,
         elapsed / 1e9,

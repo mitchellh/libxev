@@ -98,6 +98,25 @@ major event loops. This may differ on a feature-by-feature basis, and
 if you can show really poor performance in an issue I'm interested
 in resolving it!
 
+### Integration with Zig 0.16+ std.Io
+
+Libxev doesn't implement the `std.Io` interface and doesn't take
+a `std.Io` for any of its operations. It calls IO directly using system
+calls and in the few rare cases it must use a `std.Io` (such as for mutex
+operations), libxev uses the global `std.Io.Threaded` implementation.
+
+The reason for this is because libxev is a very old library that
+predates `std.Io`, so it bakes in a lot of assumptions that don't really
+fit into the new `std.Io` model. To support this, we'll have to break
+our API significantly.
+
+Additionally, the `std.Io` interface is still very new and unstable and
+doesn't expose all the operations necessary to bring parity with libxev.
+
+We will investigate better, more idiomatic integrations with `std.Io`
+in the future. For now, libxev continues to work Zig 0.16 but mostly as
+it did in prior Zig versions and doesn't integrate with `std.Io`.
+
 ## Example
 
 The example below shows an identical program written in Zig and in C
@@ -272,7 +291,7 @@ directory.
 
 # Build
 
-Build requires the installation of the Zig 0.15.1. libxev follows stable
+Build requires the installation of the Zig 0.16. libxev follows stable
 Zig releases and generally does not support nightly builds. When a stable
 release is imminent we may have a branch that supports it.
 **libxev has no other build dependencies.**
