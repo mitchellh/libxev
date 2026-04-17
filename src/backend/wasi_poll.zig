@@ -10,6 +10,11 @@ const xev_posix = @import("../posix.zig");
 const queue = @import("../queue.zig");
 const heap = @import("../heap.zig");
 const xev = @import("../main.zig").WasiPoll;
+const looppkg = @import("../loop.zig");
+const Callback = looppkg.Callback(@This());
+const CallbackAction = looppkg.CallbackAction;
+const CompletionState = looppkg.CompletionState;
+const noopCallback = looppkg.NoopCallback(@This());
 
 /// True if this backend is available on this platform.
 pub fn available() bool {
@@ -256,10 +261,10 @@ pub const Loop = struct {
             self.batch.array[0] = .{
                 .userdata = 0,
                 .u = .{
-                    .tag = wasi.EVENTTYPE_CLOCK,
+                    .tag = wasi.eventtype_t.CLOCK,
                     .u = .{
                         .clock = .{
-                            .id = @as(u32, @bitCast(posix.CLOCK.MONOTONIC)),
+                            .id = .MONOTONIC,
                             .timeout = timeout,
                             .precision = 1 * std.time.ns_per_ms,
                             .flags = wasi.SUBSCRIPTION_CLOCK_ABSTIME,
@@ -378,9 +383,9 @@ pub const Loop = struct {
 
             .shutdown => |v| res: {
                 const how: wasi.sdflags_t = switch (v.how) {
-                    .both => wasi.SHUT.WR | wasi.SHUT.RD,
-                    .recv => wasi.SHUT.RD,
-                    .send => wasi.SHUT.WR,
+                    .both => .{ .WR = true, .RD = true },
+                    .recv => .{ .RD = true },
+                    .send => .{ .WR = true },
                 };
 
                 break :res .{
@@ -584,7 +589,7 @@ pub const Loop = struct {
     fn timer_next(next_ms: u64) wasi.timestamp_t {
         // Get the absolute time we'll execute this timer next.
         var now_ts: wasi.timestamp_t = undefined;
-        switch (wasi.clock_time_get(@as(u32, @bitCast(posix.CLOCK.MONOTONIC)), 1, &now_ts)) {
+        switch (wasi.clock_time_get(.MONOTONIC, 1, &now_ts)) {
             .SUCCESS => {},
             .INVAL => unreachable,
             else => unreachable,
@@ -597,7 +602,7 @@ pub const Loop = struct {
 
     fn get_now() !wasi.timestamp_t {
         var ts: wasi.timestamp_t = undefined;
-        return switch (wasi.clock_time_get(posix.CLOCK.MONOTONIC, 1, &ts)) {
+        return switch (wasi.clock_time_get(.MONOTONIC, 1, &ts)) {
             .SUCCESS => ts,
             .INVAL => error.UnsupportedClock,
             else => |err| posix.unexpectedErrno(err),
@@ -612,7 +617,7 @@ pub const Completion = struct {
 
     /// Userdata and callback for when the completion is finished.
     userdata: ?*anyopaque = null,
-    callback: xev.Callback = xev.noopCallback,
+    callback: Callback = noopCallback,
 
     //---------------------------------------------------------------
     // Internal fields
@@ -669,7 +674,7 @@ pub const Completion = struct {
             .read => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.fd,
@@ -681,7 +686,7 @@ pub const Completion = struct {
             .pread => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.fd,
@@ -693,7 +698,7 @@ pub const Completion = struct {
             .write => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .tag = wasi.eventtype_t.FD_WRITE,
                     .u = .{
                         .fd_write = .{
                             .fd = v.fd,
@@ -705,7 +710,7 @@ pub const Completion = struct {
             .pwrite => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .tag = wasi.eventtype_t.FD_WRITE,
                     .u = .{
                         .fd_write = .{
                             .fd = v.fd,
@@ -717,7 +722,7 @@ pub const Completion = struct {
             .accept => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.socket,
@@ -729,7 +734,7 @@ pub const Completion = struct {
             .recv => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_READ,
+                    .tag = wasi.eventtype_t.FD_READ,
                     .u = .{
                         .fd_read = .{
                             .fd = v.fd,
@@ -741,7 +746,7 @@ pub const Completion = struct {
             .send => |v| .{
                 .userdata = @intFromPtr(self),
                 .u = .{
-                    .tag = wasi.EVENTTYPE_FD_WRITE,
+                    .tag = wasi.eventtype_t.FD_WRITE,
                     .u = .{
                         .fd_write = .{
                             .fd = v.fd,
@@ -777,7 +782,7 @@ pub const Completion = struct {
             .accept => |*op| res: {
                 var out_fd: posix.fd_t = undefined;
                 break :res .{
-                    .accept = switch (wasi.sock_accept(op.socket, 0, &out_fd)) {
+                    .accept = switch (wasi.sock_accept(op.socket, .{}, &out_fd)) {
                         .SUCCESS => out_fd,
                         else => |err| posix.unexpectedErrno(err),
                     },
@@ -1522,31 +1527,15 @@ test "wasi: file" {
     var loop = try Loop.init(.{});
     defer loop.deinit();
 
+    var tmpdir = testing.tmpDir(.{});
+    defer tmpdir.cleanup();
+
     // Create a file
-    const path = "zig-cache/wasi-test-file.txt";
-    const dir = std.fs.cwd();
-    // We can't use dir.createFile yet: https://github.com/ziglang/zig/issues/14324
-    const f = f: {
-        const w = wasi;
-        const oflags = w.O.CREAT | w.O.TRUNC;
-        const base: w.rights_t = w.RIGHT.FD_WRITE |
-            w.RIGHT.FD_READ |
-            w.RIGHT.FD_DATASYNC |
-            w.RIGHT.FD_SEEK |
-            w.RIGHT.FD_TELL |
-            w.RIGHT.FD_FDSTAT_SET_FLAGS |
-            w.RIGHT.FD_SYNC |
-            w.RIGHT.FD_ALLOCATE |
-            w.RIGHT.FD_ADVISE |
-            w.RIGHT.FD_FILESTAT_SET_TIMES |
-            w.RIGHT.FD_FILESTAT_SET_SIZE |
-            w.RIGHT.FD_FILESTAT_GET |
-            w.RIGHT.POLL_FD_READWRITE;
-        const fdflags: w.fdflags_t = w.FDFLAG.SYNC | w.FDFLAG.RSYNC | w.FDFLAG.DSYNC;
-        const fd = try posix.openatWasi(dir.fd, path, 0x0, oflags, 0x0, base, fdflags);
-        break :f std.fs.File{ .handle = fd };
-    };
-    defer dir.deleteFile(path) catch unreachable;
+    const path = "wasi-test-file.txt";
+    const f = try tmpdir.dir.createFile(path, .{
+        .truncate = true,
+        .read = true,
+    });
     defer f.close();
 
     // Start a reader
@@ -1645,7 +1634,7 @@ test "wasi: file" {
     try loop.run(.until_done);
 
     // Read and verify we've written
-    const f_verify = try dir.openFile(path, .{});
+    const f_verify = try tmpdir.dir.openFile(path, .{});
     defer f_verify.close();
     read_len = try f_verify.readAll(&read_buf);
     try testing.expectEqualStrings(write_buf, read_buf[0..read_len.?]);
