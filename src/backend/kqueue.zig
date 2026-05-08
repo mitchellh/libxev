@@ -204,6 +204,7 @@ pub const Loop = struct {
                         const ecanceled = errno_to_result(.CANCELED);
                         c.result = c.syscall_result(ecanceled);
                         c.flags.state = .dead;
+                        c.next = null;
                         self.completions.push(c);
 
                         events[events_len] = ev;
@@ -264,6 +265,7 @@ pub const Loop = struct {
                 }
 
                 assert(c.result != null);
+                c.next = null;
                 self.completions.push(c);
             }
         }
@@ -457,7 +459,10 @@ pub const Loop = struct {
                     },
 
                     // Only resubmit if we aren't already active (in the queue)
-                    .rearm => if (!c_active) self.submissions.push(c),
+                    .rearm => if (!c_active) {
+                        c.next = null;
+                        self.submissions.push(c);
+                    },
                 }
 
                 // If we filled the events slice, we break to avoid overflow.
