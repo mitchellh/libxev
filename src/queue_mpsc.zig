@@ -39,37 +39,37 @@ pub fn Intrusive(comptime T: type) type {
         /// of producers.
         pub fn push(self: *Self, v: *T) void {
             @atomicStore(?*T, &v.next, null, .unordered);
-            const prev = @atomicRmw(*T, &self.head, .Xchg, v, .acq_rel);
+            const prev = @atomicRmw(*T, &self.tail, .Xchg, v, .acq_rel);
             @atomicStore(?*T, &prev.next, v, .release);
         }
 
         /// Pop the first in element from the queue. This must be called
         /// by only a single consumer at any given time.
         pub fn pop(self: *Self) ?*T {
-            var tail = @atomicLoad(*T, &self.tail, .unordered);
-            var next_ = @atomicLoad(?*T, &tail.next, .acquire);
-            if (tail == &self.stub) {
+            var head = @atomicLoad(*T, &self.head, .unordered);
+            var next_ = @atomicLoad(?*T, &head.next, .acquire);
+            if (head == &self.stub) {
                 const next = next_ orelse return null;
-                @atomicStore(*T, &self.tail, next, .unordered);
-                tail = next;
-                next_ = @atomicLoad(?*T, &tail.next, .acquire);
+                @atomicStore(*T, &self.head, next, .unordered);
+                head = next;
+                next_ = @atomicLoad(?*T, &head.next, .acquire);
             }
 
             if (next_) |next| {
-                @atomicStore(*T, &self.tail, next, .release);
-                tail.next = null;
-                return tail;
+                @atomicStore(*T, &self.head, next, .release);
+                head.next = null;
+                return head;
             }
 
-            const head = @atomicLoad(*T, &self.head, .unordered);
-            if (tail != head) return null;
+            const tail = @atomicLoad(*T, &self.tail, .unordered);
+            if (head != tail) return null;
             self.push(&self.stub);
 
-            next_ = @atomicLoad(?*T, &tail.next, .acquire);
+            next_ = @atomicLoad(?*T, &head.next, .acquire);
             if (next_) |next| {
-                @atomicStore(*T, &self.tail, next, .unordered);
-                tail.next = null;
-                return tail;
+                @atomicStore(*T, &self.head, next, .unordered);
+                head.next = null;
+                return head;
             }
 
             return null;
