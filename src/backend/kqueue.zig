@@ -264,6 +264,7 @@ pub const Loop = struct {
                 }
 
                 assert(c.result != null);
+                c.next = null;
                 self.completions.push(c);
             }
         }
@@ -457,7 +458,10 @@ pub const Loop = struct {
                     },
 
                     // Only resubmit if we aren't already active (in the queue)
-                    .rearm => if (!c_active) self.submissions.push(c),
+                    .rearm => if (!c_active) {
+                        c.flags.state = .adding;
+                        self.submissions.push(c);
+                    },
                 }
 
                 // If we filled the events slice, we break to avoid overflow.
@@ -563,7 +567,7 @@ pub const Loop = struct {
             }
 
             // If we ran through the loop once we break if we don't care.
-            if (wait == 0) break;
+            if (wait == 0 and changes == 0) break;
         }
     }
 
@@ -3406,5 +3410,89 @@ test "kqueue: tick(0) flushes disarm from kevent event processing path" {
     try loop.run(.once);
     try testing.expectEqual(@as(usize, 2), state.fire_count);
     try testing.expect(timer_fired);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: re-add armed completion from callback does not corrupt queue" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const p1 = try makePipe();
+    const p2 = try makePipe();
+    defer { xev_posix.close(p1[0]); xev_posix.close(p1[1]); }
+    defer { xev_posix.close(p2[0]); xev_posix.close(p2[1]); }
+
+    const State = struct {
+        fire_count: usize = 0,
+        c2: *Completion,
+        buf: [16]u8 = undefined,
+    };
+
+    // Placeholder for c2, filled in after we have the pointer.
+    var c2: Completion = undefined;
+    var state = State{ .c2 = &c2 };
+
+    // c1 callback: re-add c2 to submissions (simulates #169 scenario), disarm.
+    const c1_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = c;
+            _ = r.read catch unreachable;
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            l.add(s.c2);
+            return .disarm;
+        }
+    }).callback;
+
+    // c2 callback: disarm and count.
+    const c2_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            return .disarm;
+        }
+    }).callback;
+
+    // Arm c2 first (in kqueue), then arm c1.
+    c2 = .{
+        .op = .{ .read = .{ .fd = p2[0], .buffer = .{ .slice = &state.buf } } },
+        .userdata = &state,
+        .callback = c2_cb,
+    };
+    loop.add(&c2);
+
+    var c1: Completion = .{
+        .op = .{ .read = .{ .fd = p1[0], .buffer = .{ .slice = &state.buf } } },
+        .userdata = &state,
+        .callback = c1_cb,
+    };
+    loop.add(&c1);
+
+    // Write to p1: c1 fires, re-adds c2, then disarms.
+    // Write to p2: c2 fires (from the re-add OR from its original kqueue
+    // registration). The defensive c.next=null in submit prevents the
+    // queue.zig:24 assert from firing when the kevent returns c2's event.
+    _ = try xev_posix.write(p1[1], &[_]u8{1});
+    _ = try xev_posix.write(p2[1], &[_]u8{2});
+
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 2), state.fire_count);
     try testing.expectEqual(@as(usize, 0), loop.active);
 }
