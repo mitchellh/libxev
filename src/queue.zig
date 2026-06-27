@@ -99,3 +99,95 @@ test Intrusive {
     try testing.expect(q.pop().? == &elems[1]);
     try testing.expect(q.pop() == null);
 }
+
+test "Intrusive: re-enqueue across queues clears next" {
+    const testing = std.testing;
+
+    const Elem = struct {
+        const Self = @This();
+        next: ?*Self = null,
+    };
+    const Queue = Intrusive(Elem);
+
+    var qA: Queue = .{};
+    var qB: Queue = .{};
+
+    var elems: [5]Elem = .{Elem{}} ** 5;
+
+    // Enqueue all into A.
+    for (&elems) |*e| qA.push(e);
+    try testing.expect(!qA.empty());
+    try testing.expect(qB.empty());
+
+    // Dequeue one from A, enqueue into B.
+    const moved = qA.pop().?;
+    qB.push(moved);
+
+    // B: exactly one node, tail.next is null.
+    try testing.expect(!qB.empty());
+    try testing.expectEqual(&elems[0], qB.head.?);
+    try testing.expectEqual(&elems[0], qB.tail.?);
+    try testing.expect(qB.head.?.next == null);
+
+    // A: remaining 4 nodes, last.next is null.
+    try testing.expect(!qA.empty());
+    var count: usize = 0;
+    var cur = qA.head;
+    while (cur) |node| : (cur = node.next) {
+        count += 1;
+        // Verify no cross-queue contamination: no node in A points into B.
+        try testing.expect(node != qB.head);
+    }
+    try testing.expectEqual(@as(usize, 4), count);
+    try testing.expect(qA.tail.?.next == null);
+}
+
+test "Intrusive: drain and refill" {
+    const testing = std.testing;
+
+    const Elem = struct {
+        const Self = @This();
+        next: ?*Self = null,
+    };
+    const Queue = Intrusive(Elem);
+
+    var qA: Queue = .{};
+    var qB: Queue = .{};
+
+    var elems: [5]Elem = .{Elem{}} ** 5;
+
+    // Enqueue all into A.
+    for (&elems) |*e| qA.push(e);
+
+    // Move all from A to B.
+    while (qA.pop()) |e| qB.push(e);
+    try testing.expect(qA.empty());
+
+    // Verify B has all 5, no loops.
+    var count: usize = 0;
+    var cur = qB.head;
+    while (cur) |node| : (cur = node.next) count += 1;
+    try testing.expectEqual(@as(usize, 5), count);
+    try testing.expect(qB.tail.?.next == null);
+}
+
+test "Intrusive: rapid enqueue-dequeue cycles" {
+    const testing = std.testing;
+
+    const Elem = struct {
+        const Self = @This();
+        next: ?*Self = null,
+    };
+    const Queue = Intrusive(Elem);
+
+    var q: Queue = .{};
+    var elems: [10]Elem = .{Elem{}} ** 10;
+
+    for (0..100) |_| {
+        for (&elems) |*e| q.push(e);
+        var count: usize = 0;
+        while (q.pop()) |_| count += 1;
+        try testing.expectEqual(@as(usize, 10), count);
+        try testing.expect(q.empty());
+    }
+}
