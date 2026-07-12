@@ -66,10 +66,7 @@ pub const Loop = struct {
             return error.TooManyEntries;
 
         var result: Loop = .{
-            // TODO(mitchellh): add an init_advanced function or something
-            // for people using the io_uring API directly to be able to set
-            // the flags for this.
-            .ring = try linux.IoUring.init(entries, 0),
+            .ring = try linux.IoUring.init(entries, options.io_uring_flags),
         };
         result.update_now();
 
