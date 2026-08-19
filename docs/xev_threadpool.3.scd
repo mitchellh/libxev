@@ -156,7 +156,7 @@ aligned.
 
 xev(7), xev-c(7)
 
-<https://zig.news/kprotty/resource-efficient-thread-pools-with-zig-3291>
+<https://kprotty.me/2021/09/12/resource-efficient-thread-pools-with-zig.html>
 
 <https://github.com/mitchellh/libxev>
 
