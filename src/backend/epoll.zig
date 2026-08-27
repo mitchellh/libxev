@@ -572,12 +572,11 @@ pub const Loop = struct {
                     break :res .{ .cancel = error.ThreadPoolUnsupported };
                 }
 
-                // We stop immediately. We only stop if we are in the
-                // "adding" state because cancellation or any other action
-                // means we're complete already.
-                if (completion.flags.state == .adding) {
-                    if (v.c.op == .cancel) @panic("cannot cancel a cancellation");
-                    self.stop_completion(v.c);
+                if (v.c.op == .cancel) @panic("cannot cancel a cancellation");
+                switch (v.c.flags.state) {
+                    .dead, .deleting => {},
+                    .adding => v.c.flags.state = .dead,
+                    .active => self.stop_completion(v.c),
                 }
 
                 // We always run timers
@@ -838,6 +837,7 @@ pub const Loop = struct {
         // immediately and mark the error.
         if (res_) |res| {
             completion.flags.state = .dead;
+            completion.close_dup();
 
             switch (completion.callback(
                 completion.userdata,
@@ -877,6 +877,7 @@ pub const Loop = struct {
                 fd,
                 null,
             ) catch unreachable;
+            completion.close_dup();
         } else switch (completion.op) {
             .timer => |*v| {
                 const c = v.c;
@@ -1129,6 +1130,12 @@ pub const Completion = struct {
 
         self.flags.dup_fd = xev_posix.dup(old_fd) catch return error.DupFailed;
         return self.flags.dup_fd;
+    }
+
+    fn close_dup(self: *Completion) void {
+        if (!self.flags.dup or self.flags.dup_fd <= 0) return;
+        xev_posix.close(self.flags.dup_fd);
+        self.flags.dup_fd = 0;
     }
 
     /// Returns the fd associated with the completion (if any).
@@ -2131,4 +2138,120 @@ test "epoll: canceling a completed operation" {
     try loop.run(.until_done);
     try testing.expect(called);
     try testing.expect(trigger.? == .expiration);
+}
+
+test "epoll: canceling a dead operation is a no-op" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    var target: Completion = .{};
+    var canceled = false;
+    var c_cancel: Completion = .{
+        .op = .{ .cancel = .{ .c = &target } },
+        .userdata = &canceled,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                _: *Loop,
+                _: *Completion,
+                r: Result,
+            ) CallbackAction {
+                _ = r.cancel catch unreachable;
+                @as(*bool, @ptrCast(ud.?)).* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_cancel);
+
+    try loop.run(.until_done);
+    try testing.expect(canceled);
+    try testing.expectEqual(CompletionState.dead, target.state());
+}
+
+test "epoll: cancel closes duplicated fd" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pipe = try xev_posix.pipe2(.{ .CLOEXEC = true, .NONBLOCK = true });
+    defer xev_posix.close(pipe[0]);
+    defer xev_posix.close(pipe[1]);
+
+    var read_buf: [1]u8 = undefined;
+    var target: Completion = .{
+        .op = .{ .read = .{
+            .fd = pipe[0],
+            .buffer = .{ .slice = &read_buf },
+        } },
+        .flags = .{ .dup = true },
+    };
+    loop.add(&target);
+    try loop.run(.no_wait);
+
+    const dup_fd = target.flags.dup_fd;
+    try testing.expect(dup_fd > 0);
+    try testing.expectEqual(
+        posix.E.SUCCESS,
+        posix.errno(posix.system.fcntl(dup_fd, posix.F.GETFD, @as(usize, 0))),
+    );
+
+    var c_cancel: Completion = .{ .op = .{ .cancel = .{ .c = &target } } };
+    loop.add(&c_cancel);
+    try loop.run(.until_done);
+
+    const err = posix.errno(posix.system.fcntl(dup_fd, posix.F.GETFD, @as(usize, 0)));
+    if (err == .SUCCESS) xev_posix.close(dup_fd);
+    try testing.expectEqual(posix.E.BADF, err);
+}
+
+test "epoll: registration failure closes duplicated fd" {
+    const testing = std.testing;
+    const io = testing.io;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const path = "test_epoll_dup_cleanup";
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{ .read = true });
+    defer file.close(io);
+    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+
+    var read_buf: [1]u8 = undefined;
+    var failed = false;
+    var target: Completion = .{
+        .op = .{ .read = .{
+            .fd = file.handle,
+            .buffer = .{ .slice = &read_buf },
+        } },
+        .userdata = &failed,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                _: *Loop,
+                _: *Completion,
+                r: Result,
+            ) CallbackAction {
+                _ = r.read catch |err| {
+                    @as(*bool, @ptrCast(ud.?)).* =
+                        err == error.FileDescriptorIncompatibleWithEpoll;
+                    return .disarm;
+                };
+                return .disarm;
+            }
+        }).callback,
+        .flags = .{ .dup = true },
+    };
+    const dup_fd = try target.fd_maybe_dup();
+    loop.add(&target);
+    try loop.run(.until_done);
+
+    try testing.expect(failed);
+    try testing.expectEqual(
+        posix.E.BADF,
+        posix.errno(posix.system.fcntl(dup_fd, posix.F.GETFD, @as(usize, 0))),
+    );
 }
