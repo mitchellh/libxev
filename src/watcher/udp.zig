@@ -924,6 +924,93 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
             }
         }
 
+        test "UDP: poll waits for a datagram without consuming it" {
+            if (builtin.os.tag == .freebsd) return error.SkipZigTest;
+            if (!@hasDecl(Impl, "poll")) return error.SkipZigTest;
+            const testing = std.testing;
+
+            var tpool = ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
+            defer loop.deinit();
+
+            const address = try std.Io.net.IpAddress.parse("127.0.0.1", 3134);
+            const server = try Impl.init(address);
+            const client = try Impl.init(address);
+            try server.bind(address);
+
+            var polled = false;
+            var c_poll: xev.Completion = undefined;
+            server.poll(&loop, &c_poll, .read, bool, &polled, (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    r: xev.PollError!xev.PollEvent,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback);
+
+            var send_buf = [_]u8{ 1, 2, 3 };
+            var c_write: xev.Completion = undefined;
+            var s_write: Impl.State = undefined;
+            client.write(&loop, &c_write, &s_write, address, .{ .slice = &send_buf }, void, null, (struct {
+                fn callback(
+                    _: ?*void,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: *Impl.State,
+                    _: Impl,
+                    _: xev.WriteBuffer,
+                    r: xev.WriteError!usize,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+
+            try loop.run(.until_done);
+            try testing.expect(polled);
+
+            // The datagram is still there to read.
+            var c_read: xev.Completion = undefined;
+            var s_read: Impl.State = undefined;
+            var recv_buf: [16]u8 = undefined;
+            var recv_len: usize = 0;
+            server.read(&loop, &c_read, &s_read, .{ .slice = &recv_buf }, usize, &recv_len, (struct {
+                fn callback(
+                    ud: ?*usize,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: *Impl.State,
+                    _: std.Io.net.IpAddress,
+                    _: Impl,
+                    _: xev.ReadBuffer,
+                    r: xev.ReadError!usize,
+                ) xev.CallbackAction {
+                    ud.?.* = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+            try loop.run(.until_done);
+            try testing.expectEqualSlices(u8, &send_buf, recv_buf[0..recv_len]);
+
+            const onClose = (struct {
+                fn callback(_: ?*void, _: *xev.Loop, _: *xev.Completion, _: Impl, r: xev.CloseError!void) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback;
+            server.close(&loop, &c_read, void, null, onClose);
+            client.close(&loop, &c_write, void, null, onClose);
+            try loop.run(.until_done);
+        }
+
         test "UDP: read/write" {
             if (builtin.os.tag == .freebsd) return error.SkipZigTest;
             const testing = std.testing;
