@@ -19,14 +19,7 @@ pub fn build(b: *std.Build) !void {
         bool,
         "emit-man-pages",
         "Set to true to build man pages. Requires scdoc. Defaults to true if scdoc is found.",
-    ) orelse if (b.findProgram(
-        &[_][]const u8{"scdoc"},
-        &[_][]const u8{},
-    )) |_|
-        true
-    else |err| switch (err) {
-        error.FileNotFound => false,
-    };
+    ) orelse (b.findProgram(.{ .names = &.{"scdoc"} }) != null);
 
     const emit_bench = b.option(
         bool,
@@ -86,25 +79,28 @@ pub fn build(b: *std.Build) !void {
     );
 
     // pkg-config
-    const pc: *Step.InstallFile = pc: {
-        const file = b.addWriteFile("libxev.pc", b.fmt(
-            \\prefix={s}
-            \\includedir=${{prefix}}/include
-            \\libdir=${{prefix}}/lib
-            \\
-            \\Name: libxev
-            \\URL: https://github.com/mitchellh/libxev
-            \\Description: High-performance, cross-platform event loop
-            \\Version: 0.1.0
-            \\Cflags: -I${{includedir}}
-            \\Libs: -L${{libdir}} -lxev
-        , .{b.install_prefix}));
-        break :pc b.addInstallFileWithDir(
-            file.getDirectory().path(b, "libxev.pc"),
-            .prefix,
-            "share/pkgconfig/libxev.pc",
-        );
-    };
+    // FIXME: It is impossible since Zig 0.17 to obtain the
+    // installation prefix at the configure phase, as that
+    // is the responsibility of the maker.
+    // const pc: *Step.InstallFile = pc: {
+    //     const file = b.addWriteFile("libxev.pc", b.fmt(
+    //         \\prefix={s}
+    //         \\includedir=${{prefix}}/include
+    //         \\libdir=${{prefix}}/lib
+    //         \\
+    //         \\Name: libxev
+    //         \\URL: https://github.com/mitchellh/libxev
+    //         \\Description: High-performance, cross-platform event loop
+    //         \\Version: 0.1.0
+    //         \\Cflags: -I${{includedir}}
+    //         \\Libs: -L${{libdir}} -lxev
+    //     , .{b.install_prefix}));
+    //     break :pc b.addInstallFileWithDir(
+    //         file.getDirectory().path(b, "libxev.pc"),
+    //         .prefix,
+    //         "share/pkgconfig/libxev.pc",
+    //     );
+    // };
 
     // Man pages
     const man = try manPages(b);
@@ -145,7 +141,7 @@ pub fn build(b: *std.Build) !void {
     if (static_lib) |v| b.installArtifact(v);
     if (dynamic_lib) |v| b.installArtifact(v);
     b.getInstallStep().dependOn(&c_header.step);
-    b.getInstallStep().dependOn(&pc.step);
+    // b.getInstallStep().dependOn(&pc.step);
     b.installArtifact(test_exe);
     if (emit_man) {
         for (man) |step| b.getInstallStep().dependOn(step);
@@ -177,14 +173,7 @@ fn buildBenchmarks(
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.Io.Dir.cwd().openDir(
-        io,
-        try b.build_root.join(
-            b.allocator,
-            &.{ "src", "bench" },
-        ),
-        .{ .iterate = true },
-    );
+    var dir = try b.root.openDir(io, "src/bench", .{ .iterate = true });
     defer dir.close(io);
 
     // Go through and add each as a step
@@ -233,14 +222,7 @@ fn buildExamples(
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.Io.Dir.cwd().openDir(
-        io,
-        try b.build_root.join(
-            b.allocator,
-            &.{"examples"},
-        ),
-        .{ .iterate = true },
-    );
+    var dir = try b.root.openDir(io, "examples", .{ .iterate = true });
     defer dir.close(io);
 
     // Go through and add each as a step
@@ -313,11 +295,7 @@ fn manPages(b: *std.Build) ![]const *Step {
     var steps: std.ArrayList(*Step) = .empty;
     defer steps.deinit(alloc);
 
-    var dir = try std.Io.Dir.cwd().openDir(
-        io,
-        try b.build_root.join(b.allocator, &.{"docs"}),
-        .{ .iterate = true },
-    );
+    var dir = try b.root.openDir(io, "docs", .{ .iterate = true });
     defer dir.close(io);
 
     var it = dir.iterate();
