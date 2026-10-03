@@ -291,7 +291,7 @@ directory.
 
 # Build
 
-Build requires the installation of the Zig 0.16. libxev follows stable
+Build requires the installation of the Zig 0.17. libxev follows stable
 Zig releases and generally does not support nightly builds. When a stable
 release is imminent we may have a branch that supports it.
 **libxev has no other build dependencies.**
