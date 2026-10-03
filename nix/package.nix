@@ -30,6 +30,13 @@ stdenv.mkDerivation rec {
 
   outputs = [ "out" "dev" "man" ];
 
+  # libxev.pc locates its prefix from where it sits, and the dev output keeps
+  # it apart from the libraries in $out.
+  postFixup = ''
+    substituteInPlace $dev/share/pkgconfig/libxev.pc \
+      --replace-fail 'prefix=''${pcfiledir}/../..' "prefix=$out"
+  '';
+
   meta = with lib; {
     description = "A high performance, cross-platform event loop.";
     homepage = "https://github.com/mitchellh/libxev";
