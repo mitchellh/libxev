@@ -1650,7 +1650,7 @@ test "io_uring: sendmsg/recvmsg" {
     defer xev_posix.close(client);
 
     // Send
-    const buffer_send = [_]u8{42} ** 128;
+    const buffer_send: [128]u8 = @splat(42);
     const iovecs_send = [_]posix.iovec_const{
         posix.iovec_const{ .base = &buffer_send, .len = buffer_send.len },
     };
@@ -1685,11 +1685,11 @@ test "io_uring: sendmsg/recvmsg" {
 
     // Recv
 
-    var buffer_recv = [_]u8{0} ** 128;
+    var buffer_recv: [128]u8 = @splat(0);
     var iovecs_recv = [_]posix.iovec{
         posix.iovec{ .base = &buffer_recv, .len = buffer_recv.len },
     };
-    const addr = [_]u8{0} ** 4;
+    const addr: [4]u8 = @splat(0);
     var address_recv = net.Address.initIp4(addr, 0);
     var msg_recv: linux.msghdr = linux.msghdr{
         .name = &address_recv.any,

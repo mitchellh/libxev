@@ -461,7 +461,7 @@ fn Union(
 
     var field_names: [bes.len + 1][:0]const u8 = undefined;
     var field_types: [bes.len + 1]type = undefined;
-    var field_attrs: [bes.len + 1]std.builtin.Type.UnionField.Attributes = @splat(.{});
+    var field_attrs: [bes.len + 1]std.builtin.Type.Union.FieldAttributes = @splat(.{});
     for (bes, 0..) |be, i| {
         var T: type = be.Api();
         for (field) |f| T = @field(T, f);
