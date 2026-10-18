@@ -79,28 +79,19 @@ pub fn build(b: *std.Build) !void {
     );
 
     // pkg-config
-    // FIXME: It is impossible since Zig 0.17 to obtain the
-    // installation prefix at the configure phase, as that
-    // is the responsibility of the maker.
-    // const pc: *Step.InstallFile = pc: {
-    //     const file = b.addWriteFile("libxev.pc", b.fmt(
-    //         \\prefix={s}
-    //         \\includedir=${{prefix}}/include
-    //         \\libdir=${{prefix}}/lib
-    //         \\
-    //         \\Name: libxev
-    //         \\URL: https://github.com/mitchellh/libxev
-    //         \\Description: High-performance, cross-platform event loop
-    //         \\Version: 0.1.0
-    //         \\Cflags: -I${{includedir}}
-    //         \\Libs: -L${{libdir}} -lxev
-    //     , .{b.install_prefix}));
-    //     break :pc b.addInstallFileWithDir(
-    //         file.getDirectory().path(b, "libxev.pc"),
-    //         .prefix,
-    //         "share/pkgconfig/libxev.pc",
-    //     );
-    // };
+    const pc: *Step.InstallFile = pc: {
+        const pc_writer_exe = b.addExecutable(.{
+            .name = "pc_writer",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("build/write_pkgconfig.zig"),
+                .target = b.graph.host,
+            }),
+        });
+        const pc_writer_run = b.addRunArtifact(pc_writer_exe);
+        pc_writer_run.addDirectoryArg(.{ .relative = .{ .base = .deployed_prefix } });
+        const file = pc_writer_run.captureStdOut(.{});
+        break :pc b.addInstallFile(file, "share/pkgconfig/libxev.pc");
+    };
 
     // Man pages
     const man = try manPages(b);
@@ -141,7 +132,7 @@ pub fn build(b: *std.Build) !void {
     if (static_lib) |v| b.installArtifact(v);
     if (dynamic_lib) |v| b.installArtifact(v);
     b.getInstallStep().dependOn(&c_header.step);
-    // b.getInstallStep().dependOn(&pc.step);
+    b.getInstallStep().dependOn(&pc.step);
     b.installArtifact(test_exe);
     if (emit_man) {
         for (man) |step| b.getInstallStep().dependOn(step);
