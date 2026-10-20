@@ -537,19 +537,31 @@ fn AsyncIOCP(comptime xev: type) type {
 
         pub const WaitError = xev.Sys.AsyncError;
 
-        guard: std.Io.Mutex = .init,
-        wakeup: bool = false,
-        waiter: ?struct {
-            loop: *xev.Loop,
-            c: *xev.Completion,
-        } = null,
+        /// Copies of an Async share this state, as copies on the other
+        /// backends share one eventfd or mach port, so a copy made before
+        /// `wait` still reaches the waiter. Only one copy may be deinited.
+        state: *State,
+
+        const State = struct {
+            guard: std.Io.Mutex = .init,
+            wakeup: bool = false,
+            waiter: ?struct {
+                loop: *xev.Loop,
+                c: *xev.Completion,
+            } = null,
+        };
+
+        const allocator = std.heap.smp_allocator;
 
         pub fn init() !Self {
-            return Self{};
+            const state = try allocator.create(State);
+            state.* = .{};
+            return .{ .state = state };
         }
 
         pub fn deinit(self: *Self) void {
-            _ = self;
+            allocator.destroy(self.state);
+            self.state = undefined;
         }
 
         pub fn wait(
@@ -587,31 +599,76 @@ fn AsyncIOCP(comptime xev: type) type {
             loop.add(c);
 
             const io = std.Io.Threaded.global_single_threaded.io();
-            self.guard.lockUncancelable(io);
-            defer self.guard.unlock(io);
+            const state = self.state;
+            state.guard.lockUncancelable(io);
+            defer state.guard.unlock(io);
 
-            self.waiter = .{
+            state.waiter = .{
                 .loop = loop,
                 .c = c,
             };
 
-            if (self.wakeup) loop.async_notify(c);
+            if (state.wakeup) loop.async_notify(c);
         }
 
         pub fn notify(self: *Self) !void {
             const io = std.Io.Threaded.global_single_threaded.io();
-            self.guard.lockUncancelable(io);
-            defer self.guard.unlock(io);
+            const state = self.state;
+            state.guard.lockUncancelable(io);
+            defer state.guard.unlock(io);
 
-            if (self.waiter) |w| {
+            if (state.waiter) |w| {
                 w.loop.async_notify(w.c);
             } else {
-                self.wakeup = true;
+                state.wakeup = true;
             }
         }
 
         test {
             _ = AsyncTests(xev, Self);
+        }
+
+        test "async: notify through a copy taken before wait" {
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var notifier = try Self.init();
+            defer notifier.deinit();
+
+            // Copied before wait, as a caller does to hand the Async to
+            // another thread.
+            var copy = notifier;
+
+            var wake: bool = false;
+            var c_wait: xev.Completion = .{};
+            notifier.wait(&loop, &c_wait, bool, &wake, (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: WaitError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback);
+
+            // Polled rather than run(.until_done), which would block forever
+            // if the notification were lost.
+            try copy.notify();
+            for (0..100) |_| {
+                try loop.run(.no_wait);
+                if (wake) break;
+                std.Io.sleep(
+                    std.Io.Threaded.global_single_threaded.io(),
+                    .fromMilliseconds(1),
+                    .awake,
+                ) catch unreachable;
+            }
+            try testing.expect(wake);
         }
     };
 }
