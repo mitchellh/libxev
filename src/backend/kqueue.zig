@@ -24,6 +24,13 @@ const noopCallback = looppkg.NoopCallback(@This());
 
 const log = std.log.scoped(.libxev_kqueue);
 
+/// Sending on a socket whose peer has gone fails with EPIPE, and also raises
+/// SIGPIPE, which kills the process by default. A library can't ignore the
+/// signal for its whole process, so every send asks the kernel not to raise
+/// it; the completion still gets error.BrokenPipe. Darwin and FreeBSD both
+/// define MSG_NOSIGNAL; SO_NOSIGPIPE only covers sockets their owner set it on.
+const send_flags: u32 = if (@hasDecl(posix.MSG, "NOSIGNAL")) posix.MSG.NOSIGNAL else 0;
+
 /// True if this backend is available on this platform.
 pub fn available() bool {
     return switch (builtin.os.tag) {
@@ -1175,15 +1182,15 @@ pub const Completion = struct {
 
             .send => |*op| .{
                 .send = switch (op.buffer) {
-                    .slice => |v| xev_posix.send(op.fd, v, 0) catch |err| mapWriteError(err),
-                    .array => |*v| xev_posix.send(op.fd, v.array[0..v.len], 0) catch |err| mapWriteError(err),
+                    .slice => |v| xev_posix.send(op.fd, v, send_flags) catch |err| mapWriteError(err),
+                    .array => |*v| xev_posix.send(op.fd, v.array[0..v.len], send_flags) catch |err| mapWriteError(err),
                 },
             },
 
             .sendto => |*op| .{
                 .sendto = switch (op.buffer) {
-                    .slice => |v| xev_posix.sendto(op.fd, v, 0, &op.addr.any, op.addr.getOsSockLen()) catch |err| mapWriteError(err),
-                    .array => |*v| xev_posix.sendto(op.fd, v.array[0..v.len], 0, &op.addr.any, op.addr.getOsSockLen()) catch |err| mapWriteError(err),
+                    .slice => |v| xev_posix.sendto(op.fd, v, send_flags, &op.addr.any, op.addr.getOsSockLen()) catch |err| mapWriteError(err),
+                    .array => |*v| xev_posix.sendto(op.fd, v.array[0..v.len], send_flags, &op.addr.any, op.addr.getOsSockLen()) catch |err| mapWriteError(err),
                 },
             },
 
@@ -1530,6 +1537,8 @@ fn mapReadError(err: anyerror) ReadError {
 fn mapWriteError(err: anyerror) WriteError {
     return switch (err) {
         error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
+        error.BrokenPipe => error.BrokenPipe,
+        error.ConnectionResetByPeer => error.ConnectionResetByPeer,
         else => error.Unexpected,
     };
 }
@@ -1731,6 +1740,8 @@ pub const ReadError = KEventError || error{
 
 pub const WriteError = KEventError || error{
     Canceled,
+    BrokenPipe,
+    ConnectionResetByPeer,
     PermissionDenied,
     Unexpected,
 };

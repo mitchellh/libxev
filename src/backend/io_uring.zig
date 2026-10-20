@@ -14,6 +14,12 @@ const noopCallback = looppkg.NoopCallback(@This());
 
 pub const ShutdownHow = std.Io.net.ShutdownHow;
 
+/// Sending on a socket whose peer has gone fails with EPIPE, and also raises
+/// SIGPIPE, which kills the process by default. A library can't ignore the
+/// signal for its whole process, so every send asks the kernel not to raise
+/// it; the completion still gets error.BrokenPipe.
+const send_flags: u32 = linux.MSG.NOSIGNAL;
+
 /// True if this backend is available on this platform.
 pub fn available() bool {
     if (comptime builtin.os.tag != .linux) return false;
@@ -479,13 +485,13 @@ pub const Loop = struct {
                 .array => |*buf| sqe.prep_send(
                     v.fd,
                     buf.array[0..buf.len],
-                    0,
+                    send_flags,
                 ),
 
                 .slice => |buf| sqe.prep_send(
                     v.fd,
                     buf,
-                    0,
+                    send_flags,
                 ),
             },
 
@@ -497,7 +503,7 @@ pub const Loop = struct {
                 sqe.prep_sendmsg(
                     v.fd,
                     v.msghdr,
-                    0,
+                    send_flags,
                 );
             },
 

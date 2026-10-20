@@ -694,6 +694,139 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             try testing.expect(server_closed);
         }
 
+        test "TCP: a send that fails with EPIPE raises no SIGPIPE" {
+            // We have no way to get a socket in WASI from a WASI context.
+            if (builtin.os.tag == .wasi) return error.SkipZigTest;
+            // No SIGPIPE on Windows.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+            const testing = std.testing;
+
+            // The test runner's std.Io.Threaded already catches SIGPIPE, so
+            // the process wouldn't die of it here: count it instead.
+            const Sigpipe = struct {
+                var raised = std.atomic.Value(u32).init(0);
+                fn handler(_: posix.SIG) callconv(.c) void {
+                    _ = raised.fetchAdd(1, .monotonic);
+                }
+            };
+            var old_action: posix.Sigaction = undefined;
+            posix.sigaction(.PIPE, &.{
+                .handler = .{ .handler = Sigpipe.handler },
+                .mask = posix.sigemptyset(),
+                .flags = 0,
+            }, &old_action);
+            defer posix.sigaction(.PIPE, &old_action, null);
+            Sigpipe.raised.store(0, .monotonic);
+
+            var tpool = ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
+            defer loop.deinit();
+
+            var address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+            const server = try Impl.init(address);
+            try server.bind(address);
+            try server.listen(1);
+            var internal_addr = net.Address.fromIpAddress(address);
+            var sock_len = internal_addr.getOsSockLen();
+            try xev_posix.getsockname(if (xev.dynamic) server.fd() else server.fd, &internal_addr.any, &sock_len);
+            address = internal_addr.toIpAddress();
+            const client = try Impl.init(address);
+
+            var c_accept: xev.Completion = undefined;
+            var c_connect: xev.Completion = undefined;
+            var server_conn: ?Impl = null;
+            server.accept(&loop, &c_accept, ?Impl, &server_conn, (struct {
+                fn callback(
+                    ud: ?*?Impl,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: xev.AcceptError!Impl,
+                ) xev.CallbackAction {
+                    ud.?.* = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+            var connected = false;
+            client.connect(&loop, &c_connect, address, bool, &connected, (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    r: xev.ConnectError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback);
+            try loop.run(.until_done);
+            try testing.expect(server_conn != null);
+            try testing.expect(connected);
+
+            // With its sending side shut, the socket fails every send with
+            // EPIPE, as one does once the peer has reset the connection.
+            var shut = false;
+            client.shutdown(&loop, &c_connect, bool, &shut, (struct {
+                fn callback(
+                    ud: ?*bool,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    r: xev.ShutdownError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    ud.?.* = true;
+                    return .disarm;
+                }
+            }).callback);
+            try loop.run(.until_done);
+            try testing.expect(shut);
+
+            // Without MSG_NOSIGNAL this send also raises SIGPIPE, which kills
+            // a process that hasn't caught or ignored it.
+            const Result = xev.WriteError!usize;
+            var result: ?Result = null;
+            var send_buf = [_]u8{ 1, 2, 3 };
+            client.write(&loop, &c_connect, .{ .slice = &send_buf }, ?Result, &result, (struct {
+                fn callback(
+                    ud: ?*?Result,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    _: xev.WriteBuffer,
+                    r: Result,
+                ) xev.CallbackAction {
+                    ud.?.* = r;
+                    return .disarm;
+                }
+            }).callback);
+            try loop.run(.until_done);
+            try testing.expectError(error.BrokenPipe, result.?);
+            try testing.expectEqual(@as(u32, 0), Sigpipe.raised.load(.monotonic));
+
+            const Closed = struct {
+                fn callback(
+                    _: ?*void,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    r: xev.CloseError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            };
+            var c_close: [3]xev.Completion = undefined;
+            server.close(&loop, &c_close[0], void, null, Closed.callback);
+            server_conn.?.close(&loop, &c_close[1], void, null, Closed.callback);
+            client.close(&loop, &c_close[2], void, null, Closed.callback);
+            try loop.run(.until_done);
+        }
+
         // Potentially flaky - this test could hang if the sender is unable to
         // write everything to the socket for whatever reason
         // (e.g. incorrectly sized buffer on the receiver side), or if the
