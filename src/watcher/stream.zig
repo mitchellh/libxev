@@ -60,12 +60,12 @@ pub fn Shared(comptime xev: type) type {
         pub const PollError = switch (xev.backend) {
             .io_uring,
             .epoll,
+            .iocp,
             => xev.Sys.PollError,
 
             .kqueue,
             => xev.ReadError,
 
-            .iocp,
             .wasi_poll,
             => error{},
         };
@@ -75,8 +75,9 @@ pub fn Shared(comptime xev: type) type {
             read = switch (xev.backend) {
                 .io_uring => std.posix.POLL.IN,
                 .epoll => std.os.linux.EPOLL.IN,
+                .iocp => xev.Sys.poll_read_events,
                 .kqueue => 0, // doesn't matter
-                .iocp, .wasi_poll => 0, // invalid
+                .wasi_poll => 0, // invalid
             },
 
             fn fromResult(
@@ -86,6 +87,7 @@ pub fn Shared(comptime xev: type) type {
                 return switch (xev.backend) {
                     .io_uring,
                     .epoll,
+                    .iocp,
                     => if (result.poll) |_|
                         @enumFromInt(c.op.poll.events)
                     else |err|
@@ -96,7 +98,6 @@ pub fn Shared(comptime xev: type) type {
                         else => unreachable,
                     },
 
-                    .iocp,
                     .wasi_poll,
                     => @compileError("poll not supported on this backend"),
                 };
@@ -221,8 +222,8 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
 
     // Do not add the methods for poll if the backend doesn't support it.
     switch (xev.backend) {
-        .io_uring, .epoll, .kqueue => {},
-        .iocp, .wasi_poll => return struct {},
+        .io_uring, .epoll, .kqueue, .iocp => {},
+        .wasi_poll => return struct {},
     }
 
     return struct {
@@ -263,6 +264,13 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                         },
                     } },
 
+                    .iocp => .{ .poll = .{
+                        .fd = self.fd,
+                        .events = switch (event) {
+                            .read => xev.Sys.poll_read_events,
+                        },
+                    } },
+
                     .kqueue => switch (options.read) {
                         .none => unreachable,
 
@@ -277,7 +285,6 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                         } },
                     },
 
-                    .iocp,
                     .wasi_poll,
                     => @compileError("poll not supported on this backend"),
                 },
@@ -292,11 +299,11 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                         const fd: Self = switch (xev.backend) {
                             .io_uring,
                             .epoll,
+                            .iocp,
                             => T.initFd(c_inner.op.poll.fd),
 
                             .kqueue => T.initFd(c_inner.op.read.fd),
 
-                            .iocp,
                             .wasi_poll,
                             => @compileError("poll not supported on this backend"),
                         };

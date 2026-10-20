@@ -444,6 +444,29 @@ pub const ws2_32 = struct {
         optlen: i32,
     ) callconv(.winapi) i32;
 
+    pub extern "ws2_32" fn sendto(
+        s: SOCKET,
+        buf: [*]const u8,
+        len: i32,
+        flags: i32,
+        to: *const posix.sockaddr,
+        tolen: i32,
+    ) callconv(.winapi) i32;
+
+    pub extern "ws2_32" fn WSAIoctl(
+        s: SOCKET,
+        dwIoControlCode: DWORD,
+        lpvInBuffer: ?*const anyopaque,
+        cbInBuffer: DWORD,
+        lpvOutBuffer: ?*anyopaque,
+        cbOutBuffer: DWORD,
+        lpcbBytesReturned: *DWORD,
+        lpOverlapped: ?*OVERLAPPED,
+        lpCompletionRoutine: ?LPWSAOVERLAPPED_COMPLETION_ROUTINE,
+    ) callconv(.winapi) i32;
+
+    pub const SIO_BASE_HANDLE: DWORD = 0x48000022;
+
     pub extern "mswsock" fn AcceptEx(
         sListenSocket: SOCKET,
         sAcceptSocket: SOCKET,
@@ -454,6 +477,116 @@ pub const ws2_32 = struct {
         lpdwBytesReceived: *u32,
         lpOverlapped: *OVERLAPPED,
     ) callconv(.winapi) BOOL;
+};
+
+/// Socket readiness through the AFD driver: the mechanism underneath `WSAPoll`,
+/// used directly so a poll can complete on a completion port like any other
+/// overlapped I/O. std has the IOCTL code but not the request structures.
+pub const afd = struct {
+    pub const POLL_RECEIVE: u32 = 0x0001;
+    pub const POLL_RECEIVE_EXPEDITED: u32 = 0x0002;
+    pub const POLL_SEND: u32 = 0x0004;
+    pub const POLL_DISCONNECT: u32 = 0x0008;
+    pub const POLL_ABORT: u32 = 0x0010;
+    pub const POLL_LOCAL_CLOSE: u32 = 0x0020;
+    pub const POLL_ACCEPT: u32 = 0x0080;
+    pub const POLL_CONNECT_FAIL: u32 = 0x0100;
+
+    pub const PollHandleInfo = extern struct {
+        handle: HANDLE,
+        events: win.ULONG,
+        status: win.NTSTATUS,
+    };
+
+    pub const PollInfo = extern struct {
+        timeout: win.LARGE_INTEGER,
+        number_of_handles: win.ULONG,
+        exclusive: win.ULONG,
+        handles: [1]PollHandleInfo,
+    };
+
+    /// Open a handle to the AFD driver to send poll requests through. Any
+    /// name under `\Device\Afd` will do; the suffix only shows in handle
+    /// listings.
+    pub fn open() error{Unexpected}!HANDLE {
+        var handle: HANDLE = undefined;
+        var iosb: win.IO_STATUS_BLOCK = undefined;
+        const status = win.ntdll.NtCreateFile(
+            &handle,
+            .{ .STANDARD = .{ .SYNCHRONIZE = true } },
+            &.{ .ObjectName = @constCast(&win.UNICODE_STRING.init(win.AFD.DEVICE_NAME ++ .{ '\\', 'x', 'e', 'v' })) },
+            &iosb,
+            null,
+            .{},
+            .{ .READ = true, .WRITE = true },
+            .OPEN,
+            .{ .IO = .ASYNCHRONOUS },
+            null,
+            0,
+        );
+        if (status != .SUCCESS) return win.unexpectedStatus(status);
+        return handle;
+    }
+
+    /// The handle AFD knows a socket by. A layered service provider can wrap
+    /// the one the application holds, and AFD rejects those.
+    pub fn baseHandle(sock: HANDLE) error{Unexpected}!HANDLE {
+        var base: HANDLE = undefined;
+        var returned: DWORD = 0;
+        const rc = ws2_32.WSAIoctl(
+            @ptrCast(sock),
+            ws2_32.SIO_BASE_HANDLE,
+            null,
+            0,
+            @ptrCast(&base),
+            @sizeOf(HANDLE),
+            &returned,
+            null,
+            null,
+        );
+        if (rc != 0) return unexpectedWSAError(ws2_32.WSAGetLastError());
+        return base;
+    }
+
+    /// Start a poll. It completes on the port `afd_handle` is associated with:
+    /// `overlapped` is passed as the APC context, which comes back as the
+    /// entry's `lpOverlapped`, and as the IO_STATUS_BLOCK, whose two fields
+    /// OVERLAPPED begins with. `info` is read and written in place, so it has
+    /// to stay put until then.
+    pub fn poll(afd_handle: HANDLE, info: *PollInfo, overlapped: *OVERLAPPED) error{Unexpected}!void {
+        const status = win.ntdll.NtDeviceIoControlFile(
+            afd_handle,
+            null,
+            null,
+            overlapped,
+            @ptrCast(overlapped),
+            win.IOCTL.AFD.POLL,
+            info,
+            @sizeOf(PollInfo),
+            info,
+            @sizeOf(PollInfo),
+        );
+        switch (status) {
+            // Either way the result arrives on the port.
+            .SUCCESS, .PENDING => {},
+            else => return win.unexpectedStatus(status),
+        }
+    }
+
+    /// Cancel a pending poll. It still completes, with STATUS_CANCELLED.
+    pub fn cancel(afd_handle: HANDLE, overlapped: *OVERLAPPED) error{Unexpected}!void {
+        var iosb: win.IO_STATUS_BLOCK = undefined;
+        switch (win.ntdll.NtCancelIoFileEx(afd_handle, @ptrCast(overlapped), &iosb)) {
+            // NOT_FOUND: it completed first, and its result is already queued.
+            .SUCCESS, .NOT_FOUND => {},
+            else => |status| return win.unexpectedStatus(status),
+        }
+    }
+
+    /// The final status of a completed poll.
+    pub fn completionStatus(overlapped: *const OVERLAPPED) win.NTSTATUS {
+        return @enumFromInt(@as(u32, @truncate(overlapped.Internal)));
+    }
 };
 
 // --- High-level wrapper functions ---

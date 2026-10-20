@@ -57,6 +57,9 @@ pub const Loop = struct {
     /// Heap of timers.
     timers: TimerHeap = .{ .context = {} },
 
+    /// The AFD driver handle poll requests go through, opened on first use.
+    afd_handle: ?windows.HANDLE = null,
+
     /// Cached time
     cached_now: u64,
 
@@ -97,6 +100,7 @@ pub const Loop = struct {
     /// Deinitialize the loop, this closes the handle to the Completion Port. Any events that were
     /// unprocessed are lost -- their callbacks will never be called.
     pub fn deinit(self: *Loop) void {
+        if (self.afd_handle) |h| windows.CloseHandle(h);
         windows.CloseHandle(self.iocp_handle);
     }
 
@@ -726,6 +730,20 @@ pub const Loop = struct {
                 break :action .{ .submitted = {} };
             },
 
+            .poll => |*v| action: {
+                const afd_handle = self.afd() catch |err| break :action .{ .result = .{ .poll = err } };
+                const base = windows.afd.baseHandle(v.fd) catch |err| break :action .{ .result = .{ .poll = err } };
+                v.info = .{
+                    .timeout = std.math.maxInt(i64),
+                    .number_of_handles = 1,
+                    .exclusive = 0,
+                    .handles = .{.{ .handle = base, .events = v.events, .status = .SUCCESS }},
+                };
+                windows.afd.poll(afd_handle, &v.info, &completion.overlapped) catch |err|
+                    break :action .{ .result = .{ .poll = err } };
+                break :action .{ .submitted = {} };
+            },
+
             .timer => |*v| action: {
                 v.c = completion;
                 self.timers.insert(v);
@@ -844,6 +862,12 @@ pub const Loop = struct {
                 }
             },
 
+            .poll => {
+                if (completion.flags.state == .active) {
+                    cancel_result.?.* = windows.afd.cancel(self.afd_handle.?, &completion.overlapped);
+                }
+            },
+
             else => @panic("Not implemented"),
         }
     }
@@ -862,6 +886,17 @@ pub const Loop = struct {
         windows.PostQueuedCompletionStatus(self.iocp_handle, 0, 0, null) catch |err| {
             log.warn("unexpected async_notify error={}", .{err});
         };
+    }
+
+    /// The AFD handle, opened and associated with the port the first time a
+    /// poll needs it.
+    fn afd(self: *Loop) PollError!windows.HANDLE {
+        if (self.afd_handle) |h| return h;
+        const h = try windows.afd.open();
+        errdefer windows.CloseHandle(h);
+        self.associate_fd(h) catch return error.Unexpected;
+        self.afd_handle = h;
+        return h;
     }
 
     /// Associate a handler to the internal completion port.
@@ -1179,6 +1214,12 @@ pub const Completion = struct {
             .async_wait => .{ .async_wait = {} },
 
             .job_object => self.result.?,
+
+            .poll => .{ .poll = switch (windows.afd.completionStatus(&self.overlapped)) {
+                .SUCCESS => {},
+                .CANCELLED => error.Canceled,
+                else => |status| std.os.windows.unexpectedStatus(status),
+            } },
         };
     }
 
@@ -1248,7 +1289,19 @@ pub const OperationType = enum {
 
     /// Receive a notification from a job object associated with a completion port
     job_object,
+
+    /// Wait for a socket to become ready, through the AFD driver.
+    poll,
 };
+
+/// What a read poll waits for: data, or anything that means a read will no
+/// longer block.
+pub const poll_read_events = windows.afd.POLL_RECEIVE |
+    windows.afd.POLL_ACCEPT |
+    windows.afd.POLL_DISCONNECT |
+    windows.afd.POLL_ABORT |
+    windows.afd.POLL_LOCAL_CLOSE |
+    windows.afd.POLL_CONNECT_FAIL;
 
 /// All the supported operations of this event loop. These are always
 /// backend-specific and therefore the structure and types change depending
@@ -1345,6 +1398,16 @@ pub const Operation = union(OperationType) {
         /// Do not use this, it is used internally.
         associated: bool = false,
     },
+
+    poll: struct {
+        fd: windows.HANDLE,
+
+        /// AFD_POLL_* events to wait for.
+        events: u32,
+
+        /// The request while AFD holds it. Do not use this, it is used internally.
+        info: windows.afd.PollInfo = undefined,
+    },
 };
 
 /// The result type based on the operation type. For a callback, the
@@ -1367,9 +1430,15 @@ pub const Result = union(OperationType) {
     cancel: CancelError!void,
     async_wait: AsyncError!void,
     job_object: JobObjectError!JobObjectResult,
+    poll: PollError!void,
 };
 
 pub const CancelError = error{
+    Unexpected,
+};
+
+pub const PollError = error{
+    Canceled,
     Unexpected,
 };
 
@@ -2347,6 +2416,64 @@ test "iocp: recv cancellation" {
 
     try testing.expect(recv_result == .recv);
     try testing.expectError(error.Canceled, recv_result.recv);
+}
+
+test "iocp: poll" {
+    const mem = std.mem;
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const address = try net.Address.parseIp4("127.0.0.1", 3132);
+    const socket = try windows.WSASocketW(windows.ws2_32.AF.INET, windows.ws2_32.SOCK.DGRAM, windows.ws2_32.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    defer iocpClose(socket);
+    try iocpSetsockopt(asSocket(socket), windows.ws2_32.SOL.SOCKET, windows.ws2_32.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try iocpBind(asSocket(socket), &address.any, address.getOsSockLen());
+
+    const Poll = struct {
+        result: ?(PollError!void) = null,
+
+        fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+            const self: *@This() = @ptrCast(@alignCast(ud.?));
+            self.result = r.poll;
+            return .disarm;
+        }
+    };
+
+    // Nothing to read, so the poll stays pending until it is canceled.
+    var canceled: Poll = .{};
+    var c_canceled: Completion = .{
+        .op = .{ .poll = .{ .fd = socket, .events = poll_read_events } },
+        .userdata = &canceled,
+        .callback = Poll.callback,
+    };
+    loop.add(&c_canceled);
+    try loop.run(.no_wait);
+    try testing.expect(canceled.result == null);
+
+    var c_cancel: Completion = .{ .op = .{ .cancel = .{ .c = &c_canceled } } };
+    loop.add(&c_cancel);
+    try loop.run(.until_done);
+    try testing.expectError(error.Canceled, canceled.result.?);
+
+    // A datagram arriving completes it.
+    var readable: Poll = .{};
+    var c_readable: Completion = .{
+        .op = .{ .poll = .{ .fd = socket, .events = poll_read_events } },
+        .userdata = &readable,
+        .callback = Poll.callback,
+    };
+    loop.add(&c_readable);
+    try loop.run(.no_wait);
+    try testing.expect(readable.result == null);
+
+    const sender = try windows.WSASocketW(windows.ws2_32.AF.INET, windows.ws2_32.SOCK.DGRAM, windows.ws2_32.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    defer iocpClose(sender);
+    try testing.expectEqual(4, windows.ws2_32.sendto(asSocket(sender), "ping", 4, 0, &address.any, @intCast(address.getOsSockLen())));
+
+    try loop.run(.until_done);
+    try readable.result.?;
 }
 
 test "iocp: accept cancellation" {
