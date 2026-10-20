@@ -456,8 +456,12 @@ pub const Loop = struct {
                         if (c_active) self.active -= 1;
                     },
 
-                    // Only resubmit if we aren't already active (in the queue)
-                    .rearm => if (!c_active) self.submissions.push(c),
+                    // Still registered with kqueue (reported by submit's event
+                    // list): it must stay active, or its next event queues it twice.
+                    .rearm => if (disarm_ev != null) {
+                        c.flags.state = .active;
+                        c.result = null;
+                    } else if (!c_active) self.submissions.push(c),
                 }
 
                 // If we filled the events slice, we break to avoid overflow.
@@ -2858,6 +2862,64 @@ test "kqueue: timer armed from delayed callback must not fire early" {
     const elapsed_ns = state.timer_fired_ns - state.timer_started_ns;
     const elapsed_ms: i128 = @divFloor(elapsed_ns, std.time.ns_per_ms);
     try testing.expect(elapsed_ms >= @as(i128, @intCast(timer_delay_ms)));
+}
+
+test "kqueue: cancel after a rearm of a completion reported at submit" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    var fds: [2]posix.fd_t = undefined;
+    try testing.expectEqual(@as(c_int, 0), std.c.pipe(&fds));
+    defer _ = std.c.close(fds[0]);
+    defer _ = std.c.close(fds[1]);
+
+    // Readable before submission, so submit's event list reports it and the
+    // callback runs from the completion queue.
+    try testing.expectEqual(@as(isize, 1), std.c.write(fds[1], "a", 1));
+
+    const State = struct { reads: usize = 0, canceled: bool = false };
+    var state: State = .{};
+    var buf: [1]u8 = undefined;
+    var c: Completion = .{
+        .op = .{ .read = .{ .fd = fds[0], .buffer = .{ .slice = &buf } } },
+        .userdata = &state,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                const s = @as(*State, @ptrCast(@alignCast(ud.?)));
+                _ = r.read catch |err| {
+                    s.canceled = err == error.Canceled;
+                    return .disarm;
+                };
+                s.reads += 1;
+                return .rearm;
+            }
+        }).callback,
+    };
+    loop.add(&c);
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), state.reads);
+    try testing.expect(c.state() == .active);
+
+    var cancel: Completion = .{
+        .op = .{ .cancel = .{ .c = &c } },
+        .callback = (struct {
+            fn callback(_: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                _ = r.cancel catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&cancel);
+    try loop.run(.no_wait);
+    try testing.expect(state.canceled);
+
+    // Cancelled, so new data must not reach the callback.
+    try testing.expectEqual(@as(isize, 1), std.c.write(fds[1], "b", 1));
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), state.reads);
+    try testing.expectEqual(@as(usize, 0), loop.active);
 }
 
 test "kqueue: socket accept/cancel cancellation should decrease active count" {
