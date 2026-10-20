@@ -15,6 +15,22 @@ pub const Options = struct {
     /// Backends: io_uring
     entries: u32 = 256,
 
+    /// Additional flags OR'd into io_uring_setup(2), e.g.
+    /// IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN for a
+    /// loop whose ring is only ever touched from one thread.
+    ///
+    /// The caller owns kernel-version compatibility: on kernels that
+    /// reject a flag, Loop.init fails with error.ArgumentsInvalid rather
+    /// than silently degrading — retry without flags to degrade.
+    ///
+    /// Note for IORING_SETUP_DEFER_TASKRUN: completion task-work is only
+    /// flushed by kernel entries with IORING_ENTER_GETEVENTS, so the loop
+    /// must be run in a mode that waits (`until_done`/`once`); a pure
+    /// `no_wait` spin may never observe its completions.
+    ///
+    /// Backends: io_uring
+    io_uring_flags: u32 = 0,
+
     /// A thread pool to use for blocking operations. If the backend doesn't
     /// need to perform any blocking operations then no threads will ever
     /// be spawned. If the backend does need to perform blocking operations
