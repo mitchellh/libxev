@@ -484,6 +484,15 @@ pub const Loop = struct {
 
                 const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.data.ptr)));
 
+                // Skip stale deliveries. A completion can be completed and
+                // retired (disarmed, cancelled, or already dispatched earlier
+                // in this same epoll_wait batch) while the kernel still
+                // reports an event for its former registration. Only an
+                // `.active` completion is legitimately outstanding; invoking
+                // any other callback again can hand it state it no longer
+                // owns (e.g. queueWrite's `head.?` on an empty write queue).
+                if (c.flags.state != .active) continue;
+
                 // We get the fd and mark this as in progress we can properly
                 // clean this up late.r
                 const fd = if (c.flags.dup) c.flags.dup_fd else c.fd();
