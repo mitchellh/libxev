@@ -809,7 +809,12 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
                 &std.mem.toBytes(@as(c_int, 8192)),
             );
 
-            const send_buf = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 } ** 100_000;
+            const send_buf_len = 1_000_000;
+            var send_buf: [send_buf_len]u8 = undefined;
+            for (0..100_000) |i| @memcpy(
+                send_buf[i * 10..][0..10],
+                &[_]u8{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 0 },
+            );
             var sent_unqueued: usize = 0;
 
             // First we try to send the whole 1MB buffer in one write operation, this _should_ result
@@ -832,7 +837,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             try loop.run(.until_done);
             // SO_SNDBUF doesn't seem to be respected exactly, sent_unqueued will often be ~32kB
             // even though SO_SNDBUF was set to 8kB
-            try testing.expect(sent_unqueued < (send_buf.len / 10));
+            try testing.expect(sent_unqueued < (send_buf_len / 10));
 
             // Set up queued write
             var w_queue = xev.WriteQueue{};
@@ -872,7 +877,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
                 loop: *xev.Loop,
                 conn: Impl,
                 completion: xev.Completion = .{},
-                buf: [send_buf.len]u8 = undefined,
+                buf: [send_buf_len]u8 = undefined,
                 bytes_read: usize = 0,
 
                 pub fn read(receiver: *@This()) void {
@@ -896,7 +901,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
                     const n_bytes = r catch unreachable;
 
                     receiver.bytes_read += n_bytes;
-                    if (receiver.bytes_read < send_buf.len) {
+                    if (receiver.bytes_read < send_buf_len) {
                         receiver.read();
                     }
 
@@ -912,7 +917,7 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
             // Wait for the send/receive
             try loop.run(.until_done);
             try testing.expectEqualSlices(u8, &send_buf, receiver.buf[0..receiver.bytes_read]);
-            try testing.expect(send_buf.len == sent_unqueued + sent_queued);
+            try testing.expect(send_buf_len == sent_unqueued + sent_queued);
 
             // Close
             server_conn.?.close(&loop, &c_accept, ?Impl, &server_conn, (struct {
