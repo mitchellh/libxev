@@ -134,7 +134,7 @@ fn UDPSendto(comptime xev: type) type {
                                     l_inner,
                                     c_inner,
                                     s_inner,
-                                    net.Address.initPosix(@alignCast(&c_inner.op.recvfrom.addr)).toIpAddress(),
+                                    net.Address.initPosix(@ptrCast(&c_inner.op.recvfrom.addr)).toIpAddress(),
                                     initFd(c_inner.op.recvfrom.fd),
                                     c_inner.op.recvfrom.buffer,
                                     r.recvfrom,
@@ -922,6 +922,80 @@ fn UDPTests(comptime xev: type, comptime Impl: type) type {
                     @compileError("missing decl: " ++ decl.name);
                 }
             }
+        }
+
+        test "UDP: read reports the source address of an IPv6 sender" {
+            if (builtin.os.tag == .freebsd) return error.SkipZigTest;
+            // The IOCP backend's recvfrom has not been checked for this.
+            if (builtin.os.tag == .windows) return error.SkipZigTest;
+            const testing = std.testing;
+
+            var tpool = ThreadPool.init(.{});
+            defer tpool.deinit();
+            defer tpool.shutdown();
+            var loop = try xev.Loop.init(.{ .thread_pool = &tpool });
+            defer loop.deinit();
+
+            const address = try std.Io.net.IpAddress.parse("::1", 3133);
+            const server = Impl.init(address) catch return error.SkipZigTest;
+            server.bind(address) catch return error.SkipZigTest; // no IPv6 loopback
+            const client = try Impl.init(address);
+
+            const Received = struct { len: usize = 0, from: ?std.Io.net.IpAddress = null };
+            var received: Received = .{};
+            var c_read: xev.Completion = undefined;
+            var s_read: Impl.State = undefined;
+            var recv_buf: [128]u8 = undefined;
+            server.read(&loop, &c_read, &s_read, .{ .slice = &recv_buf }, Received, &received, (struct {
+                fn callback(
+                    ud: ?*Received,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: *Impl.State,
+                    addr: std.Io.net.IpAddress,
+                    _: Impl,
+                    _: xev.ReadBuffer,
+                    r: xev.ReadError!usize,
+                ) xev.CallbackAction {
+                    ud.?.len = r catch unreachable;
+                    ud.?.from = addr;
+                    return .disarm;
+                }
+            }).callback);
+
+            var send_buf = [_]u8{ 1, 2, 3 };
+            var c_write: xev.Completion = undefined;
+            var s_write: Impl.State = undefined;
+            client.write(&loop, &c_write, &s_write, address, .{ .slice = &send_buf }, void, null, (struct {
+                fn callback(
+                    _: ?*void,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: *Impl.State,
+                    _: Impl,
+                    _: xev.WriteBuffer,
+                    r: xev.WriteError!usize,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+
+            try loop.run(.until_done);
+            try testing.expectEqual(@as(usize, 3), received.len);
+            const loopback: [16]u8 = .{0} ** 15 ++ .{1};
+            try testing.expectEqualSlices(u8, &loopback, &received.from.?.ip6.bytes);
+            try testing.expect(received.from.?.ip6.port != 0);
+
+            const onClose = (struct {
+                fn callback(_: ?*void, _: *xev.Loop, _: *xev.Completion, _: Impl, r: xev.CloseError!void) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback;
+            server.close(&loop, &c_read, void, null, onClose);
+            client.close(&loop, &c_write, void, null, onClose);
+            try loop.run(.until_done);
         }
 
         test "UDP: read/write" {
