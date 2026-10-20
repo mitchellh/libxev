@@ -263,19 +263,13 @@ fn Pollable(comptime xev: type, comptime T: type, comptime options: Options) typ
                         },
                     } },
 
-                    .kqueue => switch (options.read) {
-                        .none => unreachable,
-
-                        .recv => .{ .read = .{
-                            .fd = self.fd,
-                            .buffer = .{ .slice = &.{} },
-                        } },
-
-                        .read => .{ .read = .{
-                            .fd = self.fd,
-                            .buffer = .{ .slice = &.{} },
-                        } },
-                    },
+                    // A zero-length read waits for readability without
+                    // consuming anything, whatever read mode the stream has;
+                    // UDP streams have none.
+                    .kqueue => .{ .read = .{
+                        .fd = self.fd,
+                        .buffer = .{ .slice = &.{} },
+                    } },
 
                     .iocp,
                     .wasi_poll,
