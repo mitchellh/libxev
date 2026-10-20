@@ -333,12 +333,19 @@ pub fn accept(
     addr_size: *posix.socklen_t,
     flags: u32,
 ) AcceptError!posix.socket_t {
+    const have_accept4 = !builtin.target.os.tag.isDarwin() and builtin.target.os.tag != .haiku;
     while (true) {
-        const rc = system.accept(sock, addr, addr_size);
+        const rc = if (have_accept4)
+            system.accept4(sock, addr, addr_size, flags)
+        else
+            system.accept(sock, addr, addr_size);
         switch (posix.errno(rc)) {
             .SUCCESS => {
                 const fd: posix.socket_t = @intCast(rc);
-                if (flags & posix.SOCK.CLOEXEC != 0) try setCloexec(fd);
+                if (!have_accept4) {
+                    errdefer close(fd);
+                    try setSockFlags(fd, flags);
+                }
                 return fd;
             },
             .INTR => continue,

@@ -1212,7 +1212,11 @@ pub const Operation = union(OperationType) {
         socket: posix.socket_t,
         addr: posix.sockaddr = undefined,
         addr_size: posix.socklen_t = @sizeOf(posix.sockaddr),
-        flags: u32 = posix.SOCK.CLOEXEC,
+        /// Non-blocking, like the sockets TCP.init creates on this backend:
+        /// a write is performed once the fd reports writable, and on a
+        /// blocking socket one larger than the free buffer stalls the loop.
+        /// Linux does not inherit O_NONBLOCK from the listener, so ask.
+        flags: u32 = posix.SOCK.CLOEXEC | posix.SOCK.NONBLOCK,
     },
 
     connect: struct {

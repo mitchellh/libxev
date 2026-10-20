@@ -708,6 +708,71 @@ fn TCPTests(comptime xev: type, comptime Impl: type) type {
         // 4. Set up a queued write with the remaining buffer, shutdown() the socket afterwards
         // 5. Set up a receiver that loops until it receives the entire buffer
         // 6. Assert send_buf == recv_buf
+        test "TCP: accepted sockets are non-blocking on epoll" {
+            // epoll performs a write once the fd reports writable, which only
+            // promises some room: on a blocking socket, a write larger than
+            // that blocks the whole loop. TCP.init already makes its sockets
+            // non-blocking there, and Linux, unlike the BSDs kqueue runs on,
+            // does not pass the listener's O_NONBLOCK on to an accepted one.
+            if (xev.dynamic) return error.SkipZigTest;
+            if (xev.backend != .epoll) return error.SkipZigTest;
+
+            const testing = std.testing;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+            const server = try Impl.init(address);
+            try server.bind(address);
+            try server.listen(1);
+
+            var internal_addr = net.Address.fromIpAddress(address);
+            var sock_len = internal_addr.getOsSockLen();
+            try xev_posix.getsockname(server.fd, &internal_addr.any, &sock_len);
+            address = internal_addr.toIpAddress();
+            const client = try Impl.init(address);
+
+            var c_accept: xev.Completion = undefined;
+            var c_connect: xev.Completion = undefined;
+
+            var server_conn: ?Impl = null;
+            server.accept(&loop, &c_accept, ?Impl, &server_conn, (struct {
+                fn callback(
+                    ud: ?*?Impl,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    r: xev.AcceptError!Impl,
+                ) xev.CallbackAction {
+                    ud.?.* = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+            client.connect(&loop, &c_connect, address, void, null, (struct {
+                fn callback(
+                    _: ?*void,
+                    _: *xev.Loop,
+                    _: *xev.Completion,
+                    _: Impl,
+                    r: xev.ConnectError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    return .disarm;
+                }
+            }).callback);
+            try loop.run(.until_done);
+
+            const conn = server_conn orelse return error.TestUnexpectedResult;
+            defer xev_posix.close(conn.fd);
+            defer xev_posix.close(client.fd);
+            defer xev_posix.close(server.fd);
+
+            const rc = std.posix.system.fcntl(conn.fd, std.posix.F.GETFL, @as(usize, 0));
+            try testing.expectEqual(std.posix.E.SUCCESS, std.posix.errno(rc));
+            const nonblock: u32 = @bitCast(std.posix.O{ .NONBLOCK = true });
+            try testing.expect(@as(u32, @intCast(rc)) & nonblock != 0);
+        }
+
         test "TCP: Queued writes" {
             // We have no way to get a socket in WASI from a WASI context.
             if (builtin.os.tag == .wasi) return error.SkipZigTest;
