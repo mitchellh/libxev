@@ -462,13 +462,7 @@ pub const Loop = struct {
                 // If we have a timer, we want to set the timeout to our next
                 // timer value. If we have no timer, we wait forever.
                 const t = self.timers.peek() orelse break :timeout -1;
-
-                // Determine the time in milliseconds.
-                const ms_now = @as(u64, @intCast(self.cached_now.sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(self.cached_now.nsec)) / std.time.ns_per_ms;
-                const ms_next = @as(u64, @intCast(t.next.sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(t.next.nsec)) / std.time.ns_per_ms;
-                break :timeout @as(i32, @intCast(ms_next -| ms_now));
+                break :timeout timeoutMs(self.cached_now, t.next);
             };
 
             const n = epoll_helper.epoll_wait(self.fd, &events, timeout);
@@ -923,6 +917,17 @@ pub const Loop = struct {
         completion.flags.state = .dead;
     }
 };
+
+/// Milliseconds for epoll_wait to wait until `next`, rounded up. Rounded down,
+/// a timer due later in the current millisecond would get a timeout of 0, and
+/// the loop would call epoll_wait without waiting, over and over, until it was
+/// due.
+fn timeoutMs(now: posix.timespec, next: posix.timespec) i32 {
+    const ns = (@as(i128, next.sec) - now.sec) * std.time.ns_per_s + (next.nsec - now.nsec);
+    if (ns <= 0) return 0;
+    const ms = @divFloor(ns - 1, std.time.ns_per_ms) + 1;
+    return @intCast(@min(ms, std.math.maxInt(i32)));
+}
 
 pub const Completion = struct {
     /// Operation to execute. This is only safe to read BEFORE the completion
@@ -1515,6 +1520,28 @@ test "epoll: stop" {
     loop.stop();
     try loop.run(.until_done);
     try testing.expect(!called);
+}
+
+test "epoll: timeout to a timer rounds up to whole milliseconds" {
+    const testing = std.testing;
+    const us = std.time.ns_per_us;
+    const now: posix.timespec = .{ .sec = 10, .nsec = 200 * us };
+
+    // Later in the same millisecond: a 0 timeout polls until it is due.
+    try testing.expectEqual(1, timeoutMs(now, .{ .sec = 10, .nsec = 900 * us }));
+    try testing.expectEqual(1, timeoutMs(now, .{ .sec = 10, .nsec = 1200 * us }));
+    try testing.expectEqual(2, timeoutMs(now, .{ .sec = 10, .nsec = 1201 * us }));
+    try testing.expectEqual(1000, timeoutMs(now, .{ .sec = 11, .nsec = 200 * us }));
+
+    // Due or overdue: no waiting.
+    try testing.expectEqual(0, timeoutMs(now, now));
+    try testing.expectEqual(0, timeoutMs(now, .{ .sec = 9, .nsec = 0 }));
+
+    // Far off, as the maximum timer is: capped, not overflowed.
+    try testing.expectEqual(std.math.maxInt(i32), timeoutMs(now, .{
+        .sec = std.math.maxInt(isize),
+        .nsec = std.math.maxInt(isize),
+    }));
 }
 
 test "epoll: timer" {
