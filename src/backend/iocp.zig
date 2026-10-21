@@ -320,13 +320,7 @@ pub const Loop = struct {
                 // If we have a timer, we want to set the timeout to our next timer value. If we
                 // have no timer, we wait forever.
                 const t = self.timers.peek() orelse break :timeout null;
-
-                // Determin the time in milliseconds. If the cast fails, we fallback to the maximum
-                // acceptable value.
-                const ms_now = self.cached_now / std.time.ns_per_ms;
-                const ms_next = t.next / std.time.ns_per_ms;
-                const ms = ms_next -| ms_now;
-                break :timeout std.math.cast(windows.DWORD, ms) orelse windows.INFINITE - 1;
+                break :timeout timeoutMs(self.cached_now, t.next);
             };
 
             // Wait for changes IO completions.
@@ -874,6 +868,16 @@ pub const Loop = struct {
         _ = windows.kernel32.CreateIoCompletionPort(fd, self.iocp_handle, 0, 0);
     }
 };
+
+/// Milliseconds to wait for completions until `next`, rounded up. Rounded
+/// down, a timer due later in the current millisecond would get a timeout of
+/// 0, and the loop would poll without waiting, over and over, until it was
+/// due. A wait too long for a DWORD falls back to the longest one short of
+/// INFINITE.
+fn timeoutMs(now: u64, next: u64) windows.DWORD {
+    const ms = std.math.divCeil(u64, next -| now, std.time.ns_per_ms) catch unreachable;
+    return std.math.cast(windows.DWORD, ms) orelse windows.INFINITE - 1;
+}
 
 /// Convenience to convert from windows.HANDLE to windows.ws2_32.SOCKET (which are the same thing).
 inline fn asSocket(h: windows.HANDLE) windows.ws2_32.SOCKET {
@@ -1548,6 +1552,23 @@ test "iocp: stop" {
     loop.stop();
     try loop.run(.until_done);
     try testing.expect(!called);
+}
+
+test "iocp: timeout to a timer rounds up to whole milliseconds" {
+    const testing = std.testing;
+    const us = std.time.ns_per_us;
+    const now: u64 = 10 * std.time.ns_per_s + 200 * us;
+
+    // Later in the same millisecond: a 0 timeout polls until it is due.
+    try testing.expectEqual(1, timeoutMs(now, now + 700 * us));
+    try testing.expectEqual(1, timeoutMs(now, now + 1000 * us));
+    try testing.expectEqual(2, timeoutMs(now, now + 1001 * us));
+
+    // Due or overdue: no waiting.
+    try testing.expectEqual(0, timeoutMs(now, now));
+    try testing.expectEqual(0, timeoutMs(now, now - 1));
+
+    try testing.expectEqual(windows.INFINITE - 1, timeoutMs(now, std.math.maxInt(u64)));
 }
 
 test "iocp: timer" {

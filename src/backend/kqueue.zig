@@ -471,18 +471,7 @@ pub const Loop = struct {
                 // If we have a timer, we want to set the timeout to our next
                 // timer value. If we have no timer, we wait forever.
                 const t = self.timers.peek() orelse break :timeout null;
-
-                // Determine the time in milliseconds.
-                const ms_now = @as(u64, @intCast(self.cached_now.sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(self.cached_now.nsec)) / std.time.ns_per_ms;
-                const ms_next = @as(u64, @intCast(t.next.sec)) * std.time.ms_per_s +
-                    @as(u64, @intCast(t.next.nsec)) / std.time.ns_per_ms;
-                const ms = ms_next -| ms_now;
-
-                // Convert to s/ns for the timespec
-                const sec = ms / std.time.ms_per_s;
-                const nsec = (ms % std.time.ms_per_s) * std.time.ns_per_ms;
-                break :timeout .{ .sec = @intCast(sec), .nsec = @intCast(nsec) };
+                break :timeout timeoutUntil(self.cached_now, t.next);
             };
 
             // Wait for changes. Note that we ALWAYS attempt to get completions
@@ -974,6 +963,20 @@ pub const Loop = struct {
         try self.wakeup_state.wakeup();
     }
 };
+
+/// How long kevent waits for a timer due at `next`, to the nanosecond. In
+/// whole milliseconds rounded down, a timer due later in the current
+/// millisecond would get a zero timeout, and the loop would call kevent
+/// without waiting, over and over, until it was due.
+fn timeoutUntil(now: posix.timespec, next: posix.timespec) posix.timespec {
+    const ns = (@as(i128, next.sec) - now.sec) * std.time.ns_per_s + (next.nsec - now.nsec);
+    if (ns <= 0) return std.mem.zeroes(posix.timespec);
+    return .{
+        // About 68 years: small enough for a kernel's 64-bit time types.
+        .sec = @intCast(@min(@divFloor(ns, std.time.ns_per_s), std.math.maxInt(i32))),
+        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+    };
+}
 
 /// A completion is a request to perform some work with the loop.
 pub const Completion = struct {
@@ -1993,6 +1996,24 @@ test "kqueue: stop" {
     loop.stop();
     try loop.run(.until_done);
     try testing.expect(!called);
+}
+
+test "kqueue: timeout to a timer is exact" {
+    const testing = std.testing;
+    const us = std.time.ns_per_us;
+    const now: posix.timespec = .{ .sec = 10, .nsec = 200 * us };
+
+    // Later in the same millisecond: a zero timeout polls until it is due.
+    try testing.expectEqual(posix.timespec{ .sec = 0, .nsec = 700 * us }, timeoutUntil(now, .{ .sec = 10, .nsec = 900 * us }));
+    try testing.expectEqual(posix.timespec{ .sec = 1, .nsec = 100 * us }, timeoutUntil(now, .{ .sec = 11, .nsec = 300 * us }));
+
+    // Due or overdue: no waiting.
+    try testing.expectEqual(std.mem.zeroes(posix.timespec), timeoutUntil(now, now));
+    try testing.expectEqual(std.mem.zeroes(posix.timespec), timeoutUntil(now, .{ .sec = 9, .nsec = 0 }));
+
+    // Far off, as the maximum timer is: capped, not overflowed.
+    const far = timeoutUntil(now, .{ .sec = std.math.maxInt(isize), .nsec = std.math.maxInt(isize) });
+    try testing.expectEqual(std.math.maxInt(i32), far.sec);
 }
 
 test "kqueue: timer" {
