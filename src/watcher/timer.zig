@@ -637,5 +637,78 @@ fn TimerTests(
             try testing.expect(canceled);
             try testing.expect(cancel_confirm);
         }
+
+        test "timer started after a wait counts from then" {
+            // No threads to wake the loop with.
+            if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
+            const testing = std.testing;
+            const wait_ms = 50;
+            const timer_ms = 20;
+
+            var loop = try xev.Loop.init(.{});
+            defer loop.deinit();
+
+            var notifier = try xev.Async.init();
+            defer notifier.deinit();
+
+            const State = struct {
+                timer: Impl,
+                c_timer: xev.Completion = .{},
+                started_ns: i96 = 0,
+                fired_ns: i96 = 0,
+
+                fn nowNs() i96 {
+                    const io = std.Io.Threaded.global_single_threaded.io();
+                    return std.Io.Clock.awake.now(io).nanoseconds;
+                }
+            };
+            var state: State = .{ .timer = try Impl.init() };
+            defer state.timer.deinit();
+
+            // The loop has waited wait_ms when this runs; the timer it starts
+            // must still take timer_ms.
+            var c_wait: xev.Completion = .{};
+            notifier.wait(&loop, &c_wait, State, &state, (struct {
+                fn callback(
+                    ud: ?*State,
+                    l: *xev.Loop,
+                    _: *xev.Completion,
+                    r: xev.Async.WaitError!void,
+                ) xev.CallbackAction {
+                    _ = r catch unreachable;
+                    const s = ud.?;
+                    s.started_ns = State.nowNs();
+                    s.timer.run(l, &s.c_timer, timer_ms, State, s, (struct {
+                        fn callback(
+                            ud_inner: ?*State,
+                            _: *xev.Loop,
+                            _: *xev.Completion,
+                            r_inner: Impl.RunError!void,
+                        ) xev.CallbackAction {
+                            _ = r_inner catch unreachable;
+                            ud_inner.?.fired_ns = State.nowNs();
+                            return .disarm;
+                        }
+                    }).callback);
+                    return .disarm;
+                }
+            }).callback);
+
+            const sender = try std.Thread.spawn(.{}, (struct {
+                fn run(n: *xev.Async) void {
+                    const io = std.Io.Threaded.global_single_threaded.io();
+                    std.Io.sleep(io, .fromMilliseconds(wait_ms), .awake) catch unreachable;
+                    n.notify() catch unreachable;
+                }
+            }).run, .{&notifier});
+            defer sender.join();
+
+            try loop.run(.until_done);
+
+            // A millisecond's slack for the backend's clock not being this one.
+            const elapsed_ns = state.fired_ns - state.started_ns;
+            try testing.expect(elapsed_ns >= (timer_ms - 1) * std.time.ns_per_ms);
+        }
     };
 }

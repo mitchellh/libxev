@@ -122,6 +122,10 @@ pub const Loop = struct {
 
         /// Whether our loop is in a stopped state or not.
         stopped: bool = false,
+
+        /// True once epoll_wait returns, until "now" is updated again: the
+        /// wait took time that the cached time doesn't count.
+        now_outdated: bool = false,
     } = .{},
 
     pub fn init(options: Options) !Loop {
@@ -241,6 +245,7 @@ pub const Loop = struct {
         const rc = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
         if (linux.errno(rc) == .SUCCESS) {
             self.cached_now = ts;
+            self.flags.now_outdated = false;
         }
     }
 
@@ -323,6 +328,9 @@ pub const Loop = struct {
             isize,
             (next_ms % std.time.ms_per_s) * std.time.ns_per_ms,
         ) orelse return max;
+
+        // "next_ms" is from now, not from before the last wait.
+        if (self.flags.now_outdated) self.update_now();
 
         return .{
             .sec = std.math.add(isize, self.cached_now.sec, next_s) catch
@@ -472,6 +480,7 @@ pub const Loop = struct {
             };
 
             const n = epoll_helper.epoll_wait(self.fd, &events, timeout);
+            self.flags.now_outdated = true;
 
             // Process all our events and invoke their completion handlers
             for (events[0..n]) |ev| {
