@@ -237,9 +237,11 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        var ts: std.os.linux.timespec = undefined;
-        const rc = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
-        if (linux.errno(rc) == .SUCCESS) {
+        var ts: posix.timespec = undefined;
+        // libc's when it is linked: std.os.linux's finds the vDSO only after
+        // std's own startup code, and under libc's makes a syscall each time.
+        const rc = posix.system.clock_gettime(posix.CLOCK.MONOTONIC, &ts);
+        if (posix.errno(rc) == .SUCCESS) {
             self.cached_now = ts;
         }
     }
@@ -1486,6 +1488,75 @@ test "epoll: loop time" {
 
     // should update on a loop tick
     while (now == loop.now()) try loop.run(.no_wait);
+}
+
+test "epoll, io_uring: loop time is read without a syscall where libc's clock is" {
+    // std.os.linux.clock_gettime learns where the vDSO is from std's own
+    // startup code, which libc's replaces: there every read was a syscall.
+    if (!builtin.link_libc or !@hasField(linux.SYS, "clock_gettime")) return error.SkipZigTest;
+    const testing = std.testing;
+    const UringLoop = @import("io_uring.zig").Loop;
+
+    var epoll_loop = try Loop.init(.{});
+    defer epoll_loop.deinit();
+    var uring_loop: ?UringLoop = UringLoop.init(.{}) catch null;
+    defer if (uring_loop) |*l| l.deinit();
+
+    const Check = struct {
+        epoll: *Loop,
+        uring: ?*UringLoop,
+        refused: bool = false,
+        epoll_read: bool = false,
+        uring_read: bool = false,
+
+        // A filter on this thread alone refuses clock_gettime syscalls.
+        fn run(self: *@This()) void {
+            const BPF = linux.BPF;
+            const Insn = extern struct { code: u16, jt: u8, jf: u8, k: u32 };
+            const insns = [_]Insn{
+                .{ .code = BPF.LD | BPF.W | BPF.ABS, .jt = 0, .jf = 0, .k = @offsetOf(linux.SECCOMP.data, "nr") },
+                .{ .code = BPF.JMP | BPF.JEQ | BPF.K, .jt = 0, .jf = 1, .k = @backingInt(linux.SYS.clock_gettime) },
+                .{ .code = BPF.RET | BPF.K, .jt = 0, .jf = 0, .k = linux.SECCOMP.RET.ERRNO | @as(u32, @backingInt(linux.E.PERM)) },
+                .{ .code = BPF.RET | BPF.K, .jt = 0, .jf = 0, .k = linux.SECCOMP.RET.ALLOW },
+            };
+            const prog: extern struct { len: c_ushort, insns: [*]const Insn } = .{ .len = insns.len, .insns = &insns };
+            if (linux.errno(linux.prctl(@backingInt(linux.PR.SET_NO_NEW_PRIVS), 1, 0, 0, 0)) != .SUCCESS) return;
+            if (linux.errno(linux.seccomp(linux.SECCOMP.SET_MODE_FILTER, 0, &prog)) != .SUCCESS) return;
+
+            // Where libc's own read needs the syscall, there is nothing to compare.
+            var before: posix.timespec = undefined;
+            if (posix.errno(std.c.clock_gettime(posix.CLOCK.MONOTONIC, &before)) != .SUCCESS) return;
+            var lts: linux.timespec = undefined;
+            self.refused = linux.errno(linux.clock_gettime(linux.CLOCK.MONOTONIC, &lts)) == .PERM;
+
+            self.epoll.cached_now = .{ .sec = 0, .nsec = 0 };
+            self.epoll.update_now();
+            if (self.uring) |u| {
+                u.cached_now = .{ .sec = 0, .nsec = 0 };
+                u.update_now();
+            }
+            var after: posix.timespec = undefined;
+            _ = std.c.clock_gettime(posix.CLOCK.MONOTONIC, &after);
+            self.epoll_read = within(before, self.epoll.cached_now, after);
+            if (self.uring) |u| self.uring_read = within(before, u.cached_now, after);
+        }
+
+        fn within(lo: posix.timespec, t: posix.timespec, hi: posix.timespec) bool {
+            const ns = struct {
+                fn f(x: posix.timespec) i128 {
+                    return @as(i128, x.sec) * std.time.ns_per_s + x.nsec;
+                }
+            }.f;
+            return ns(lo) <= ns(t) and ns(t) <= ns(hi);
+        }
+    };
+    var check: Check = .{ .epoll = &epoll_loop, .uring = if (uring_loop) |*l| l else null };
+    const thread = try std.Thread.spawn(.{}, Check.run, .{&check});
+    thread.join();
+
+    if (!check.refused) return error.SkipZigTest;
+    try testing.expect(check.epoll_read);
+    if (check.uring != null) try testing.expect(check.uring_read);
 }
 
 test "epoll: stop" {
