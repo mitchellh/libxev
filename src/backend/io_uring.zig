@@ -129,8 +129,10 @@ pub const Loop = struct {
 
     /// Update the cached time.
     pub fn update_now(self: *Loop) void {
-        var ts: linux.timespec = undefined;
-        const rc = linux.clock_gettime(linux.CLOCK.MONOTONIC, &ts);
+        var ts: posix.timespec = undefined;
+        // libc's when it is linked: std.os.linux's finds the vDSO only after
+        // std's own startup code, and under libc's makes a syscall each time.
+        const rc = posix.system.clock_gettime(posix.CLOCK.MONOTONIC, &ts);
         if (posix.errno(rc) == .SUCCESS) {
             self.cached_now = ts;
             self.flags.now_outdated = false;
