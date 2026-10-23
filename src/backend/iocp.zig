@@ -70,6 +70,11 @@ pub const Loop = struct {
 
         /// Whether our loop is in a stopped state or not.
         stopped: bool = false,
+
+        /// True once GetQueuedCompletionStatusEx returns, until "now" is
+        /// updated again: the wait took time that the cached time doesn't
+        /// count.
+        now_outdated: bool = false,
     } = .{},
 
     /// Initialize a new IOCP-backed event loop. See the Options docs
@@ -336,6 +341,7 @@ pub const Loop = struct {
 
                 else => return err,
             };
+            self.flags.now_outdated = true;
 
             // Go through the entries and perform completions callbacks.
             for (entries[0..count]) |entry| {
@@ -401,6 +407,7 @@ pub const Loop = struct {
         // Compute the current timestamp in ms by multiplying the QueryPerfomanceCounter value in
         // ticks by the duration of a tick.
         self.cached_now = windows.QueryPerformanceCounter() * self.qpc_duration;
+        self.flags.now_outdated = false;
     }
 
     /// Add a timer to the loop. The timer will execute in "next_ms". This is oneshot: the timer
@@ -467,6 +474,8 @@ pub const Loop = struct {
 
     // Get the absolute timestamp corresponding to the given "next_ms".
     pub fn timer_next(self: *Loop, next_ms: u64) u64 {
+        // "next_ms" is from now, not from before the last wait.
+        if (self.flags.now_outdated) self.update_now();
         return self.cached_now + next_ms * std.time.ns_per_ms;
     }
 
