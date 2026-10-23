@@ -667,7 +667,7 @@ pub const Completion = struct {
             .accept => .{
                 .accept = if (res >= 0)
                     @intCast(res)
-                else switch (@as(posix.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     .AGAIN => error.Again,
                     else => |errno| posix.unexpectedErrno(errno),
@@ -675,13 +675,13 @@ pub const Completion = struct {
             },
 
             .close => .{
-                .close = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                .close = if (res >= 0) {} else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     else => |errno| posix.unexpectedErrno(errno),
                 },
             },
 
             .connect => .{
-                .connect = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                .connect = if (res >= 0) {} else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     .CONNREFUSED => error.ConnectionRefused,
                     .TIMEDOUT => error.TimedOut,
@@ -691,7 +691,7 @@ pub const Completion = struct {
             },
 
             .poll => .{
-                .poll = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                .poll = if (res >= 0) {} else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     else => |errno| posix.unexpectedErrno(errno),
                 },
             },
@@ -715,7 +715,7 @@ pub const Completion = struct {
             .send => .{
                 .send = if (res >= 0)
                     @intCast(res)
-                else switch (@as(posix.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     .PIPE => error.BrokenPipe,
                     .CONNRESET => error.ConnectionResetByPeer,
@@ -726,7 +726,7 @@ pub const Completion = struct {
             .sendmsg => .{
                 .sendmsg = if (res >= 0)
                     @intCast(res)
-                else switch (@as(posix.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     .PIPE => error.BrokenPipe,
                     .CONNRESET => error.ConnectionResetByPeer,
@@ -735,7 +735,7 @@ pub const Completion = struct {
             },
 
             .shutdown => .{
-                .shutdown = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                .shutdown = if (res >= 0) {} else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     .NOTCONN => error.SocketNotConnected,
                     else => |errno| posix.unexpectedErrno(errno),
@@ -743,7 +743,7 @@ pub const Completion = struct {
             },
 
             .timer => |*op| timer: {
-                const e = @as(posix.E, @enumFromInt(-res));
+                const e = @as(posix.E, @fromBackingInt(@intCast(-res)));
 
                 // If we have reset set, that means that we were canceled so
                 // that we can update our expiration time.
@@ -763,7 +763,7 @@ pub const Completion = struct {
             },
 
             .timer_remove => .{
-                .timer_remove = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                .timer_remove = if (res >= 0) {} else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .NOENT => error.NotFound,
                     .BUSY => error.ExpirationInProgress,
 
@@ -781,7 +781,7 @@ pub const Completion = struct {
             .write => .{
                 .write = if (res >= 0)
                     @intCast(res)
-                else switch (@as(posix.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     // If a write is interrupted, we retry it automatically.
                     .INTR => return .rearm,
@@ -792,7 +792,7 @@ pub const Completion = struct {
             .pwrite => .{
                 .pwrite = if (res >= 0)
                     @intCast(res)
-                else switch (@as(posix.E, @enumFromInt(-res))) {
+                else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .CANCELED => error.Canceled,
                     // If a write is interrupted, we retry it automatically.
                     .INTR => return .rearm,
@@ -801,7 +801,7 @@ pub const Completion = struct {
             },
 
             .cancel => .{
-                .cancel = if (res >= 0) {} else switch (@as(posix.E, @enumFromInt(-res))) {
+                .cancel = if (res >= 0) {} else switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
                     .NOENT => error.NotFound,
                     .ALREADY => error.ExpirationInProgress,
                     else => |errno| posix.unexpectedErrno(errno),
@@ -829,7 +829,7 @@ pub const Completion = struct {
             };
         }
 
-        return switch (@as(posix.E, @enumFromInt(-res))) {
+        return switch (@as(posix.E, @fromBackingInt(@intCast(-res)))) {
             .CANCELED => error.Canceled,
             .CONNRESET => error.ConnectionResetByPeer,
             else => |errno| posix.unexpectedErrno(errno),

@@ -67,7 +67,7 @@ pub extern "c" fn mach_msg(
 ) std.c.kern_return_t;
 
 pub fn getKernError(err: std.c.kern_return_t) KernE {
-    return @as(KernE, @enumFromInt(@as(u32, @truncate(@as(usize, @intCast(err))))));
+    return @as(KernE, @fromBackingInt(@intCast(@as(u32, @truncate(@as(usize, @intCast(err)))))));
 }
 
 /// Kernel return values
@@ -291,7 +291,7 @@ pub const KernE = enum(u32) {
 };
 
 pub fn getMachMsgError(err: mach_msg_return_t) MachMsgE {
-    return @as(MachMsgE, @enumFromInt(@as(u32, @truncate(@as(usize, @intCast(err))))));
+    return @as(MachMsgE, @fromBackingInt(@intCast(@as(u32, @truncate(@as(usize, @intCast(err)))))));
 }
 
 /// Mach msg return values

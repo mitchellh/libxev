@@ -252,7 +252,7 @@ pub fn getsockoptError(sockfd: posix.fd_t) ConnectError!void {
     const rc = system.getsockopt(sockfd, SOL.SOCKET, SO.ERROR, @ptrCast(&err_code), &size);
     std.debug.assert(size == 4);
     switch (posix.errno(rc)) {
-        .SUCCESS => switch (@as(E, @enumFromInt(err_code))) {
+        .SUCCESS => switch (@as(E, @fromBackingInt(@intCast(err_code)))) {
             .SUCCESS => return,
             .ACCES => return error.AccessDenied,
             .PERM => return error.PermissionDenied,
