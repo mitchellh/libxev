@@ -15,6 +15,13 @@ pub const Options = struct {
     /// Backends: io_uring
     entries: u32 = 256,
 
+    /// Avoid accounting for blocking waits as I/O wait. This can be useful for
+    /// loops waiting on non-storage events such as sockets and timers. Ignored
+    /// on kernels without IORING_FEAT_NO_IOWAIT, introduced in Linux 6.15.
+    ///
+    /// Backends: io_uring
+    no_iowait: bool = false,
+
     /// A thread pool to use for blocking operations. If the backend doesn't
     /// need to perform any blocking operations then no threads will ever
     /// be spawned. If the backend does need to perform blocking operations
