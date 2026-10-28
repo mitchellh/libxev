@@ -229,21 +229,14 @@ pub const Loop = struct {
             // submission queue and we're done.
             if (events_len == 0) break;
 
-            // Zero timeout so that kevent returns immediately.
-            var timeout = std.mem.zeroes(posix.timespec);
-            const completed = try kevent_syscall(
-                self.kqueue_fd,
-                events[0..events_len],
-                events[0..events.len],
-                &timeout,
-            );
+            // Receipts only: what is already ready comes through the wait
+            // in tick. Draining events here reported a level-triggered
+            // completion once per batch, queueing it twice, and left it
+            // registered while queued, so the wait could run it again.
+            const receipts = try applyChanges(self.kqueue_fd, events[0..events_len]);
             events_len = 0;
 
-            // Go through the completed events and queue them.
-            // NOTE: we currently never process completions (we set
-            // event list to zero length) because it was leading to
-            // memory corruption we need to investigate.
-            for (events[0..completed]) |ev| {
+            for (receipts) |ev| {
                 // Zero udata values are internal events that we do nothing
                 // on such as the mach port wakeup.
                 if (ev.udata == 0) continue;
@@ -251,19 +244,14 @@ pub const Loop = struct {
                 // We handle deletions separately.
                 if (ev.flags & std.c.EV.DELETE != 0) continue;
 
+                // Registered: its event comes through the wait.
+                if (ev.data == 0) continue;
+
+                // Submission failed for this completion: the syscall error
+                // code is in data.
                 const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
-
-                // If EV_ERROR is set, then submission failed for this
-                // completion. We get the syscall errorcode from data and
-                // store it.
-                if (ev.flags & std.c.EV.ERROR != 0) {
-                    c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
-                } else {
-                    // No error, means that this completion is ready to work.
-                    c.result = c.perform(&ev);
-                }
-
-                assert(c.result != null);
+                c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
+                c.next = null;
                 self.completions.push(c);
             }
         }
@@ -416,20 +404,15 @@ pub const Loop = struct {
                 }
             }
 
-            // Process the completions we already have completed.
+            // Process the completions we already have completed. None of
+            // them is registered with kqueue: submit() queues only the
+            // changes that failed, so nothing here needs deleting.
             while (self.completions.pop()) |c| {
-                // disarm_ev is the Kevent to use for disarming if the
-                // completion wants to disarm. We have to calculate this up
-                // front because c can be reused in callback.
-                const disarm_ev: ?Kevent = ev: {
-                    // If we're not active then we were never part of the kqueue.
-                    // If we are part of a threadpool we also never were part
-                    // of the kqueue.
-                    if (c.flags.state != .active or
-                        c.flags.threadpool) break :ev null;
-
-                    break :ev c.kevent();
-                };
+                // A kevent operation whose registration failed, which a rearm
+                // registers again. Read up front because c can be reused in
+                // the callback.
+                const failed_kevent = c.flags.state == .active and
+                    !c.flags.threadpool and c.kevent() != null;
 
                 // We store whether this completion was active so we can decrement
                 // the active count later
@@ -442,26 +425,19 @@ pub const Loop = struct {
                 // Completion queue items MUST have a result set.
                 const action = c.callback(c.userdata, self, c, c.result.?);
                 switch (action) {
-                    // If we're active we have to schedule a delete. Otherwise
-                    // we do nothing because we were never part of the kqueue.
-                    .disarm => {
-                        if (disarm_ev) |ev| {
-                            events[changes] = ev;
-                            events[changes].flags = std.c.EV.DELETE;
-                            events[changes].udata = 0;
-                            changes += 1;
-                            assert(changes <= events.len);
-                        }
-
-                        if (c_active) self.active -= 1;
+                    .disarm => if (c_active) {
+                        self.active -= 1;
                     },
 
-                    // Only resubmit if we aren't already active (in the queue)
-                    .rearm => if (!c_active) self.submissions.push(c),
+                    // Resubmit as .adding, since submit stops a .dead
+                    // completion instead of starting it. start() counts it
+                    // active again.
+                    .rearm => if (!c_active or failed_kevent) {
+                        if (c_active) self.active -= 1;
+                        c.flags.state = .adding;
+                        self.submissions.push(c);
+                    },
                 }
-
-                // If we filled the events slice, we break to avoid overflow.
-                if (changes == events.len) break;
             }
 
             // Determine our next timeout based on the timers
@@ -563,7 +539,7 @@ pub const Loop = struct {
             }
 
             // If we ran through the loop once we break if we don't care.
-            if (wait == 0) break;
+            if (wait == 0 and changes == 0) break;
         }
     }
 
@@ -1864,6 +1840,16 @@ const Kevent = switch (builtin.os.tag) {
     else => @compileError("kqueue not supported yet for target OS"),
 };
 
+/// Applies `changes` without taking any pending event: each change returns
+/// one receipt in its own slot (EV_ERROR, with data zero on success), and an
+/// event list exactly that long leaves the kernel no room to scan for more.
+fn applyChanges(kq: i32, changes: []Kevent) KEventError![]Kevent {
+    for (changes) |*ev| ev.flags |= std.c.EV.RECEIPT;
+    var timeout = std.mem.zeroes(posix.timespec);
+    const n = try kevent_syscall(kq, changes, changes, &timeout);
+    return changes[0..n];
+}
+
 /// kevent calls either kevent or kevent64 depending on the
 /// target platform.
 fn kevent_syscall(
@@ -2860,6 +2846,63 @@ test "kqueue: timer armed from delayed callback must not fire early" {
     try testing.expect(elapsed_ms >= @as(i128, @intCast(timer_delay_ms)));
 }
 
+test "kqueue: cancel after a rearm of a completion reported at submit" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    var fds: [2]posix.fd_t = undefined;
+    try testing.expectEqual(@as(c_int, 0), std.c.pipe(&fds));
+    defer _ = std.c.close(fds[0]);
+    defer _ = std.c.close(fds[1]);
+
+    // Readable before submission, so the first wait reports it.
+    try testing.expectEqual(@as(isize, 1), std.c.write(fds[1], "a", 1));
+
+    const State = struct { reads: usize = 0, canceled: bool = false };
+    var state: State = .{};
+    var buf: [1]u8 = undefined;
+    var c: Completion = .{
+        .op = .{ .read = .{ .fd = fds[0], .buffer = .{ .slice = &buf } } },
+        .userdata = &state,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                const s = @as(*State, @ptrCast(@alignCast(ud.?)));
+                _ = r.read catch |err| {
+                    s.canceled = err == error.Canceled;
+                    return .disarm;
+                };
+                s.reads += 1;
+                return .rearm;
+            }
+        }).callback,
+    };
+    loop.add(&c);
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), state.reads);
+    try testing.expect(c.state() == .active);
+
+    var cancel: Completion = .{
+        .op = .{ .cancel = .{ .c = &c } },
+        .callback = (struct {
+            fn callback(_: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                _ = r.cancel catch unreachable;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&cancel);
+    try loop.run(.no_wait);
+    try testing.expect(state.canceled);
+
+    // Cancelled, so new data must not reach the callback.
+    try testing.expectEqual(@as(isize, 1), std.c.write(fds[1], "b", 1));
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), state.reads);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
 test "kqueue: socket accept/cancel cancellation should decrease active count" {
     const mem = std.mem;
     const testing = std.testing;
@@ -2969,4 +3012,597 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
     // Wait for the sockets to close
     try loop.run(.until_done);
     try testing.expect(ln == 0);
+}
+
+fn makePipe() ![2]posix.fd_t {
+    var fds: [2]posix.fd_t = undefined;
+    const rc = posix.system.pipe(&fds);
+    return switch (posix.errno(rc)) {
+        .SUCCESS => fds,
+        .MFILE => error.ProcessFdQuotaExceeded,
+        .NFILE => error.SystemFdQuotaExceeded,
+        else => |err| posix.unexpectedErrno(err),
+    };
+}
+
+test "kqueue: tick(0) flushes EV_DELETE after disarm" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pfds = try makePipe();
+    defer {
+        xev_posix.close(pfds[0]);
+        xev_posix.close(pfds[1]);
+    }
+
+    const reader = pfds[0];
+    const writer = pfds[1];
+
+    var fire_count: usize = 0;
+    var buf: [16]u8 = undefined;
+
+    const disarm_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const ptr: *usize = @ptrCast(@alignCast(ud.?));
+            ptr.* += 1;
+            return .disarm;
+        }
+    }).callback;
+
+    // First read: arm, trigger, disarm.
+    var c1: Completion = .{
+        .op = .{ .read = .{ .fd = reader, .buffer = .{ .slice = &buf } } },
+        .userdata = &fire_count,
+        .callback = disarm_cb,
+    };
+    loop.add(&c1);
+    _ = try xev_posix.write(writer, &[_]u8{42});
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), fire_count);
+
+    // Second read: if stale filter lingers, it fires alongside the new
+    // one and fire_count exceeds 2.
+    _ = try xev_posix.write(writer, &[_]u8{ 43, 44 });
+    var c2: Completion = .{
+        .op = .{ .read = .{ .fd = reader, .buffer = .{ .slice = &buf } } },
+        .userdata = &fire_count,
+        .callback = disarm_cb,
+    };
+    loop.add(&c2);
+    try loop.run(.once);
+    try testing.expectEqual(@as(usize, 2), fire_count);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: tick(0) no-op when nothing pending" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: more ready reads than one submit batch each complete once" {
+    // Readable before they're submitted: submit() registers them 256 at a
+    // time. Taking events with each batch reported the earlier batches
+    // again, queueing a completion twice, and left them registered while
+    // queued, so the wait ran them a second time.
+    const testing = std.testing;
+    const n = 600;
+
+    var limit = try posix.getrlimit(.NOFILE);
+    if (limit.cur < 2 * n) {
+        if (limit.max < 2 * n) return error.SkipZigTest;
+        limit.cur = 2 * n;
+        try posix.setrlimit(.NOFILE, limit);
+    }
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const readers = try testing.allocator.alloc(posix.fd_t, n);
+    defer testing.allocator.free(readers);
+    const completions = try testing.allocator.alloc(Completion, n);
+    defer testing.allocator.free(completions);
+    const calls = try testing.allocator.alloc(u8, n);
+    defer testing.allocator.free(calls);
+    @memset(calls, 0);
+    var bufs: [n][1]u8 = undefined;
+
+    for (readers, completions, calls, &bufs) |*fd, *c, *count, *buf| {
+        const p = try makePipe();
+        _ = try xev_posix.write(p[1], &[_]u8{1});
+        xev_posix.close(p[1]);
+        fd.* = p[0];
+        c.* = .{
+            .op = .{ .read = .{ .fd = p[0], .buffer = .{ .slice = buf } } },
+            .userdata = count,
+            .callback = (struct {
+                fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                    _ = r.read catch unreachable;
+                    const k: *u8 = @ptrCast(ud.?);
+                    k.* += 1;
+                    return .disarm;
+                }
+            }).callback,
+        };
+        loop.add(c);
+    }
+    defer for (readers) |fd| xev_posix.close(fd);
+
+    try loop.run(.until_done);
+    for (calls) |count| try testing.expectEqual(@as(u8, 1), count);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: multiple disarms in a single tick(0)" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pipe1 = try makePipe();
+    defer {
+        xev_posix.close(pipe1[0]);
+        xev_posix.close(pipe1[1]);
+    }
+
+    const pipe2 = try makePipe();
+    defer {
+        xev_posix.close(pipe2[0]);
+        xev_posix.close(pipe2[1]);
+    }
+
+    var fire_count: usize = 0;
+    var buf1: [16]u8 = undefined;
+    var buf2: [16]u8 = undefined;
+
+    const disarm_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const ptr: *usize = @ptrCast(@alignCast(ud.?));
+            ptr.* += 1;
+            return .disarm;
+        }
+    }).callback;
+
+    var c1: Completion = .{
+        .op = .{ .read = .{ .fd = pipe1[0], .buffer = .{ .slice = &buf1 } } },
+        .userdata = &fire_count,
+        .callback = disarm_cb,
+    };
+    loop.add(&c1);
+
+    var c2: Completion = .{
+        .op = .{ .read = .{ .fd = pipe2[0], .buffer = .{ .slice = &buf2 } } },
+        .userdata = &fire_count,
+        .callback = disarm_cb,
+    };
+    loop.add(&c2);
+
+    _ = try xev_posix.write(pipe1[1], &[_]u8{1});
+    _ = try xev_posix.write(pipe2[1], &[_]u8{2});
+
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 2), fire_count);
+
+    // Verify stale filters don't linger.
+    _ = try xev_posix.write(pipe1[1], &[_]u8{3});
+    _ = try xev_posix.write(pipe2[1], &[_]u8{4});
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 2), fire_count);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: disarm write while read is armed on same fd" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pipe_fds = try makePipe();
+    defer {
+        xev_posix.close(pipe_fds[0]);
+        xev_posix.close(pipe_fds[1]);
+    }
+
+    const reader = pipe_fds[0];
+    const writer = pipe_fds[1];
+
+    var read_fired = false;
+    var write_fired = false;
+    var read_buf: [1]u8 = undefined;
+
+    var c_write: Completion = .{
+        .op = .{ .write = .{ .fd = writer, .buffer = .{ .slice = "x" } } },
+        .userdata = &write_fired,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.write catch unreachable;
+                const ptr: *bool = @ptrCast(@alignCast(ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_write);
+
+    var c_read: Completion = .{
+        .op = .{ .read = .{ .fd = reader, .buffer = .{ .slice = &read_buf } } },
+        .userdata = &read_fired,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l: *Loop,
+                c: *Completion,
+                r: Result,
+            ) CallbackAction {
+                _ = l;
+                _ = c;
+                _ = r.read catch unreachable;
+                const ptr: *bool = @ptrCast(@alignCast(ud.?));
+                ptr.* = true;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_read);
+
+    _ = try xev_posix.write(writer, "y");
+    try loop.run(.no_wait);
+    try testing.expect(write_fired);
+    try testing.expect(read_fired);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: rapid tick(0) disarm cycles" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pipe_fds = try makePipe();
+    defer {
+        xev_posix.close(pipe_fds[0]);
+        xev_posix.close(pipe_fds[1]);
+    }
+
+    const reader = pipe_fds[0];
+    const writer = pipe_fds[1];
+
+    var fire_total: usize = 0;
+    var buf: [4]u8 = undefined;
+
+    const disarm_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const ptr: *usize = @ptrCast(@alignCast(ud.?));
+            ptr.* += 1;
+            return .disarm;
+        }
+    }).callback;
+
+    for (0..5) |_| {
+        var c_read: Completion = .{
+            .op = .{ .read = .{ .fd = reader, .buffer = .{ .slice = &buf } } },
+            .userdata = &fire_total,
+            .callback = disarm_cb,
+        };
+        loop.add(&c_read);
+        _ = try xev_posix.write(writer, &[_]u8{1});
+        try loop.run(.no_wait);
+    }
+
+    try testing.expectEqual(@as(usize, 5), fire_total);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+
+    // Verify no stale filters remain.
+    _ = try xev_posix.write(writer, &[_]u8{ 9, 9, 9 });
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 5), fire_total);
+}
+
+test "kqueue: rearm from non-kqueue completion re-enqueues correctly" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pfds1 = try makePipe();
+    const pfds2 = try makePipe();
+    defer xev_posix.close(pfds1[0]);
+    defer xev_posix.close(pfds2[0]);
+
+    const State = struct {
+        fire_count: usize = 0,
+        fd1: posix.fd_t,
+        fd2: posix.fd_t,
+    };
+    var state = State{ .fd1 = pfds1[1], .fd2 = pfds2[1] };
+
+    const rearm_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = r.close catch {};
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            if (s.fire_count == 1) {
+                c.op = .{ .close = .{ .fd = s.fd2 } };
+                return .rearm;
+            }
+            return .disarm;
+        }
+    }).callback;
+
+    var c1: Completion = .{
+        .op = .{ .close = .{ .fd = state.fd1 } },
+        .userdata = &state,
+        .callback = rearm_cb,
+    };
+    loop.add(&c1);
+
+    // First tick: close fd1, callback fires, returns .rearm.
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 1), state.fire_count);
+
+    // Second tick: without fix, .dead state routes to stop_completion
+    // and callback never fires again. With fix, close fd2 succeeds.
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 2), state.fire_count);
+
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: tick(0) flushes disarm from kevent event processing path" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const pA = try makePipe();
+    const pB = try makePipe();
+    defer {
+        xev_posix.close(pA[0]);
+        xev_posix.close(pA[1]);
+    }
+    defer {
+        xev_posix.close(pB[0]);
+        xev_posix.close(pB[1]);
+    }
+
+    const State = struct {
+        fire_count: usize = 0,
+        writerB: posix.fd_t,
+        buf: [16]u8 = undefined,
+    };
+    var state = State{ .writerB = pB[1] };
+
+    // readB callback: disarm and count.
+    const disarm_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            return .disarm;
+        }
+    }).callback;
+
+    // readA callback: write to pipeB so readB fires from the flushing
+    // kevent_syscall in the same tick, then disarm.
+    const disarmA_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            _ = xev_posix.write(s.writerB, &[_]u8{42}) catch unreachable;
+            return .disarm;
+        }
+    }).callback;
+
+    // Arm both reads. Only pipeA has data.
+    _ = try xev_posix.write(pA[1], &[_]u8{1});
+
+    var cA: Completion = .{
+        .op = .{ .read = .{ .fd = pA[0], .buffer = .{ .slice = &state.buf } } },
+        .userdata = &state,
+        .callback = disarmA_cb,
+    };
+    loop.add(&cA);
+
+    var cB: Completion = .{
+        .op = .{ .read = .{ .fd = pB[0], .buffer = .{ .slice = &state.buf } } },
+        .userdata = &state,
+        .callback = disarm_cb,
+    };
+    loop.add(&cB);
+
+    // tick(0): readA fires, writes to pipeB, returns disarm (changes=1).
+    // Flushing kevent_syscall returns readB. readB fires, returns disarm
+    // (changes=1 again). Without fix, readB's EV_DELETE is lost.
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 2), state.fire_count);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+
+    // Write more data, then arm a timer to keep the loop alive so
+    // kevent_syscall is reached. If stale readB filter lingers, it fires.
+    _ = try xev_posix.write(pB[1], &[_]u8{43});
+
+    var timer_fired = false;
+    var c_timer: Completion = undefined;
+    loop.timer(&c_timer, 100, &timer_fired, (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.timer catch unreachable;
+            const ptr: *bool = @ptrCast(@alignCast(ud.?));
+            ptr.* = true;
+            return .disarm;
+        }
+    }).callback);
+
+    try loop.run(.once);
+    try testing.expectEqual(@as(usize, 2), state.fire_count);
+    try testing.expect(timer_fired);
+    try testing.expectEqual(@as(usize, 0), loop.active);
+}
+
+test "kqueue: re-add armed completion from callback does not corrupt queue" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const p1 = try makePipe();
+    const p2 = try makePipe();
+    defer {
+        xev_posix.close(p1[0]);
+        xev_posix.close(p1[1]);
+    }
+    defer {
+        xev_posix.close(p2[0]);
+        xev_posix.close(p2[1]);
+    }
+
+    const State = struct {
+        fire_count: usize = 0,
+        c2: *Completion,
+        buf: [16]u8 = undefined,
+    };
+
+    // Placeholder for c2, filled in after we have the pointer.
+    var c2: Completion = undefined;
+    var state = State{ .c2 = &c2 };
+
+    // c1 callback: re-add c2 to submissions (simulates #169 scenario), disarm.
+    const c1_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = c;
+            _ = r.read catch unreachable;
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            l.add(s.c2);
+            return .disarm;
+        }
+    }).callback;
+
+    // c2 callback: disarm and count.
+    const c2_cb: Callback = (struct {
+        fn callback(
+            ud: ?*anyopaque,
+            l: *Loop,
+            c: *Completion,
+            r: Result,
+        ) CallbackAction {
+            _ = l;
+            _ = c;
+            _ = r.read catch unreachable;
+            const s: *State = @ptrCast(@alignCast(ud.?));
+            s.fire_count += 1;
+            return .disarm;
+        }
+    }).callback;
+
+    // Arm c2 first (in kqueue), then arm c1.
+    c2 = .{
+        .op = .{ .read = .{ .fd = p2[0], .buffer = .{ .slice = &state.buf } } },
+        .userdata = &state,
+        .callback = c2_cb,
+    };
+    loop.add(&c2);
+
+    var c1: Completion = .{
+        .op = .{ .read = .{ .fd = p1[0], .buffer = .{ .slice = &state.buf } } },
+        .userdata = &state,
+        .callback = c1_cb,
+    };
+    loop.add(&c1);
+
+    // Write to p1: c1 fires, re-adds c2, then disarms.
+    // Write to p2: c2 fires (from the re-add OR from its original kqueue
+    // registration). The defensive c.next=null in submit prevents the
+    // queue.zig:24 assert from firing when the kevent returns c2's event.
+    _ = try xev_posix.write(p1[1], &[_]u8{1});
+    _ = try xev_posix.write(p2[1], &[_]u8{2});
+
+    try loop.run(.no_wait);
+    try testing.expectEqual(@as(usize, 2), state.fire_count);
+    try testing.expectEqual(@as(usize, 0), loop.active);
 }
