@@ -12,6 +12,10 @@ const CallbackAction = looppkg.CallbackAction;
 const CompletionState = looppkg.CompletionState;
 const noopCallback = looppkg.NoopCallback(@This());
 
+// These Linux 6.15 constants are not yet defined by Zig's standard library.
+const IORING_ENTER_NO_IOWAIT: u32 = 1 << 7;
+const IORING_FEAT_NO_IOWAIT: u32 = 1 << 17;
+
 pub const ShutdownHow = std.Io.net.ShutdownHow;
 
 /// True if this backend is available on this platform.
@@ -55,6 +59,8 @@ pub const Loop = struct {
 
         /// Whether we're in a run or not (to prevent nested runs).
         in_run: bool = false,
+
+        no_iowait: bool = false,
     } = .{},
 
     /// Initialize the event loop. "entries" is the maximum number of
@@ -70,6 +76,7 @@ pub const Loop = struct {
             // for people using the io_uring API directly to be able to set
             // the flags for this.
             .ring = try linux.IoUring.init(entries, 0),
+            .flags = .{ .no_iowait = options.no_iowait },
         };
         result.update_now();
 
@@ -169,7 +176,7 @@ pub const Loop = struct {
             // of the submit call, because then we can do exactly once syscall
             // to get all our events.
             if (self.submissions.empty()) {
-                _ = self.ring.submit_and_wait(wait) catch |err| switch (err) {
+                _ = self.submitAndWait(wait) catch |err| switch (err) {
                     error.SignalInterrupt => continue,
                     else => return err,
                 };
@@ -183,7 +190,7 @@ pub const Loop = struct {
             }
 
             // Wait for completions...
-            const count = self.ring.copy_cqes(&cqes, wait) catch |err| switch (err) {
+            const count = self.copyCqes(&cqes, wait) catch |err| switch (err) {
                 // EINTR means our blocking syscall was interrupted by some
                 // process signal. We just retry when we can. See signal(7).
                 error.SignalInterrupt => continue,
@@ -207,6 +214,30 @@ pub const Loop = struct {
                 .until_done => {},
             }
         }
+    }
+
+    fn noIowait(self: *const Loop, wait: u32) bool {
+        return wait > 0 and self.flags.no_iowait and
+            self.ring.features & IORING_FEAT_NO_IOWAIT != 0;
+    }
+
+    fn submitAndWait(self: *Loop, wait: u32) !u32 {
+        if (!self.noIowait(wait)) return self.ring.submit_and_wait(wait);
+
+        const submitted = self.ring.flush_sq();
+        var flags: u32 = 0;
+        _ = self.ring.sq_ring_needs_enter(&flags);
+        return self.ring.enter(submitted, wait, flags |
+            linux.IORING_ENTER_GETEVENTS | IORING_ENTER_NO_IOWAIT);
+    }
+
+    fn copyCqes(self: *Loop, cqes: []linux.io_uring_cqe, wait: u32) !u32 {
+        if (!self.noIowait(wait)) return self.ring.copy_cqes(cqes, wait);
+
+        const count = try self.ring.copy_cqes(cqes, 0);
+        if (count > 0) return count;
+        _ = try self.ring.enter(0, wait, linux.IORING_ENTER_GETEVENTS | IORING_ENTER_NO_IOWAIT);
+        return self.ring.copy_cqes(cqes, 0);
     }
 
     /// The errors that can come from submit. This has to be explicit
@@ -1230,6 +1261,61 @@ test "io_uring: timerfd" {
     try loop.run(.until_done);
     try testing.expect(called);
     try testing.expect(c.state() == .dead);
+}
+
+test "io_uring: no_iowait feature gate and completion waits" {
+    const testing = std.testing;
+    const Timerfd = @import("../linux/timerfd.zig").Timerfd;
+    const defaults: looppkg.Options = .{};
+    try testing.expect(!defaults.no_iowait);
+
+    for ([_]bool{ false, true }) |requested| {
+        for ([_]bool{ false, true }) |without_support| {
+            // One SQ entry exercises the completion wait after the overflow
+            // queue is submitted, rather than the combined submit-and-wait.
+            for ([_]u32{ 1, 8 }) |entries| {
+                var loop = try Loop.init(.{
+                    .entries = entries,
+                    .no_iowait = requested,
+                });
+                defer loop.deinit();
+                if (without_support) loop.ring.features &= ~IORING_FEAT_NO_IOWAIT;
+                const supported = loop.ring.features & IORING_FEAT_NO_IOWAIT != 0;
+                try testing.expectEqual(requested and supported, loop.noIowait(1));
+                try testing.expect(!loop.noIowait(0));
+
+                var timer = try Timerfd.init(.MONOTONIC, .{});
+                defer timer.deinit();
+                var called: usize = 0;
+                var first: Completion = .{
+                    .op = .{ .poll = .{ .fd = timer.fd } },
+                    .userdata = &called,
+                    .callback = (struct {
+                        fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                            _ = r.poll catch unreachable;
+                            const count: *usize = @ptrCast(@alignCast(ud.?));
+                            count.* += 1;
+                            return .disarm;
+                        }
+                    }).callback,
+                };
+                var second = first;
+                loop.add(&first);
+                if (entries == 1) {
+                    loop.add(&second);
+                } else {
+                    try loop.run(.no_wait);
+                    try testing.expectEqual(@as(usize, 0), called);
+                }
+
+                try timer.set(.{}, &.{ .value = .{ .nanoseconds = std.time.ns_per_ms } }, null);
+                try loop.run(.until_done);
+                try testing.expectEqual(@as(usize, if (entries == 1) 2 else 1), called);
+                try testing.expect(first.state() == .dead);
+                if (entries == 1) try testing.expect(second.state() == .dead);
+            }
+        }
+    }
 }
 
 test "io_uring: timer" {
