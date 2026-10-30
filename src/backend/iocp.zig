@@ -313,10 +313,12 @@ pub const Loop = struct {
             }
 
             // If we have processed enough event, we break out of the loop.
-            if (wait_rem == 0) break;
+            if (wait > 0 and wait_rem == 0) break;
 
             // Determine our next timeout based on the timers.
             const timeout: ?windows.DWORD = timeout: {
+                if (wait == 0) break :timeout 0;
+
                 // If we have a timer, we want to set the timeout to our next timer value. If we
                 // have no timer, we wait forever.
                 const t = self.timers.peek() orelse break :timeout null;
@@ -2276,6 +2278,54 @@ test "iocp: socket accept/connect/send/recv/close" {
     try loop.run(.until_done);
     try testing.expect(ln_closed);
     try testing.expect(client_conn_closed);
+}
+
+test "iocp: no_wait collects what the kernel has finished" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const address = try net.Address.parseIp4("127.0.0.1", 3132);
+    const socket = try windows.WSASocketW(windows.ws2_32.AF.INET, windows.ws2_32.SOCK.DGRAM, windows.ws2_32.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    defer iocpClose(socket);
+    try iocpBind(asSocket(socket), &address.any, address.getOsSockLen());
+
+    var received: ?ReadError!usize = null;
+    var buf: [8]u8 = undefined;
+    var c: Completion = .{
+        .op = .{ .recvfrom = .{ .fd = socket, .buffer = .{ .slice = &buf } } },
+        .userdata = &received,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+                const out: *?ReadError!usize = @ptrCast(@alignCast(ud.?));
+                out.* = r.recvfrom;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c);
+    try loop.run(.no_wait);
+    try testing.expect(received == null);
+
+    const sender = try windows.WSASocketW(windows.ws2_32.AF.INET, windows.ws2_32.SOCK.DGRAM, windows.ws2_32.IPPROTO.UDP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    defer iocpClose(sender);
+    const Os = struct {
+        extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
+        extern "ws2_32" fn sendto(s: windows.ws2_32.SOCKET, buf: [*]const u8, len: i32, flags: i32, to: *const posix.sockaddr, to_len: i32) callconv(.winapi) i32;
+    };
+    try testing.expectEqual(4, Os.sendto(asSocket(sender), "ping", 4, 0, &address.any, @intCast(address.getOsSockLen())));
+
+    // Loopback delivery isn't synchronous, so this gives it time, without
+    // ever letting the loop block.
+    for (0..1000) |_| {
+        try loop.run(.no_wait);
+        if (received != null) break;
+        Os.Sleep(1);
+    }
+    try testing.expect(received != null);
+    try testing.expectEqual(4, try received.?);
+    try testing.expectEqualStrings("ping", buf[0..4]);
 }
 
 test "iocp: recv cancellation" {
