@@ -634,7 +634,7 @@ pub const Loop = struct {
                     break :action switch (err) {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
                         .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .send = error.Canceled } },
-                        .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .send = error.ConnectionResetByPeer } },
+                        .WSAECONNRESET, .WSAENETRESET, .WSAESHUTDOWN => .{ .result = .{ .send = error.ConnectionResetByPeer } },
                         else => .{ .result = .{ .send = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -663,6 +663,7 @@ pub const Loop = struct {
                         windows.ws2_32.WinsockError.WSA_IO_PENDING => .{ .submitted = {} },
                         .WSA_OPERATION_ABORTED, .WSAECONNABORTED => .{ .result = .{ .recv = error.Canceled } },
                         .WSAECONNRESET, .WSAENETRESET => .{ .result = .{ .recv = error.ConnectionResetByPeer } },
+                        .WSAESHUTDOWN => .{ .result = .{ .recv = error.EOF } },
                         else => .{ .result = .{ .recv = windows.unexpectedWSAError(err) } },
                     };
                 }
@@ -1095,7 +1096,7 @@ pub const Completion = struct {
                     return .{
                         .send = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
-                            .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
+                            .WSAECONNRESET, .WSAENETRESET, .WSAESHUTDOWN => error.ConnectionResetByPeer,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
@@ -1115,6 +1116,7 @@ pub const Completion = struct {
                         .recv = switch (err) {
                             .WSA_OPERATION_ABORTED, .WSAECONNABORTED => error.Canceled,
                             .WSAECONNRESET, .WSAENETRESET => error.ConnectionResetByPeer,
+                            .WSAESHUTDOWN => error.EOF,
                             else => windows.unexpectedWSAError(err),
                         },
                     };
@@ -2010,6 +2012,62 @@ test "iocp: file IO with offset" {
     // Wait for the read
     try loop.run(.until_done);
     try testing.expectEqualSlices(u8, &write_buf, read_buf[0..read_len]);
+}
+
+test "iocp: recv and send on a socket that was shut down" {
+    const mem = std.mem;
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    const address = try net.Address.parseIp4("127.0.0.1", 3133);
+    const ln = try windows.WSASocketW(windows.ws2_32.AF.INET, windows.ws2_32.SOCK.STREAM, windows.ws2_32.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    defer iocpClose(ln);
+    try iocpSetsockopt(asSocket(ln), windows.ws2_32.SOL.SOCKET, windows.ws2_32.SO.REUSEADDR, &mem.toBytes(@as(c_int, 1)));
+    try iocpBind(asSocket(ln), &address.any, address.getOsSockLen());
+    try iocpListen(asSocket(ln), 1);
+
+    const conn = try windows.WSASocketW(windows.ws2_32.AF.INET, windows.ws2_32.SOCK.STREAM, windows.ws2_32.IPPROTO.TCP, null, 0, windows.ws2_32.WSA_FLAG_OVERLAPPED);
+    defer iocpClose(conn);
+    try testing.expectEqual(0, windows.ws2_32.connect(asSocket(conn), &address.any, @intCast(address.getOsSockLen())));
+    try iocpShutdown(asSocket(conn), .both);
+
+    const Outcome = struct {
+        recv: ?ReadError!usize = null,
+        send: ?WriteError!usize = null,
+
+        fn onRecv(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+            const self: *@This() = @ptrCast(@alignCast(ud.?));
+            self.recv = r.recv;
+            return .disarm;
+        }
+
+        fn onSend(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+            const self: *@This() = @ptrCast(@alignCast(ud.?));
+            self.send = r.send;
+            return .disarm;
+        }
+    };
+
+    var outcome: Outcome = .{};
+    var buf: [8]u8 = undefined;
+    var c_recv: Completion = .{
+        .op = .{ .recv = .{ .fd = conn, .buffer = .{ .slice = &buf } } },
+        .userdata = &outcome,
+        .callback = Outcome.onRecv,
+    };
+    var c_send: Completion = .{
+        .op = .{ .send = .{ .fd = conn, .buffer = .{ .slice = "ping" } } },
+        .userdata = &outcome,
+        .callback = Outcome.onSend,
+    };
+    loop.add(&c_recv);
+    loop.add(&c_send);
+    try loop.run(.until_done);
+
+    try testing.expectError(error.EOF, outcome.recv.?);
+    try testing.expectError(error.ConnectionResetByPeer, outcome.send.?);
 }
 
 test "iocp: socket accept/connect/send/recv/close" {
