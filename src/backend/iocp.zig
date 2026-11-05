@@ -357,7 +357,7 @@ pub const Loop = struct {
                     const completion: *Completion = @ptrFromInt(entry.lpCompletionKey);
                     completion.result = .{ .job_object = .{
                         .message = .{
-                            .type = @enumFromInt(entry.dwNumberOfBytesTransferred),
+                            .type = @fromBackingInt(@intCast(entry.dwNumberOfBytesTransferred)),
                             .value = @intFromPtr(entry.lpOverlapped),
                         },
                     } };

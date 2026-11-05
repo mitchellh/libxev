@@ -4,8 +4,6 @@ const Allocator = std.mem.Allocator;
 const xev = @import("xev");
 //const xev = @import("xev").Dynamic;
 
-
-
 pub const std_options: std.Options = .{
     .log_level = .info,
 };

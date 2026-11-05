@@ -1292,7 +1292,7 @@ pub const Completion = struct {
     /// in the situation that kqueue fails to enqueue the completion or
     /// a raw syscall fails.
     fn syscall_result(c: *Completion, r: i32) Result {
-        const errno: posix.E = if (r >= 0) .SUCCESS else @enumFromInt(-r);
+        const errno: posix.E = if (r >= 0) .SUCCESS else @fromBackingInt(@intCast(-r));
         return switch (c.op) {
             .noop => unreachable,
 
@@ -1553,7 +1553,7 @@ fn getsockoptError(socket: posix.socket_t) ConnectError!void {
     }
 
     if (err_code == 0) return;
-    return switch (@as(posix.E, @enumFromInt(@as(u16, @intCast(err_code))))) {
+    return switch (@as(posix.E, @fromBackingInt(@intCast(@as(u16, @intCast(err_code)))))) {
         .ADDRNOTAVAIL => error.AddressUnavailable,
         .AFNOSUPPORT => error.AddressFamilyUnsupported,
         .ACCES, .PERM => error.AccessDenied,
@@ -1926,7 +1926,7 @@ fn kevent_syscall(
 
 /// Converts a posix errno to the negative i32 format expected by syscall_result.
 inline fn errno_to_result(errno: posix.E) i32 {
-    return -@as(i32, @intCast(@intFromEnum(errno)));
+    return -@as(i32, @intCast(@backingInt(errno)));
 }
 
 /// kevent_init initializes a Kevent from a std.c.Kevent. This is used when
@@ -2714,7 +2714,7 @@ test "kqueue: mach port" {
 
     // Send a message to the port
     var msg: darwin.mach_msg_header_t = .{
-        .msgh_bits = @intFromEnum(posix.system.MACH.MSG.TYPE.MAKE_SEND_ONCE),
+        .msgh_bits = @backingInt(posix.system.MACH.MSG.TYPE.MAKE_SEND_ONCE),
         .msgh_size = @sizeOf(darwin.mach_msg_header_t),
         .msgh_remote_port = mach_port,
         .msgh_local_port = darwin.MACH_PORT_NULL,
@@ -2829,7 +2829,7 @@ test "kqueue: timer armed from delayed callback must not fire early" {
             ) catch unreachable;
 
             var msg: darwin.mach_msg_header_t = .{
-                .msgh_bits = @intFromEnum(posix.system.MACH.MSG.TYPE.MAKE_SEND_ONCE),
+                .msgh_bits = @backingInt(posix.system.MACH.MSG.TYPE.MAKE_SEND_ONCE),
                 .msgh_size = @sizeOf(darwin.mach_msg_header_t),
                 .msgh_remote_port = port,
                 .msgh_local_port = darwin.MACH_PORT_NULL,

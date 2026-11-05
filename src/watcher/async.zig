@@ -402,7 +402,7 @@ fn AsyncMachPort(comptime xev: type) type {
             var msg: darwin.mach_msg_header_t = .{
                 // We use COPY_SEND which will not increment any send ref
                 // counts because it'll reuse the existing send right.
-                .msgh_bits = @intFromEnum(posix.system.MACH.MSG.TYPE.COPY_SEND),
+                .msgh_bits = @backingInt(posix.system.MACH.MSG.TYPE.COPY_SEND),
                 .msgh_size = @sizeOf(darwin.mach_msg_header_t),
                 .msgh_remote_port = self.port,
                 .msgh_local_port = darwin.MACH_PORT_NULL,

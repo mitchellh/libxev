@@ -459,7 +459,7 @@ pub const ws2_32 = struct {
 // --- High-level wrapper functions ---
 
 pub fn unexpectedWSAError(err: ws2_32.WinsockError) error{Unexpected} {
-    return unexpectedError(@as(Win32Error, @enumFromInt(@intFromEnum(err))));
+    return unexpectedError(@as(Win32Error, @fromBackingInt(@intCast(@backingInt(err)))));
 }
 
 pub fn QueryPerformanceCounter() u64 {

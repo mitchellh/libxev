@@ -79,28 +79,25 @@ pub fn build(b: *std.Build) !void {
     );
 
     // pkg-config
-    // FIXME: It is impossible since Zig 0.17 to obtain the
-    // installation prefix at the configure phase, as that
-    // is the responsibility of the maker.
-    // const pc: *Step.InstallFile = pc: {
-    //     const file = b.addWriteFile("libxev.pc", b.fmt(
-    //         \\prefix={s}
-    //         \\includedir=${{prefix}}/include
-    //         \\libdir=${{prefix}}/lib
-    //         \\
-    //         \\Name: libxev
-    //         \\URL: https://github.com/mitchellh/libxev
-    //         \\Description: High-performance, cross-platform event loop
-    //         \\Version: 0.1.0
-    //         \\Cflags: -I${{includedir}}
-    //         \\Libs: -L${{libdir}} -lxev
-    //     , .{b.install_prefix}));
-    //     break :pc b.addInstallFileWithDir(
-    //         file.getDirectory().path(b, "libxev.pc"),
-    //         .prefix,
-    //         "share/pkgconfig/libxev.pc",
-    //     );
-    // };
+    const pc: *Step.InstallFile = pc: {
+        const file = b.addWriteFile("libxev.pc", b.fmt(
+            \\prefix=${{pcfiledir}}/../..
+            \\includedir=${{prefix}}/include
+            \\libdir=${{prefix}}/lib
+            \\
+            \\Name: libxev
+            \\URL: https://github.com/mitchellh/libxev
+            \\Description: High-performance, cross-platform event loop
+            \\Version: 0.1.0
+            \\Cflags: -I${{includedir}}
+            \\Libs: -L${{libdir}} -lxev
+        , .{}));
+        break :pc b.addInstallFileWithDir(
+            file.getDirectory().path(b, "libxev.pc"),
+            .prefix,
+            "share/pkgconfig/libxev.pc",
+        );
+    };
 
     // Man pages
     const man = try manPages(b);
@@ -141,7 +138,7 @@ pub fn build(b: *std.Build) !void {
     if (static_lib) |v| b.installArtifact(v);
     if (dynamic_lib) |v| b.installArtifact(v);
     b.getInstallStep().dependOn(&c_header.step);
-    // b.getInstallStep().dependOn(&pc.step);
+    b.getInstallStep().dependOn(&pc.step);
     b.installArtifact(test_exe);
     if (emit_man) {
         for (man) |step| b.getInstallStep().dependOn(step);
@@ -173,6 +170,7 @@ fn buildBenchmarks(
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
+    b.dependOnDirectoryContents(b.path("src/bench"));
     var dir = try b.root.openDir(io, "src/bench", .{ .iterate = true });
     defer dir.close(io);
 
@@ -199,7 +197,7 @@ fn buildBenchmarks(
                     .{entry.name},
                 )),
                 .target = target,
-                .optimize = .ReleaseFast, // benchmarks are always release fast
+                .optimize = .fast, // benchmarks are always release fast
             }),
         });
         exe.root_module.addImport("xev", b.modules.get("xev").?);
@@ -214,7 +212,7 @@ fn buildBenchmarks(
 fn buildExamples(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     c_lib_: ?*Step.Compile,
 ) ![]const *Step.Compile {
     const io = b.graph.io;
@@ -222,6 +220,7 @@ fn buildExamples(
     var steps: std.ArrayList(*Step.Compile) = .empty;
     defer steps.deinit(alloc);
 
+    b.dependOnDirectoryContents(b.path("examples"));
     var dir = try b.root.openDir(io, "examples", .{ .iterate = true });
     defer dir.close(io);
 
@@ -295,6 +294,7 @@ fn manPages(b: *std.Build) ![]const *Step {
     var steps: std.ArrayList(*Step) = .empty;
     defer steps.deinit(alloc);
 
+    b.dependOnDirectoryContents(b.path("docs"));
     var dir = try b.root.openDir(io, "docs", .{ .iterate = true });
     defer dir.close(io);
 
