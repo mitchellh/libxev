@@ -194,6 +194,8 @@ pub const Loop = struct {
                 switch (c.flags.state) {
                     // If we're adding then we start the event.
                     .adding => if (self.start(c, &events[events_len])) {
+                        // A receipt for every change: see the kevent call below.
+                        events[events_len].flags |= std.c.EV.RECEIPT;
                         events_len += 1;
                         if (events_len >= events.len) break :queue_pop;
                     },
@@ -207,7 +209,7 @@ pub const Loop = struct {
                         self.completions.push(c);
 
                         events[events_len] = ev;
-                        events[events_len].flags = std.c.EV.DELETE;
+                        events[events_len].flags = std.c.EV.DELETE | std.c.EV.RECEIPT;
                         events_len += 1;
                         if (events_len >= events.len) break :queue_pop;
                     },
@@ -230,19 +232,27 @@ pub const Loop = struct {
             if (events_len == 0) break;
 
             // Zero timeout so that kevent returns immediately.
+            //
+            // Every change carries EV_RECEIPT, so kevent answers each one
+            // with an EV_ERROR entry (data = 0 on success), and the event
+            // list has exactly one slot per change. That leaves no room for
+            // kevent to also hand back *pending* events. It used to: with
+            // the full list here, events of completions that were already
+            // registered came back too and ran outside `tick`'s event path,
+            // which left a rearmed read `dead` while it was still in the
+            // kqueue, and later queued it for submission while it was
+            // `active` (test "submit must not run a registered read's
+            // event"). Readiness is `tick`'s job alone.
             var timeout = std.mem.zeroes(posix.timespec);
             const completed = try kevent_syscall(
                 self.kqueue_fd,
                 events[0..events_len],
-                events[0..events.len],
+                events[0..events_len],
                 &timeout,
             );
             events_len = 0;
 
-            // Go through the completed events and queue them.
-            // NOTE: we currently never process completions (we set
-            // event list to zero length) because it was leading to
-            // memory corruption we need to investigate.
+            // Go through the receipts: only failed changes need handling.
             for (events[0..completed]) |ev| {
                 // Zero udata values are internal events that we do nothing
                 // on such as the mach port wakeup.
@@ -253,17 +263,13 @@ pub const Loop = struct {
 
                 const c: *Completion = @ptrFromInt(@as(usize, @intCast(ev.udata)));
 
-                // If EV_ERROR is set, then submission failed for this
-                // completion. We get the syscall errorcode from data and
-                // store it.
-                if (ev.flags & std.c.EV.ERROR != 0) {
-                    c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
-                } else {
-                    // No error, means that this completion is ready to work.
-                    c.result = c.perform(&ev);
-                }
-
-                assert(c.result != null);
+                // A receipt with a nonzero data is a failed submission: we
+                // get the syscall errorcode from data and store it. A zero
+                // means the change was applied, and the completion waits
+                // for its event in `tick` like any other.
+                assert(ev.flags & std.c.EV.ERROR != 0);
+                if (ev.data == 0) continue;
+                c.result = c.syscall_result(-@as(i32, @intCast(ev.data)));
                 self.completions.push(c);
             }
         }
@@ -2969,4 +2975,78 @@ test "kqueue: socket accept/cancel cancellation should decrease active count" {
     // Wait for the sockets to close
     try loop.run(.until_done);
     try testing.expect(ln == 0);
+}
+
+test "kqueue: submit must not run a registered read's event" {
+    // `submit` passes the full event list to kevent, so it also returns
+    // events for completions that are already registered, and runs them
+    // through the completion queue. For a read that rearms, that path
+    // leaves it `dead` while it's still registered. If the fd is drained
+    // at that point, the next `submit` takes its event again, sees `dead`
+    // and queues the completion for submission, although it's still in
+    // the kqueue. The normal event path then makes it `active`, and the
+    // tick after that finds an active completion in the submission queue.
+    //
+    // Driven tick by tick: each tick has one new write to another pipe,
+    // so `submit` has something to submit and calls kevent.
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    var rp: [2]posix.fd_t = undefined;
+    try testing.expectEqual(@as(c_int, 0), std.c.pipe(&rp));
+    defer for (rp) |fd| xev_posix.close(fd);
+    var wp: [2]posix.fd_t = undefined;
+    try testing.expectEqual(@as(c_int, 0), std.c.pipe(&wp));
+    defer for (wp) |fd| xev_posix.close(fd);
+
+    const State = struct {
+        reads: usize = 0,
+        failed: bool = false,
+        rbuf: [1]u8 = undefined,
+        wbuf: [1]u8 = .{'x'},
+
+        fn onRead(ud: ?*anyopaque, _: *Loop, _: *Completion, r: Result) CallbackAction {
+            const s: *@This() = @ptrCast(@alignCast(ud.?));
+            _ = r.read catch {
+                s.failed = true;
+                return .disarm;
+            };
+            s.reads += 1;
+            return .rearm;
+        }
+
+        fn onWrite(_: ?*anyopaque, _: *Loop, _: *Completion, _: Result) CallbackAction {
+            return .disarm;
+        }
+    };
+    var state: State = .{};
+
+    var c_read: Completion = .{
+        .op = .{ .read = .{ .fd = rp[0], .buffer = .{ .slice = &state.rbuf } } },
+        .userdata = &state,
+        .callback = State.onRead,
+    };
+    loop.add(&c_read);
+    try loop.run(.no_wait); // registered, nothing to read yet
+
+    var c_writes: [4]Completion = undefined;
+    // Bytes to make readable before each tick. One byte: `submit` takes
+    // the event and the read drains the pipe. Two: `submit` takes it, and
+    // the normal path reads the second byte.
+    const feed = [_]usize{ 1, 2, 0, 0 };
+    for (&c_writes, feed) |*cw, n| {
+        for (0..n) |_| try testing.expectEqual(@as(isize, 1), std.c.write(rp[1], "y", 1));
+        cw.* = .{
+            .op = .{ .write = .{ .fd = wp[1], .buffer = .{ .slice = &state.wbuf } } },
+            .callback = State.onWrite,
+        };
+        loop.add(cw);
+        try loop.run(.no_wait);
+    }
+
+    try testing.expect(!state.failed);
+    try testing.expectEqual(@as(usize, 3), state.reads);
+    try testing.expect(c_read.state() == .active);
 }
