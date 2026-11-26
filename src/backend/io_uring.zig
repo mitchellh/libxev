@@ -832,6 +832,7 @@ pub const Completion = struct {
         return switch (@as(posix.E, @enumFromInt(-res))) {
             .CANCELED => error.Canceled,
             .CONNRESET => error.ConnectionResetByPeer,
+            .IO => error.InputOutput,
             else => |errno| posix.unexpectedErrno(errno),
         };
     }
@@ -1087,6 +1088,7 @@ pub const ReadError = error{
     Canceled,
     Unexpected,
     ConnectionResetByPeer,
+    InputOutput,
 };
 
 pub const ShutdownError = error{
@@ -1789,4 +1791,55 @@ test "io_uring: socket read cancellation" {
     try loop.run(.until_done);
     try testing.expectEqual(OperationType.read, @as(OperationType, read_result));
     try testing.expectError(error.Canceled, read_result.read);
+}
+
+test "io_uring: pty read after hangup is InputOutput" {
+    const testing = std.testing;
+
+    var loop = try Loop.init(.{});
+    defer loop.deinit();
+
+    // A PTY pair. Once every fd on the slave side is closed, reading the
+    // master fails with EIO on Linux (macOS returns EOF instead).
+    const flags: linux.O = .{ .ACCMODE = .RDWR, .NOCTTY = true, .CLOEXEC = true };
+    const master_rc = linux.open("/dev/ptmx", flags, 0);
+    if (linux.errno(master_rc) != .SUCCESS) return error.SkipZigTest;
+    const master: posix.fd_t = @intCast(master_rc);
+    defer xev_posix.close(master);
+
+    var unlock: c_int = 0;
+    try testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.ioctl(master, linux.T.IOCSPTLCK, @intFromPtr(&unlock))));
+    var n: c_uint = 0;
+    try testing.expectEqual(linux.E.SUCCESS, linux.errno(linux.ioctl(master, linux.T.IOCGPTN, @intFromPtr(&n))));
+
+    var path_buf: [32]u8 = undefined;
+    const path = try std.fmt.bufPrintSentinel(&path_buf, "/dev/pts/{d}", .{n}, 0);
+    const slave_rc = linux.open(path, flags, 0);
+    try testing.expectEqual(linux.E.SUCCESS, linux.errno(slave_rc));
+    xev_posix.close(@intCast(slave_rc));
+
+    var read_result: Result = undefined;
+    var c_read: Completion = .{
+        .op = .{
+            .read = .{
+                .fd = master,
+                .buffer = .{ .array = undefined },
+            },
+        },
+        .userdata = &read_result,
+        .callback = (struct {
+            fn callback(ud: ?*anyopaque, l: *Loop, c: *Completion, r: Result) CallbackAction {
+                const ptr = @as(*Result, @ptrCast(@alignCast(ud)));
+                ptr.* = r;
+                _ = c;
+                _ = l;
+                return .disarm;
+            }
+        }).callback,
+    };
+    loop.add(&c_read);
+
+    try loop.run(.until_done);
+    try testing.expectEqual(OperationType.read, @as(OperationType, read_result));
+    try testing.expectError(error.InputOutput, read_result.read);
 }

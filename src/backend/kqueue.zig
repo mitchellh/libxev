@@ -1523,6 +1523,7 @@ fn mapReadError(err: anyerror) ReadError {
     return switch (err) {
         error.AccessDenied, error.PermissionDenied => error.PermissionDenied,
         error.WouldBlock => error.MissingKevent,
+        error.InputOutput => error.InputOutput,
         else => error.Unexpected,
     };
 }
@@ -1726,6 +1727,7 @@ pub const ReadError = KEventError || error{
     Canceled,
     MissingKevent,
     PermissionDenied,
+    InputOutput,
     Unexpected,
 };
 
