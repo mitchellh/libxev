@@ -19,10 +19,8 @@ pub fn Async(comptime xev: type) type {
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev, xev.Loop.threaded),
 
-        // Supported, uses mach port on Darwin, a pipe on OpenBSD, and
-        // eventfd on the remaining BSDs. OpenBSD has no eventfd and kills
-        // processes that make raw syscalls from outside libc
-        // (pinsyscalls), so the eventfd path cannot work there.
+        // Supported, uses mach port on Darwin, a self-pipe on OpenBSD
+        // (which has no eventfd), and eventfd on the remaining BSDs.
         .kqueue => if (comptime builtin.target.os.tag.isDarwin())
             AsyncMachPort(xev)
         else if (comptime builtin.target.os.tag == .openbsd)
@@ -109,32 +107,7 @@ fn AsyncEventFd(comptime xev: type) type {
                 r: WaitError!void,
             ) xev.CallbackAction,
         ) void {
-            c.* = .{
-                .op = .{
-                    .read = .{
-                        .fd = self.fd,
-                        .buffer = .{ .array = undefined },
-                    },
-                },
-
-                .userdata = userdata,
-                .callback = (struct {
-                    fn callback(
-                        ud: ?*anyopaque,
-                        l_inner: *xev.Loop,
-                        c_inner: *xev.Completion,
-                        r: xev.Result,
-                    ) xev.CallbackAction {
-                        return @call(.always_inline, cb, .{
-                            common.userdataValue(Userdata, ud),
-                            l_inner,
-                            c_inner,
-                            if (r.read) |v| assert(v > 0) else |err| err,
-                        });
-                    }
-                }).callback,
-            };
-            loop.add(c);
+            waitReadFd(xev, self.fd, loop, c, Userdata, userdata, cb);
         }
 
         fn waitPoll(
@@ -222,6 +195,51 @@ fn AsyncEventFd(comptime xev: type) type {
     };
 }
 
+/// Queue a read on an fd that becomes readable when an async is notified
+/// (eventfd or the read end of a self-pipe). Used by the kqueue backend.
+/// The read consumes (up to the buffer size of) pending notifications.
+fn waitReadFd(
+    comptime xev: type,
+    fd: posix.fd_t,
+    loop: *xev.Loop,
+    c: *xev.Completion,
+    comptime Userdata: type,
+    userdata: ?*Userdata,
+    comptime cb: *const fn (
+        ud: ?*Userdata,
+        l: *xev.Loop,
+        c: *xev.Completion,
+        r: xev.ReadError!void,
+    ) xev.CallbackAction,
+) void {
+    c.* = .{
+        .op = .{
+            .read = .{
+                .fd = fd,
+                .buffer = .{ .array = undefined },
+            },
+        },
+
+        .userdata = userdata,
+        .callback = (struct {
+            fn callback(
+                ud: ?*anyopaque,
+                l_inner: *xev.Loop,
+                c_inner: *xev.Completion,
+                r: xev.Result,
+            ) xev.CallbackAction {
+                return @call(.always_inline, cb, .{
+                    common.userdataValue(Userdata, ud),
+                    l_inner,
+                    c_inner,
+                    if (r.read) |v| assert(v > 0) else |err| err,
+                });
+            }
+        }).callback,
+    };
+    loop.add(c);
+}
+
 /// Async implementation using a pipe (OpenBSD).
 ///
 /// A self-pipe is used instead of eventfd because OpenBSD has no eventfd.
@@ -289,32 +307,7 @@ fn AsyncPipe(comptime xev: type) type {
                 r: WaitError!void,
             ) xev.CallbackAction,
         ) void {
-            c.* = .{
-                .op = .{
-                    .read = .{
-                        .fd = self.fd,
-                        .buffer = .{ .array = undefined },
-                    },
-                },
-
-                .userdata = userdata,
-                .callback = (struct {
-                    fn callback(
-                        ud: ?*anyopaque,
-                        l_inner: *xev.Loop,
-                        c_inner: *xev.Completion,
-                        r: xev.Result,
-                    ) xev.CallbackAction {
-                        return @call(.always_inline, cb, .{
-                            common.userdataValue(Userdata, ud),
-                            l_inner,
-                            c_inner,
-                            if (r.read) |v| assert(v > 0) else |err| err,
-                        });
-                    }
-                }).callback,
-            };
-            loop.add(c);
+            waitReadFd(xev, self.fd, loop, c, Userdata, userdata, cb);
         }
 
         /// Notify a loop to wake up synchronously. This should never block

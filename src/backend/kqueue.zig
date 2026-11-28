@@ -1,5 +1,5 @@
-//! Backend to use kqueue. This is currently only tested on macOS but
-//! support for BSDs is planned (if it doesn't already work).
+//! Backend to use kqueue. This is supported and tested on macOS (and other
+//! Apple platforms), FreeBSD, and OpenBSD.
 const std = @import("std");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
@@ -30,14 +30,12 @@ pub fn available() bool {
         // macOS uses kqueue
         .ios, .macos, .visionos => true,
 
-        // BSDs use kqueue, but we only test on FreeBSD for now.
-        // kqueue isn't exactly the same here as it is on Apple platforms.
+        // BSDs use kqueue. kqueue isn't exactly the same here as it is
+        // on Apple platforms, so each BSD must be explicitly ported.
         .freebsd, .openbsd => true,
 
-        // Technically other BSDs support kqueue but our implementation
-        // below hard requires mach ports currently. That's not a fundamental
-        // requirement but until someone makes this implementation work
-        // on other BSDs we'll just say it isn't available.
+        // Other BSDs (NetBSD, DragonFly) support kqueue too, but nobody
+        // has ported and tested this implementation on them yet.
         else => false,
     };
 }
@@ -55,7 +53,7 @@ pub const Loop = struct {
     /// The fd of the kqueue.
     kqueue_fd: posix.fd_t,
 
-    /// The wakeup mechanism (mach ports on Apple, eventfd on BSD).
+    /// The wakeup mechanism (mach ports on Apple, a self-pipe on BSD).
     wakeup_state: Wakeup,
 
     /// The number of active completions. This DOES NOT include completions that
@@ -111,7 +109,7 @@ pub const Loop = struct {
         const fd = try createKqueueFd();
         errdefer xev_posix.close(fd);
 
-        const wakeup_state: Wakeup = try .init();
+        var wakeup_state: Wakeup = try .init();
         errdefer wakeup_state.deinit();
 
         var res: Loop = .{
@@ -244,9 +242,12 @@ pub const Loop = struct {
             // event list to zero length) because it was leading to
             // memory corruption we need to investigate.
             for (events[0..completed]) |ev| {
-                // Zero udata values are internal events that we do nothing
-                // on such as the mach port wakeup.
-                if (ev.udata == 0) continue;
+                // Zero udata values are internal events such as the loop
+                // wakeup. They never correspond to a completion.
+                if (ev.udata == 0) {
+                    self.wakeup_state.handle(&ev);
+                    continue;
+                }
 
                 // We handle deletions separately.
                 if (ev.flags & std.c.EV.DELETE != 0) continue;
@@ -328,7 +329,7 @@ pub const Loop = struct {
 
             self.wakeup_state.setup(self.kqueue_fd) catch |err| {
                 // We reset initialization because we can't do anything
-                // safely unless we get this mach port registered!
+                // safely unless we get the wakeup mechanism registered!
                 self.flags.init = false;
                 return err;
             };
@@ -513,9 +514,12 @@ pub const Loop = struct {
 
             // Go through the completed events and queue them.
             for (events[0..completed]) |ev| {
-                // Zero udata values are internal events that we do nothing
-                // on such as the mach port wakeup.
-                if (ev.udata == 0) continue;
+                // Zero udata values are internal events such as the loop
+                // wakeup. They never correspond to a completion.
+                if (ev.udata == 0) {
+                    self.wakeup_state.handle(&ev);
+                    continue;
+                }
 
                 // Ignore any successful deletions. This can only happen
                 // from disarms below and in that case we already processed
@@ -962,14 +966,12 @@ pub const Loop = struct {
         // Add to our completion queue
         c.task_loop.thread_pool_completions.push(c);
 
-        if (comptime builtin.target.os.tag.isDarwin()) {
-            // Wake up our main loop
-            c.task_loop.wakeup() catch {};
-        }
+        // Wake up our main loop
+        c.task_loop.wakeup() catch {};
     }
 
-    /// Sends an empty message to this loop's mach port so that it wakes
-    /// up if it is blocking on kevent().
+    /// Wakes up the loop if it is blocking on kevent(). This uses a mach
+    /// port on Darwin and a self-pipe on the other BSDs.
     fn wakeup(self: *Loop) !void {
         try self.wakeup_state.wakeup();
     }
@@ -1485,27 +1487,79 @@ const Wakeup = if (builtin.os.tag.isDarwin()) struct {
     fn wakeup(self: *Self) !void {
         try self.mach_port.notify();
     }
+
+    /// Mach port events are consumed by the kernel into mach_port_buffer,
+    /// so there is nothing to do when we see one.
+    fn handle(self: *Self, ev: *const Kevent) void {
+        _ = self;
+        _ = ev;
+    }
 } else struct {
-    // TODO: We should use eventfd for FreeBSD. Until this is
-    // implemented, loop wakeup will crash on BSD.
+    /// Self-pipe wakeup for the non-Darwin BSDs. The read end is always
+    /// registered (level-triggered) with the kqueue with a zero udata.
+    /// Writing a byte to the write end wakes up the loop. Waking up the
+    /// loop this way won't trigger any particular completion, it just
+    /// forces tick to cycle.
+    ///
+    /// A pipe is used rather than EVFILT_USER because not every BSD
+    /// supports EVFILT_USER (notably OpenBSD), and rather than eventfd
+    /// because not every BSD has eventfd (again, OpenBSD).
     const Self = @This();
 
+    read_fd: posix.fd_t,
+    write_fd: posix.fd_t,
+
     fn init() !Self {
-        return .{};
+        const fds = try xev_posix.pipe2(.{ .CLOEXEC = true, .NONBLOCK = true });
+        return .{ .read_fd = fds[0], .write_fd = fds[1] };
     }
 
     fn deinit(self: *Self) void {
-        _ = self;
+        xev_posix.close(self.read_fd);
+        xev_posix.close(self.write_fd);
     }
 
     fn setup(self: *Self, kqueue_fd: posix.fd_t) !void {
-        _ = self;
-        _ = kqueue_fd;
+        const events = [_]Kevent{kevent_init(.{
+            .ident = @intCast(self.read_fd),
+            .filter = std.c.EVFILT.READ,
+            .flags = std.c.EV.ADD | std.c.EV.ENABLE,
+            .fflags = 0,
+            .data = 0,
+            .udata = 0,
+        })};
+        const n = try kevent_syscall(
+            kqueue_fd,
+            &events,
+            events[0..0],
+            null,
+        );
+        assert(n == 0);
     }
 
     fn wakeup(self: *Self) !void {
-        _ = self;
-        @panic("wakeup not implemented on this platform");
+        _ = xev_posix.write(self.write_fd, &[1]u8{1}) catch |err| switch (err) {
+            // The pipe is full which means a wakeup is already pending.
+            error.WouldBlock => return,
+            else => return err,
+        };
+    }
+
+    /// Called for every internal (zero udata) event returned by kevent.
+    /// If it is our wakeup pipe, drain it so the level-triggered filter
+    /// stops firing. A wakeup that races with the drain is never lost:
+    /// the waker publishes its work before writing, and the loop always
+    /// checks for that work after draining.
+    fn handle(self: *Self, ev: *const Kevent) void {
+        if (ev.filter != std.c.EVFILT.READ or
+            ev.ident != @as(usize, @intCast(self.read_fd)) or
+            ev.flags & std.c.EV.ERROR != 0) return;
+
+        var buf: [64]u8 = undefined;
+        while (true) {
+            const n = xev_posix.read(self.read_fd, &buf) catch return;
+            if (n < buf.len) return;
+        }
     }
 };
 
@@ -2565,7 +2619,6 @@ test "kqueue: socket accept/connect/send/recv/close" {
 }
 
 test "kqueue: file IO on thread pool" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
     const testing = std.testing;
     const io = testing.io;
 
