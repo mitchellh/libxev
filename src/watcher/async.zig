@@ -19,9 +19,14 @@ pub fn Async(comptime xev: type) type {
         // Supported, uses the backend API
         .wasi_poll => AsyncLoopState(xev, xev.Loop.threaded),
 
-        // Supported, uses mach port on Darwin and eventfd on BSD.
+        // Supported, uses mach port on Darwin, a pipe on OpenBSD, and
+        // eventfd on the remaining BSDs. OpenBSD has no eventfd and kills
+        // processes that make raw syscalls from outside libc
+        // (pinsyscalls), so the eventfd path cannot work there.
         .kqueue => if (comptime builtin.target.os.tag.isDarwin())
             AsyncMachPort(xev)
+        else if (comptime builtin.target.os.tag == .openbsd)
+            AsyncPipe(xev)
         else
             AsyncEventFd(xev),
 
@@ -206,6 +211,123 @@ fn AsyncEventFd(comptime xev: type) type {
             // We want to just write "1" in the correct byte order as our host.
             const val = @as([8]u8, @bitCast(@as(u64, 1)));
             _ = xev_posix.write(self.fd, &val) catch |err| switch (err) {
+                error.WouldBlock => return,
+                else => return err,
+            };
+        }
+
+        test {
+            _ = AsyncTests(xev, Self);
+        }
+    };
+}
+
+/// Async implementation using a pipe (OpenBSD).
+///
+/// A self-pipe is used instead of eventfd because OpenBSD has no eventfd.
+/// The read end is registered with the loop exactly like an eventfd; the
+/// write end is written to by notify. Both ends are non-blocking and
+/// close-on-exec.
+fn AsyncPipe(comptime xev: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The error that can come in the wait callback.
+        pub const WaitError = xev.ReadError;
+
+        /// Read end of the pipe, registered with the loop.
+        fd: posix.fd_t,
+
+        /// Write end of the pipe, written to by notify.
+        write_fd: posix.fd_t,
+
+        /// Create a new async. An async can be assigned to exactly one loop
+        /// to be woken up. The completion must be allocated in advance.
+        pub fn init() !Self {
+            const fds = try xev_posix.pipe2(.{
+                .CLOEXEC = true,
+                .NONBLOCK = true,
+            });
+            return .{
+                .fd = fds[0],
+                .write_fd = fds[1],
+            };
+        }
+
+        /// Clean up the async. This will forcibly deinitialize any resources
+        /// and may result in erroneous wait callbacks to be fired.
+        pub fn deinit(self: *Self) void {
+            xev_posix.close(self.fd);
+            xev_posix.close(self.write_fd);
+        }
+
+        /// Wait for a message on this async. Note that async messages may be
+        /// coalesced (or they may not be) so you should not expect a 1:1
+        /// mapping between send and wait.
+        ///
+        /// Just like the rest of libxev, the wait must be re-queued if you
+        /// want to continue to be notified of async events.
+        ///
+        /// You should NOT register an async with multiple loops (the same
+        /// loop is fine -- but unnecessary). The behavior when waiting on
+        /// multiple loops is undefined.
+        pub const wait = switch (xev.backend) {
+            .kqueue => waitRead,
+            .io_uring, .epoll, .iocp, .wasi_poll => @compileError("AsyncPipe does not support wait for this backend"),
+        };
+
+        fn waitRead(
+            self: Self,
+            loop: *xev.Loop,
+            c: *xev.Completion,
+            comptime Userdata: type,
+            userdata: ?*Userdata,
+            comptime cb: *const fn (
+                ud: ?*Userdata,
+                l: *xev.Loop,
+                c: *xev.Completion,
+                r: WaitError!void,
+            ) xev.CallbackAction,
+        ) void {
+            c.* = .{
+                .op = .{
+                    .read = .{
+                        .fd = self.fd,
+                        .buffer = .{ .array = undefined },
+                    },
+                },
+
+                .userdata = userdata,
+                .callback = (struct {
+                    fn callback(
+                        ud: ?*anyopaque,
+                        l_inner: *xev.Loop,
+                        c_inner: *xev.Completion,
+                        r: xev.Result,
+                    ) xev.CallbackAction {
+                        return @call(.always_inline, cb, .{
+                            common.userdataValue(Userdata, ud),
+                            l_inner,
+                            c_inner,
+                            if (r.read) |v| assert(v > 0) else |err| err,
+                        });
+                    }
+                }).callback,
+            };
+            loop.add(c);
+        }
+
+        /// Notify a loop to wake up synchronously. This should never block
+        /// forever (it will always EVENTUALLY succeed regardless of if the
+        /// loop is currently ticking or not).
+        ///
+        /// The "c" value is the completion associated with the "wait".
+        ///
+        /// Internal details: a single byte is written to the pipe. If the
+        /// write would block (EAGAIN) then we assume success because the
+        /// pipe is full and a wakeup is already pending.
+        pub fn notify(self: Self) !void {
+            _ = xev_posix.write(self.write_fd, &[1]u8{1}) catch |err| switch (err) {
                 error.WouldBlock => return,
                 else => return err,
             };

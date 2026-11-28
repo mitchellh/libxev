@@ -32,7 +32,7 @@ pub fn available() bool {
 
         // BSDs use kqueue, but we only test on FreeBSD for now.
         // kqueue isn't exactly the same here as it is on Apple platforms.
-        .freebsd => true,
+        .freebsd, .openbsd => true,
 
         // Technically other BSDs support kqueue but our implementation
         // below hard requires mach ports currently. That's not a fundamental
@@ -44,7 +44,7 @@ pub fn available() bool {
 
 pub const NOTE_EXIT_FLAGS = switch (builtin.os.tag) {
     .ios, .macos, .visionos => std.c.NOTE.EXIT | std.c.NOTE.EXITSTATUS,
-    .freebsd => std.c.NOTE.EXIT,
+    .freebsd, .openbsd => std.c.NOTE.EXIT,
     else => @compileError("kqueue not supported yet for target OS"),
 };
 
@@ -1860,7 +1860,7 @@ const Timer = struct {
 /// This lets us support both Mac and non-Mac platforms.
 const Kevent = switch (builtin.os.tag) {
     .ios, .macos, .visionos => posix.system.kevent64_s,
-    .freebsd => std.c.Kevent,
+    .freebsd, .openbsd => std.c.Kevent,
     else => @compileError("kqueue not supported yet for target OS"),
 };
 
