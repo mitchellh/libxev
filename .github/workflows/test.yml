@@ -1,7 +1,7 @@
 on: [push, pull_request]
 name: Test
 env:
-  ZIG_VERSION: 0.16.0
+  ZIG_VERSION: 0.17.1
 
 jobs:
   build:
@@ -16,6 +16,9 @@ jobs:
           x86_64-linux-musl,
           aarch64-macos,
           x86_64-macos,
+          x86_64-freebsd,
+          x86_64-openbsd,
+          aarch64-openbsd,
           # wasm32-wasi, - regressed in Zig 0.13
           x86_64-windows-gnu
 
@@ -117,6 +120,29 @@ jobs:
           alias zig=/tmp/zig-x86_64-freebsd-${{ env.ZIG_VERSION }}/zig
           zig build test --summary all
           zig build -Demit-example -Demit-bench --summary all
+
+  test-x86_64-openbsd:
+    runs-on: namespace-profile-mitchellh-sm-systemd
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    # Required by Namespace
+    - run: sudo systemctl start ssh
+
+    - name: test
+      uses: vmactions/openbsd-vm@v1
+      with:
+        usesh: true
+        prepare: |
+          pkg_add wget
+
+        run: |
+          wget -O /tmp/zig-x86_64-openbsd-${{ env.ZIG_VERSION }}.tar.xz https://ziglang.org/download/${{ env.ZIG_VERSION }}/zig-x86_64-openbsd-${{ env.ZIG_VERSION }}.tar.xz
+          tar -xf /tmp/zig-x86_64-openbsd-${{ env.ZIG_VERSION }}.tar.xz -C /tmp
+          ZIG=/tmp/zig-x86_64-openbsd-${{ env.ZIG_VERSION }}/zig
+          $ZIG build test --summary all
+          $ZIG build -Demit-example -Demit-bench --summary all
 
   test-aarch64-macos:
     runs-on: macos-latest

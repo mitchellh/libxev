@@ -28,7 +28,8 @@ primarily though is scratching my own itch!
 
 ## Features
 
-**Cross-platform.** Linux (`io_uring` and `epoll`), macOS (`kqueue`),
+**Cross-platform.** Linux (`io_uring` and `epoll`), macOS, FreeBSD and
+OpenBSD (`kqueue`),
 WebAssembly + WASI (`poll_oneoff`, threaded and non-threaded runtimes).
 (Windows support is planned and coming soon)
 
@@ -114,7 +115,7 @@ Additionally, the `std.Io` interface is still very new and unstable and
 doesn't expose all the operations necessary to bring parity with libxev.
 
 We will investigate better, more idiomatic integrations with `std.Io`
-in the future. For now, libxev continues to work Zig 0.16 but mostly as
+in the future. For now, libxev continues to work with Zig 0.17 but mostly as
 it did in prior Zig versions and doesn't integrate with `std.Io`.
 
 ## Example
@@ -291,7 +292,7 @@ directory.
 
 # Build
 
-Build requires the installation of the Zig 0.16. libxev follows stable
+Build requires the installation of the Zig 0.17. libxev follows stable
 Zig releases and generally does not support nightly builds. When a stable
 release is imminent we may have a branch that supports it.
 **libxev has no other build dependencies.**

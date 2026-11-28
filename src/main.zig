@@ -112,7 +112,7 @@ test {
             _ = @import("linux/timerfd.zig");
         },
 
-        .freebsd => {
+        .freebsd, .openbsd => {
             _ = Kqueue;
         },
 
